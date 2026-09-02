@@ -1,0 +1,39 @@
+name: Release extension package
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Build extension ZIP
+        shell: pwsh
+        run: ./scripts/build-release.ps1
+
+      - name: Validate release notes
+        shell: pwsh
+        run: ./scripts/build-release-notes.ps1 -Tag $env:GITHUB_REF_NAME -OutputPath dist/release-notes.md
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = @(
+            Get-ChildItem -LiteralPath dist -File |
+              Where-Object { $_.Name -match '\.zip(?:\.sha256)?$' } |
+              ForEach-Object FullName
+          )
+          if ($assets.Count -ne 2) {
+            throw "Expected one ZIP and one ZIP checksum, found $($assets.Count) assets"
+          }
+          gh release create $env:GITHUB_REF_NAME @assets --verify-tag --notes-file dist/release-notes.md

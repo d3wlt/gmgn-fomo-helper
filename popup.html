@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>better gmgn</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="brand">
+          <img class="brand-icon" src="icons/icon48.png" alt="" />
+          <div>
+            <h1>better gmgn</h1>
+            <p>GMGN / DeBot trading tools</p>
+          </div>
+        </div>
+        <span id="version"></span>
+      </header>
+
+      <section class="settings-section">
+        <h2>How to use</h2>
+        <ul class="gdh-howto">
+          <li><b>Block a token in the tracking feed:</b> Hover over a card, then hold 🚫 beside the token name for one second. Restore it with 🔔 or from the ★ panel.</li>
+          <li><b>Special watch:</b> Hover over a feed card or wallet row and select ☆. Use <b>★N</b> in the tracking header to manage watched wallets and blocked tokens.</li>
+          <li><b>FOMO panel:</b> Use the <b>fomo</b> button on a token page to view holders and narratives. Your own FOMO login is required; the panel explains setup and renews the session locally.</li>
+          <li><b>Position surge alerts:</b> Open the GMGN positions panel once per chain. Alerts require the cost-return threshold, positive five-minute momentum, and a current balance above zero.</li>
+        </ul>
+        <a class="gdh-howto-link" href="https://github.com/d3wlt/985gmgn-helper-private#features" target="_blank" rel="noreferrer">Full feature guide →</a>
+      </section>
+
+      <section class="settings-section">
+        <h2>Features</h2>
+        <div class="feature-list">
+          <label class="switch-row">
+            <span>
+              <strong>Highlight watched developers</strong>
+              <small>Show a card border, background, and persistent note</small>
+            </span>
+            <input id="enabled" type="checkbox" />
+          </label>
+          <label class="switch-row">
+            <span>
+              <strong>Show developer performance</strong>
+              <small>Show migrated tokens, total launches, and migration rate</small>
+            </span>
+            <input id="show-dev-performance" type="checkbox" />
+          </label>
+          <label class="switch-row">
+            <span>
+              <strong>Developer details on hover</strong>
+              <small>Show complete developer performance when hovering over a card</small>
+            </span>
+            <input id="show-dev-tooltip" type="checkbox" />
+          </label>
+          <label class="switch-row">
+            <span>
+              <strong>Save developer from details</strong>
+              <small>Show a save button in the developer panel</small>
+            </span>
+            <input id="enable-dev-bookmark" type="checkbox" />
+          </label>
+          <label class="switch-row">
+            <span>
+              <strong>Callout blocklist</strong>
+              <small>Show block controls and filter cards and top notifications</small>
+            </span>
+            <input id="enable-callout-blacklist" type="checkbox" />
+          </label>
+          <label class="switch-row">
+            <span>
+              <strong>New manifesto pop-up</strong>
+              <small>Show a top-right alert for a new manifesto; select it to open the token</small>
+            </span>
+            <input id="enable-manifesto-toast" type="checkbox" />
+          </label>
+          <label class="switch-row">
+            <span>
+              <strong>Manifesto list tab</strong>
+              <small>Add a Manifestos tab to the callout panel, ordered by time</small>
+            </span>
+            <input id="enable-manifesto-tab" type="checkbox" />
+          </label>
+          <label class="switch-row">
+            <span>
+              <strong>Special-watch highlighting</strong>
+              <small>Show ⭐ on wallet and tracking rows; colors and pinning are shared across GMGN and DeBot</small>
+            </span>
+            <input id="enable-special-wallet" type="checkbox" />
+          </label>
+          <label class="switch-row">
+            <span>
+              <strong>FOMO panel</strong>
+              <small>Add a FOMO button to GMGN and DeBot token pages for narratives and trades</small>
+            </span>
+            <input id="enable-fomo-panel" type="checkbox" />
+          </label>
+          <label class="switch-row">
+            <span>
+              <strong>Position surge alerts</strong>
+              <small>Follow the GMGN app setting; alert only when cost return passes the threshold, five-minute momentum is positive, and the position is still held</small>
+              <small id="gmgn-holding-sync-status" class="sync-status">GMGN app setting not synced</small>
+            </span>
+            <input id="enable-holding-surge" type="checkbox" />
+          </label>
+          <label class="color-row" for="holding-surge-threshold">
+            <span>Surge threshold (from cost basis)</span>
+            <select id="holding-surge-threshold">
+              <option value="10">+10%</option>
+              <option value="20">+20%</option>
+              <option value="30">+30%</option>
+              <option value="50">+50%</option>
+              <option value="100">+100%</option>
+            </select>
+          </label>
+          <label class="color-row" for="holding-surge-cooldown">
+            <span>Repeat alert interval</span>
+            <select id="holding-surge-cooldown">
+              <option value="5">5 minutes</option>
+              <option value="15">15 minutes</option>
+              <option value="30">30 minutes</option>
+              <option value="60">1 hour</option>
+              <option value="180">3 hours</option>
+              <option value="360">6 hours</option>
+              <option value="1440">24 hours</option>
+            </select>
+          </label>
+          <label class="switch-row">
+            <span>
+              <strong>Flap tax badge</strong>
+              <small>Show tax rates beside Flap tokens ending in 7777/8888. Hover for the allocation. Your browser reads the chain directly.</small>
+            </span>
+            <input id="enable-flap-tax" type="checkbox" />
+          </label>
+          <label class="color-row" for="flap-rpc">
+            <span>Custom BSC RPC (optional)</span>
+            <input id="flap-rpc" type="text" placeholder="Leave blank to use public endpoints" />
+          </label>
+          <label class="switch-row">
+            <span>
+              <strong>Insert FOMO activity into tracking</strong>
+              <small>Insert 985monitor FOMO trades and narratives into GMGN and DeBot tracking by time. Blocked people and event settings follow your 985monitor account.</small>
+            </span>
+            <input id="enable-fomo-feed" type="checkbox" />
+          </label>
+          <label class="switch-row">
+            <span>
+              <strong>Insert Pump trades into tracking</strong>
+              <small>Insert 985monitor Pump trades into GMGN and DeBot tracking by time, using your watch, block, trade-type, and minimum-value settings.</small>
+              <small id="monitor-985-sync-status" class="sync-status">985monitor account settings not connected</small>
+            </span>
+            <input id="enable-pump-feed" type="checkbox" />
+          </label>
+          <label class="switch-row">
+            <span>
+              <strong>Show FOMO activity for current chain only</strong>
+              <small>Off by default because tracking spans all chains. Enable to show only events for the current page's chain.</small>
+            </span>
+            <input id="fomo-feed-chain-only" type="checkbox" />
+          </label>
+          <div class="color-row" style="align-items:center">
+            <span>FOMO event types</span>
+            <span style="display:flex;gap:10px;flex-wrap:wrap">
+              <label style="display:flex;gap:3px;align-items:center"><input id="fomo-feed-buy" type="checkbox" />Buy</label>
+              <label style="display:flex;gap:3px;align-items:center"><input id="fomo-feed-sell" type="checkbox" />Sell</label>
+              <label style="display:flex;gap:3px;align-items:center"><input id="fomo-feed-swap" type="checkbox" />Swap</label>
+              <label style="display:flex;gap:3px;align-items:center"><input id="fomo-feed-thesis" type="checkbox" />Narrative</label>
+              <label style="display:flex;gap:3px;align-items:center"><input id="fomo-feed-transfer-in" type="checkbox" />Transfer in</label>
+              <label style="display:flex;gap:3px;align-items:center"><input id="fomo-feed-refund" type="checkbox" />Refund / failed</label>
+            </span>
+          </div>
+          <label class="switch-row">
+            <span>
+              <strong>Marked-holder badge</strong>
+              <small>Show 👤N beside a token when marked people hold it; hover to see who</small>
+            </span>
+            <input id="enable-marked-holders" type="checkbox" />
+          </label>
+          <label class="color-row" for="marked-list" style="align-items:flex-start">
+            <span>Marked people</span>
+            <textarea id="marked-list" rows="3" placeholder="0x address and note (one per line)"></textarea>
+          </label>
+          <label class="switch-row">
+            <span>
+              <strong>Show on-chain rank for FOMO holders</strong>
+              <small>Mark FOMO holders with On-chain #N based on balance rank in GMGN's holder table</small>
+            </span>
+            <input id="enable-merge-fomo-holders" type="checkbox" />
+          </label>
+          <label class="switch-row">
+            <span>
+              <strong>Prominent price alerts</strong>
+              <small>Show price and market-cap alerts as large centered cards, green for gains and red for losses</small>
+            </span>
+            <input id="enable-remind-alert" type="checkbox" />
+          </label>
+          <label class="switch-row">
+            <span>
+              <strong>Hide lightning-trade button</strong>
+              <small>Hide the Lightning Trade button injected by the frontrun extension (on by default)</small>
+            </span>
+            <input id="hide-lightning-trade" type="checkbox" />
+          </label>
+        </div>
+      </section>
+
+      <label class="field" for="dev-list">
+        <span>Developer wallets</span>
+        <small>One address per line, optionally followed by a note</small>
+      </label>
+      <textarea
+        id="dev-list"
+        rows="5"
+        spellcheck="false"
+        placeholder="0x1234...abcd Team A&#10;0xabcd...1234"
+      ></textarea>
+
+      <label class="color-row" for="highlight-color">
+        <span>Highlight color</span>
+        <input id="highlight-color" type="color" value="#f5b83d" />
+      </label>
+
+      <div id="status" aria-live="polite"></div>
+      <button id="save" type="button">Save settings</button>
+
+      <footer>Data is read directly from current GMGN cards. No API key is used.</footer>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
