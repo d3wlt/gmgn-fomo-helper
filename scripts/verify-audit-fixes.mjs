@@ -15,7 +15,7 @@ const debotStyles = read('debot-styles.css');
 const manifest = JSON.parse(read('manifest.json'));
 const releaseBuild = read('scripts/build-release.ps1');
 const releaseWorkflow = read('.github/workflows/release.yml');
-const releaseNote = read('release-notes/v0.47.0.md');
+const releaseNote = read('release-notes/v0.47.1.md');
 const readme = read('README.md');
 const popup = read('popup.js');
 const popupHtml = read('popup.html');
@@ -315,6 +315,53 @@ await test('New virtual rows inherit existing feed offsets', () => {
   assert.equal(evaluate([fn], `fomoFeedInsertionShift(838.5, ${JSON.stringify(inserts)})`), 330);
   assert.equal(evaluate([fn], `fomoFeedInsertionShift(903, ${JSON.stringify(inserts)})`), 396);
   assert.match(content, /scheduleFomoFeedRowReflow\(\);\s*\n\s*}\s*\n\s*if \(\!\(target instanceof Element\)/);
+});
+
+await test('Feed offsets preserve GMGN virtual-list transforms', () => {
+  const setter = extractFunction(content, 'setFomoFeedRowShift');
+  const result = evaluate(
+    ['const fomoFeedShifted = new Map();', setter],
+    `(() => {
+      const row = { style: { transform: 'translateY(258px)', translate: '' } };
+      const applied = setFomoFeedRowShift(row, 66);
+      const shifted = { applied, transform: row.style.transform, translate: row.style.translate };
+      setFomoFeedRowShift(row, 0);
+      return { shifted, restoredTransform: row.style.transform, restoredTranslate: row.style.translate };
+    })()`,
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    shifted: { applied: true, transform: 'translateY(258px)', translate: '0px 66px' },
+    restoredTransform: 'translateY(258px)',
+    restoredTranslate: '',
+  });
+
+  const fixedRow = extractFunction(content, 'fomoFeedFixedRow');
+  const geometry = evaluate(
+    ['const fomoFeedShifted = new Map();', fixedRow],
+    `(() => {
+      class RowElement extends HTMLElement {}
+      const parent = Object.assign(new RowElement(), {
+        clientTop: 2,
+        scrollTop: 0,
+        getBoundingClientRect: () => ({ top: 100 }),
+      });
+      const wrap = Object.assign(new RowElement(), {
+        style: { position: 'absolute', top: '0px', transform: 'translateY(192px)' },
+        offsetHeight: 64.5,
+        parentElement: parent,
+        getBoundingClientRect: () => ({ top: 358 }),
+      });
+      const card = Object.assign(new RowElement(), { parentElement: wrap });
+      fomoFeedShifted.set(wrap, { originalTranslate: '', amount: 66 });
+      return fomoFeedFixedRow(card);
+    })()`,
+    { HTMLElement: class HTMLElement {} },
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify({ top: geometry.top, h: geometry.h })), { top: 190, h: 64.5 });
+
+  for (const name of ['clearFomoFeedShifts', 'refreshFomoFeedFixedRowShifts', 'layoutFomoFeedFixed']) {
+    assert.ok(!extractFunction(content, name).includes('style.transform'), `${name} overwrites native transform`);
+  }
 });
 
 await test('New FOMO and Pump events insert without a staging strip', () => {
@@ -1281,11 +1328,11 @@ await test('Maintained sources are English-only and the release surface is ZIP-o
   assert.ok(!popup.includes('get-' + 'update-state'));
   assert.equal(fs.existsSync(path.join(root, 'native' + '-updater')), false);
   assert.equal(fs.existsSync(path.join(root, 'scripts', 'build-native-' + 'installer.ps1')), false);
-  assert.equal(manifest.version, '0.47.0');
+  assert.equal(manifest.version, '0.47.1');
   assert.ok(popupHtml.startsWith('<!doctype html>\n<html lang="en">\n'));
-  assert.ok(readme.includes('Version 0.47.0'));
-  assert.ok(releaseNote.startsWith('# better gmgn v0.47.0\n'));
-  assert.deepEqual(fs.readdirSync(path.join(root, 'release-notes')).filter((name) => /^v.*\.md$/.test(name)), ['v0.47.0.md']);
+  assert.ok(readme.includes('Version 0.47.1'));
+  assert.ok(releaseNote.startsWith('# better gmgn v0.47.1\n'));
+  assert.deepEqual(fs.readdirSync(path.join(root, 'release-notes')).filter((name) => /^v.*\.md$/.test(name)), ['v0.47.1.md']);
   assert.ok(releaseBuild.includes('985gmgn-helper-v$version.zip'));
   assert.ok(releaseBuild.includes('"$zipPath.sha256"'));
   assert.ok(releaseBuild.includes('Get-ChildItem -LiteralPath $dist -File | Remove-Item -Force'));

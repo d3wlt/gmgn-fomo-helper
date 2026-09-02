@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.47.1 - 2026-09-02
+
+- Fixed overlapping wallet-tracker rows after GMGN changed its virtual list to position rows with CSS transforms.
+- Preserved GMGN's native row transform and applied extension feed offsets with the independent CSS `translate` property.
+- Measured row positions from rendered geometry so both transform-positioned and top-positioned tracker layouts remain supported.
+
 ## 0.47.0 - 2026-09-02
 
 Based on better gmgn v0.46.27.

@@ -5797,13 +5797,33 @@ Select to open Flap tax details`;
   }
 
   const FOMO_FEED_INLINE_CAP = 6;
-  const fomoFeedShifted = new Set();
+  const fomoFeedShifted = new Map();
   let fomoFeedReflowRaf = 0;
   const fomoFeedScrollTargets = new WeakSet();
 
+  function setFomoFeedRowShift(el, amount) {
+    const next = Number.isFinite(amount) && Math.abs(amount) > 0.25 ? amount : 0;
+    let state = fomoFeedShifted.get(el);
+    if (!state && !next) return true;
+    if (!state) {
+      const originalTranslate = String(el.style.translate || '');
+      if (originalTranslate && originalTranslate !== 'none') return false;
+      state = { originalTranslate, amount: 0 };
+      fomoFeedShifted.set(el, state);
+    }
+    if (!next) {
+      el.style.translate = state.originalTranslate;
+      fomoFeedShifted.delete(el);
+      return true;
+    }
+    state.amount = next;
+    el.style.translate = `0px ${next}px`;
+    return true;
+  }
+
   function clearFomoFeedShifts() {
-    for (const el of fomoFeedShifted) {
-      if (el.isConnected) el.style.transform = '';
+    for (const [el, state] of fomoFeedShifted) {
+      if (el.isConnected) el.style.translate = state.originalTranslate;
     }
     fomoFeedShifted.clear();
   }
@@ -5863,15 +5883,12 @@ Select to open Flap tax details`;
     let collapsed = 0;
     for (const row of rows) {
       const amount = fomoFeedInsertionShift(row.top, inserts) + collapsed;
-      const shift = amount ? `translateY(${amount}px)` : '';
-      if ((row.wrap.style.transform || '') !== shift) row.wrap.style.transform = shift;
-      if (amount) { fomoFeedShifted.add(row.wrap); stillShifted.add(row.wrap); }
+      if (setFomoFeedRowShift(row.wrap, amount) && amount) stillShifted.add(row.wrap);
       if (row.card.dataset.gdhTokenBlocked === '1') collapsed -= row.h;
     }
-    for (const el of [...fomoFeedShifted]) {
+    for (const el of [...fomoFeedShifted.keys()]) {
       if (!stillShifted.has(el)) {
-        if (el.isConnected) el.style.transform = '';
-        fomoFeedShifted.delete(el);
+        setFomoFeedRowShift(el, 0);
       }
     }
   }
@@ -5890,8 +5907,17 @@ Select to open Flap tax details`;
     let wrap = cardEl.parentElement;
     for (let level = 0; level < 4 && wrap instanceof HTMLElement; level += 1) {
       if ((wrap.style.position || '') === 'absolute') {
-        const top = Number.parseFloat(wrap.style.top);
-        const h = Number.parseFloat(wrap.style.height) || wrap.offsetHeight;
+        const parent = wrap.parentElement;
+        const state = fomoFeedShifted.get(wrap);
+        let top = Number.NaN;
+        if (parent instanceof HTMLElement) {
+          const wrapRect = wrap.getBoundingClientRect();
+          const parentRect = parent.getBoundingClientRect();
+          top = wrapRect.top - parentRect.top - parent.clientTop + parent.scrollTop
+            - Number(state?.amount || 0);
+        }
+        if (!Number.isFinite(top)) top = Number.parseFloat(wrap.style.top);
+        const h = wrap.offsetHeight || Number.parseFloat(wrap.style.height);
         if (Number.isFinite(top) && h > 0) return { wrap, top, h };
         return null;
       }
@@ -6048,9 +6074,7 @@ Select to open Flap tax details`;
     }
     cum = headInner;
     for (const row of rows) {
-      const shift = cum ? `translateY(${cum}px)` : '';
-      if ((row.wrap.style.transform || '') !== shift) row.wrap.style.transform = shift;
-      if (cum) { fomoFeedShifted.add(row.wrap); stillShifted.add(row.wrap); }
+      if (setFomoFeedRowShift(row.wrap, cum) && cum) stillShifted.add(row.wrap);
       if (row.card.dataset.gdhTokenBlocked === '1') {
         cum -= row.h;
         continue;
@@ -6069,10 +6093,9 @@ Select to open Flap tax details`;
       }
       cum += inner;
     }
-    for (const el of [...fomoFeedShifted]) {
+    for (const el of [...fomoFeedShifted.keys()]) {
       if (!stillShifted.has(el)) {
-        if (el.isConnected) el.style.transform = '';
-        fomoFeedShifted.delete(el);
+        setFomoFeedRowShift(el, 0);
       }
     }
     refreshFomoFeedFixedRowShifts();
