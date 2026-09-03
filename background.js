@@ -193,7 +193,157 @@ async function fomoRefreshSession() {
 
 function fomoBodyUnauthed(body) {
   const inner = Number(body?.statusCode);
-  return inner === 401 || inner === 403;
+  const message = String(body?.error || body?.message || '').toLowerCase();
+  return inner === 401 || inner === 403 || inner === 430 || inner === 431
+    || message.includes('unauthorized') || message.includes('unauthenticated');
+}
+
+function fomoActivitySide(raw) {
+  const direct = String(raw?.side || raw?.tradeSide || raw?.tradeType || raw?.type || raw?.body?.type || raw?.action || '')
+    .trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (/(^|_)(buy|bought)(_|$)/.test(direct) || raw?.isBuy === true) return 'buy';
+  if (/(^|_)(sell|sold)(_|$)/.test(direct) || raw?.isSell === true || raw?.isBuy === false) return 'sell';
+  if (/(^|_)thesis(_|$)/.test(direct)) return 'thesis';
+  return '';
+}
+
+function fomoActivityPosition(raw, side = fomoActivitySide(raw)) {
+  const explicit = String(raw?.positionAction || raw?.positionType || raw?.tradeAction
+    || raw?.activityLabel || raw?.label || raw?.action || '').trim().toLowerCase();
+  if (/^(first|open|opened|new)$/.test(explicit)) return 'First';
+  if (/^(more|add|added|increase|increased)$/.test(explicit)) return 'More';
+  if (/^(partial|trim|trimmed|reduce|reduced)$/.test(explicit)) return 'Partial';
+  if (/^(all|close|closed|exit|exited|full)$/.test(explicit)) return 'All';
+  if (side === 'thesis') return 'Thesis';
+
+  const eventAt = Date.parse(raw?.createdAt || raw?.timestamp || raw?.time || '') || Number(raw?.ts) || 0;
+  const trade = raw?.authorTrade && typeof raw.authorTrade === 'object' ? raw.authorTrade : {};
+  const openedAt = Date.parse(trade.openedAt || raw?.openedAt || '') || 0;
+  const closedAt = Date.parse(trade.closedAt || raw?.closedAt || '') || 0;
+  const nearEvent = (at) => !!(at && eventAt && Math.abs(at - eventAt) <= 60000);
+  if (side === 'buy') return raw?.isFirstTrade === true || nearEvent(openedAt) ? 'First' : 'More';
+  if (side === 'sell') {
+    return raw?.isFullExit === true || raw?.isClosed === true || nearEvent(closedAt) ? 'All' : 'Partial';
+  }
+  return trade?.id || trade?.openedAt || trade?.usdValue ? 'Position' : '';
+}
+
+const FOMO_NETWORK_SLUG = {
+  1: 'eth', 56: 'bsc', 143: 'monad', 4663: 'robinhood', 8453: 'base', 1399811149: 'sol',
+};
+
+function fomoNetworkSlug(raw) {
+  const networkId = Number(raw?.networkId ?? raw?.chainId ?? raw?.body?.networkId);
+  if (FOMO_NETWORK_SLUG[networkId]) return FOMO_NETWORK_SLUG[networkId];
+  const direct = String(raw?.chainSlug || raw?.chain || raw?.network || '').trim().toLowerCase();
+  const aliases = { bnb: 'bsc', solana: 'sol', ethereum: 'eth', robinhoodchain: 'robinhood' };
+  return aliases[direct] || (/^[a-z0-9]{2,16}$/.test(direct) ? direct : '');
+}
+
+function fomoHttpsUrl(raw) {
+  const value = String(raw || '').trim();
+  return /^https:\/\//i.test(value) ? value.slice(0, 400) : '';
+}
+
+function slimFomoFollowedEvent(raw, followedIds) {
+  if (!raw || typeof raw !== 'object') return null;
+  const body = raw.body && typeof raw.body === 'object' ? raw.body : {};
+  const user = raw.user && typeof raw.user === 'object' ? raw.user : {};
+  const userId = String(raw.userId || raw.authorId || user.id || body.userId || body.authorId || '').trim();
+  if (!userId || !(followedIds instanceof Set) || !followedIds.has(userId)) return null;
+  const type = fomoActivitySide(raw);
+  if (type !== 'buy' && type !== 'sell' && type !== 'thesis') return null;
+  const ts = Date.parse(raw.createdAt || raw.timestamp || '') || Number(raw.ts) || 0;
+  if (!ts) return null;
+  const trade = raw.authorTrade && typeof raw.authorTrade === 'object' ? raw.authorTrade : {};
+  const token = raw.token && typeof raw.token === 'object' ? raw.token : {};
+  const addr = String(raw.tokenAddress || body.tokenAddress || token.address || '').trim();
+  const networkId = Number(raw.networkId ?? body.networkId ?? token.networkId);
+  const handle = String(raw.userHandle || raw.handle || user.handle || body.userHandle || '').trim().replace(/^@/, '');
+  const key = String(raw.id || raw.key || raw.tradeId || `${type}:${userId}:${addr}:${ts}`).slice(0, 180);
+  const rawComment = raw.comment && typeof raw.comment === 'object' ? raw.comment.comment : raw.comment;
+  const comment = String(rawComment || raw.text || raw.thesis || body.comment || body.text || '').slice(0, 1500);
+  return {
+    key: `fomo-followed:${key}`,
+    source: 'fomo-followed',
+    type,
+    position: fomoActivityPosition(raw, type),
+    followed: true,
+    userId: userId.slice(0, 100),
+    handle: handle.toLowerCase().slice(0, 64),
+    name: String(raw.displayName || raw.userName || user.displayName || handle || 'Followed user').slice(0, 48),
+    avatar: fomoHttpsUrl(raw.profilePictureLink || raw.avatar || user.profilePictureLink),
+    usd: Math.abs(Number(raw.usdAmount ?? raw.usdValue ?? body.totalVolume ?? trade.usdValue)) || 0,
+    comment,
+    addr: addr.slice(0, 80),
+    chain: fomoNetworkSlug({ ...raw, networkId }),
+    chainName: String(raw.networkName || raw.chainName || '').slice(0, 32),
+    symbol: String(raw.ticker || raw.symbol || body.ticker || token.ticker || token.symbol || '').slice(0, 24),
+    img: fomoHttpsUrl(raw.tokenImageUrl || raw.tokenImage || token.imageUrl || token.image),
+    mc: Number(raw.fdv ?? raw.marketCap ?? body.fdv ?? body.marketCap) || 0,
+    ts,
+    tx: String(raw.txHash || raw.transactionHash || raw.tradeId || body.txHash || '').trim().slice(0, 180),
+  };
+}
+
+const FOMO_FOLLOWED_FEED_MIN_INTERVAL_MS = 15000;
+const FOMO_FOLLOWING_IDS_CACHE_MS = 120000;
+let fomoFollowedFeedCache = { events: [], updatedAt: 0, fetchedAt: 0 };
+let fomoFollowingIdsCache = { ids: new Set(), fetchedAt: 0 };
+let fomoFollowedFeedInflight = null;
+
+async function fetchFomoFollowingIds(force = false) {
+  if (!force && Date.now() - fomoFollowingIdsCache.fetchedAt < FOMO_FOLLOWING_IDS_CACHE_MS) {
+    return fomoFollowingIdsCache.ids;
+  }
+  const { res } = await fomoAuthedFetch('/v2/users/current/followingIds');
+  const body = await res.json().catch(() => null);
+  if (!res.ok || fomoBodyUnauthed(body) || Number(body?.statusCode) >= 400) {
+    const unauth = [401, 403, 430, 431].includes(res.status) || fomoBodyUnauthed(body);
+    throw new Error(unauth ? 'not-connected' : `HTTP ${res.status}`);
+  }
+  const values = body?.responseObject?.followingIds || body?.followingIds || [];
+  const ids = new Set((Array.isArray(values) ? values : []).map((value) => String(value || '').trim()).filter(Boolean));
+  fomoFollowingIdsCache = { ids, fetchedAt: Date.now() };
+  return ids;
+}
+
+async function fetchFomoFollowedFeed() {
+  if (fomoFollowedFeedInflight) return fomoFollowedFeedInflight;
+  if (Date.now() - fomoFollowedFeedCache.fetchedAt < FOMO_FOLLOWED_FEED_MIN_INTERVAL_MS) {
+    return { ok: true, ...fomoFollowedFeedCache, stale: true };
+  }
+  fomoFollowedFeedInflight = (async () => {
+    try {
+      const followedIds = await fetchFomoFollowingIds();
+      if (!followedIds.size) {
+        fomoFollowedFeedCache = { events: [], updatedAt: Date.now(), fetchedAt: Date.now() };
+        return { ok: true, ...fomoFollowedFeedCache };
+      }
+      const { res } = await fomoAuthedFetch('/feed/tradingActivity?limit=100&page=0');
+      const body = await res.json().catch(() => null);
+      if (!res.ok || fomoBodyUnauthed(body) || Number(body?.statusCode) >= 400) {
+        const unauthorized = [401, 403, 430, 431].includes(res.status) || fomoBodyUnauthed(body);
+        return { ok: false, reason: unauthorized ? 'not-connected' : 'fetch-failed', events: [] };
+      }
+      const rawItems = body?.responseObject?.items || body?.items || firstObjectArray(body, 0) || [];
+      const events = rawItems.map((item) => slimFomoFollowedEvent(item, followedIds))
+        .filter(Boolean).sort((a, b) => b.ts - a.ts).slice(0, FOMO_FEED_KEEP);
+      fomoFollowedFeedCache = { events, updatedAt: Date.now(), fetchedAt: Date.now() };
+      return { ok: true, ...fomoFollowedFeedCache };
+    } catch (error) {
+      const message = String(error?.message || '').slice(0, 120);
+      if (message === 'not-connected') {
+        fomoFollowedFeedCache = { events: [], updatedAt: 0, fetchedAt: 0 };
+        return { ok: false, reason: 'not-connected', message, events: [] };
+      }
+      if (fomoFollowedFeedCache.events.length) return { ok: true, ...fomoFollowedFeedCache, stale: true };
+      return { ok: false, reason: 'fetch-failed', message, events: [] };
+    } finally {
+      fomoFollowedFeedInflight = null;
+    }
+  })();
+  return fomoFollowedFeedInflight;
 }
 
 
@@ -216,7 +366,8 @@ async function fomoAuthedFetch(path) {
     const probe = await res.clone().json().catch(() => null);
     bodyUnauthed = fomoBodyUnauthed(probe);
   }
-  if ((res.status === 401 || bodyUnauthed) && stored?.refresh) {
+  if ((res.status === 401 || res.status === 403 || res.status === 430 || res.status === 431 || bodyUnauthed)
+    && stored?.refresh) {
     const next = await fomoRefreshSession();
     if (next?.token && next.token !== stored?.token) {
       renewed = true;
@@ -248,15 +399,15 @@ async function fomoFetchToken({ tokenAddress, networkId, kind }) {
   try {
     const { res, stored, renewed } = await fomoAuthedFetch(path);
     token = stored?.token;
-    if (!res.ok && res.status === 401 && !token) {
-      return { ok: false, reason: 'no-token', status: 401, tokenAt: 0 };
+    if (!res.ok && [401, 403, 430, 431].includes(res.status) && !token) {
+      return { ok: false, reason: 'no-token', status: res.status, tokenAt: 0 };
     }
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       const blocked = /cloudflare|cf-ray|<!DOCTYPE html/i.test(text);
       return {
         ok: false,
-        reason: blocked ? 'blocked' : (res.status === 401 ? 'expired' : `http-${res.status}`),
+        reason: blocked ? 'blocked' : ([401, 403, 430, 431].includes(res.status) ? 'expired' : `http-${res.status}`),
         status: res.status,
         tokenAt: stored?.at || 0,
         renewed,
@@ -265,7 +416,7 @@ async function fomoFetchToken({ tokenAddress, networkId, kind }) {
     const body = await res.json().catch(() => null);
     const inner = Number(body?.statusCode);
     if (body?.success === false || (Number.isFinite(inner) && inner !== 200)) {
-      const unauth = inner === 401 || inner === 403;
+      const unauth = fomoBodyUnauthed(body);
       return {
         ok: false,
         reason: unauth ? (token ? 'expired' : 'no-token') : `api-${inner || 'error'}`,
@@ -314,11 +465,13 @@ async function fomoUserPnl7d({ userId }) {
   const path = `/v2/userTokens/aggregatedSnapshot?userId=${encodeURIComponent(userId)}&timestamp=${encodeURIComponent(since)}`;
   try {
     const { res } = await fomoAuthedFetch(path);
-    if (!res.ok) return { ok: false, reason: res.status === 401 ? 'expired' : `http-${res.status}` };
+    if (!res.ok) {
+      return { ok: false, reason: [401, 403, 430, 431].includes(res.status) ? 'expired' : `http-${res.status}` };
+    }
     const body = await res.json().catch(() => null);
     const inner = Number(body?.statusCode);
     if (body?.success === false || (Number.isFinite(inner) && inner !== 200)) {
-      return { ok: false, reason: inner === 401 ? 'expired' : `api-${inner || 'error'}` };
+      return { ok: false, reason: fomoBodyUnauthed(body) ? 'expired' : `api-${inner || 'error'}` };
     }
     const rows = (Array.isArray(body?.responseObject) ? body.responseObject : [])
       .filter((r) => r && Number.isFinite(Number(r.pnl)))
@@ -1028,7 +1181,12 @@ async function connectFomoSse() {
 }
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName !== 'local' || !changes.monitor985SessionV1) return;
+  if (areaName !== 'local') return;
+  if (changes.fomoToken) {
+    fomoFollowedFeedCache = { events: [], updatedAt: 0, fetchedAt: 0 };
+    fomoFollowingIdsCache = { ids: new Set(), fetchedAt: 0 };
+  }
+  if (!changes.monitor985SessionV1) return;
   resetMonitor985EventCaches();
   monitor985LastEventId = '';
   fomoSseBackoff = 5000;
@@ -1310,6 +1468,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'fomo-feed') {
     connectFomoSse();
     fetchFomoFeed()
+      .then(sendResponse)
+      .catch((error) => sendResponse({ ok: false, reason: 'error', message: String(error?.message || '') }));
+    return true;
+  }
+
+  if (message?.type === 'fomo-followed-feed') {
+    fetchFomoFollowedFeed()
       .then(sendResponse)
       .catch((error) => sendResponse({ ok: false, reason: 'error', message: String(error?.message || '') }));
     return true;

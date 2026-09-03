@@ -991,6 +991,24 @@ a[data-sentry-component="TrackerListItem"] > .gdh-star-button,
 .gdh-fomo__pnl.is-up { color: #43c07a; }
 .gdh-fomo__pnl.is-down { color: #ef5350; }
 .gdh-fomo__size { color: #b48ae0; font-size: 11px; }
+.gdh-fomo__size.is-buy { color: #43c07a; }
+.gdh-fomo__size.is-sell { color: #f87171; }
+.gdh-fomo__side,
+.gdh-fomo__position {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 16px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.gdh-fomo__side--buy { color: #4ade80; background: rgba(34, 197, 94, 0.14); }
+.gdh-fomo__side--sell { color: #fb7185; background: rgba(244, 63, 94, 0.14); }
+.gdh-fomo__position { color: #c4b5fd; background: rgba(139, 92, 246, 0.14); }
+.gdh-fomo__item.is-buy { box-shadow: inset 2px 0 rgba(34, 197, 94, 0.7); }
+.gdh-fomo__item.is-sell { box-shadow: inset 2px 0 rgba(244, 63, 94, 0.7); }
 
 .gdh-fomo__time {
   margin-left: auto;
@@ -2247,6 +2265,42 @@ a[data-sentry-component="TrackerListItem"] > .gdh-star-button,
   border: 1px solid #374151; border-radius: 3px; padding: 0 3px;
 }
 .gdh-fomofeed.is-pump .gdh-fomofeed__src { color: #55d98b; border-color: rgba(85, 217, 139, 0.35); }
+.gdh-fomofeed.is-followed {
+  background: linear-gradient(90deg, rgba(250, 204, 21, 0.075), rgba(139, 92, 246, 0.04) 55%, transparent);
+  box-shadow: inset 0 0 0 1px rgba(250, 204, 21, 0.16);
+}
+.gdh-fomofeed.is-followed:hover {
+  background: linear-gradient(90deg, rgba(250, 204, 21, 0.12), rgba(139, 92, 246, 0.065) 55%, transparent);
+}
+.gdh-fomofeed.is-followed .gdh-fomofeed__src {
+  color: #facc15;
+  border-color: rgba(250, 204, 21, 0.38);
+  background: rgba(250, 204, 21, 0.08);
+}
+.gdh-fomofeed__event-icon,
+.gdh-fomofeed__position {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  height: 15px;
+  box-sizing: border-box;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+}
+.gdh-fomofeed__event-icon { width: 15px; }
+.gdh-fomofeed__event-icon.is-buy { color: #4ade80; background: rgba(34, 197, 94, 0.15); }
+.gdh-fomofeed__event-icon.is-sell { color: #fb7185; background: rgba(244, 63, 94, 0.16); }
+.gdh-fomofeed__event-icon.is-thesis { color: #d8b4fe; background: rgba(168, 85, 247, 0.16); }
+.gdh-fomofeed__position {
+  padding: 0 4px;
+  color: #d8b4fe;
+  border: 1px solid rgba(168, 85, 247, 0.32);
+  background: rgba(168, 85, 247, 0.08);
+  text-transform: uppercase;
+}
 .gdh-fomofeed__time { margin-left: auto; flex: none; color: #8a93a6; font-size: 12px; }
 .gdh-fomofeed__usd { font-weight: 600; flex: none; }
 .gdh-fomofeed.is-buy .gdh-fomofeed__usd { color: #22c55e; }
@@ -2325,9 +2379,9 @@ a[data-sentry-component="TrackerListItem"] > .gdh-star-button,
 }
 .gdh-fomofeed__ttime { width: 42px; color: #8a93a6; font-size: 12px; }
 .gdh-fomofeed__twho { width: 120px; }
-.gdh-fomofeed__twho .gdh-fomofeed__name { max-width: 62px; }
-.gdh-fomofeed__tsym { width: 120px; }
-.gdh-fomofeed__symtext { overflow: hidden; text-overflow: ellipsis; max-width: 62px; color: inherit; }
+.gdh-fomofeed__twho .gdh-fomofeed__name { max-width: 72px; }
+.gdh-fomofeed__tsym { width: 180px; }
+.gdh-fomofeed__symtext { overflow: hidden; text-overflow: ellipsis; max-width: 82px; color: inherit; }
 .gdh-fomofeed__tamt { width: 84px; font-weight: 600; justify-content: flex-end; }
 .gdh-fomofeed.is-buy .gdh-fomofeed__tamt { color: #22c55e; }
 .gdh-fomofeed.is-sell .gdh-fomofeed__tamt { color: #f87171; }

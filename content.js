@@ -3051,6 +3051,41 @@ Select to open Flap tax details`;
     return (item && typeof item.user === 'object' && item.user) || item || {};
   }
 
+  function fomoActivitySide(raw) {
+    const direct = String(raw?.side || raw?.tradeSide || raw?.tradeType || raw?.type
+      || raw?.body?.type || raw?.action || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    if (/(^|_)(buy|bought)(_|$)/.test(direct) || raw?.isBuy === true) return 'buy';
+    if (/(^|_)(sell|sold)(_|$)/.test(direct) || raw?.isSell === true || raw?.isBuy === false) return 'sell';
+    if (/(^|_)thesis(_|$)/.test(direct)) return 'thesis';
+    return '';
+  }
+
+  function fomoActivityPosition(raw, side = fomoActivitySide(raw)) {
+    const explicit = String(raw?.positionAction || raw?.positionType || raw?.tradeAction
+      || raw?.activityLabel || raw?.label || raw?.action || '').trim().toLowerCase();
+    if (/^(first|open|opened|new)$/.test(explicit)) return 'First';
+    if (/^(more|add|added|increase|increased)$/.test(explicit)) return 'More';
+    if (/^(partial|trim|trimmed|reduce|reduced)$/.test(explicit)) return 'Partial';
+    if (/^(all|close|closed|exit|exited|full)$/.test(explicit)) return 'All';
+    if (side === 'thesis') return 'Thesis';
+    const eventAt = Date.parse(raw?.createdAt || raw?.timestamp || raw?.time || '') || Number(raw?.ts) || 0;
+    const trade = raw?.authorTrade && typeof raw.authorTrade === 'object' ? raw.authorTrade : {};
+    const openedAt = Date.parse(trade.openedAt || raw?.openedAt || '') || 0;
+    const closedAt = Date.parse(trade.closedAt || raw?.closedAt || '') || 0;
+    const nearEvent = (at) => !!(at && eventAt && Math.abs(at - eventAt) <= 60000);
+    if (side === 'buy') return raw?.isFirstTrade === true || nearEvent(openedAt) ? 'First' : 'More';
+    if (side === 'sell') {
+      return raw?.isFullExit === true || raw?.isClosed === true || nearEvent(closedAt) ? 'All' : 'Partial';
+    }
+    return trade?.id || trade?.openedAt || trade?.usdValue ? 'Position' : '';
+  }
+
+  function normalizeFomoPopupTrade(raw) {
+    if (!raw || typeof raw !== 'object') return { side: '', position: '' };
+    const side = fomoActivitySide(raw);
+    return { ...raw, side, position: fomoActivityPosition(raw, side) };
+  }
+
   function holderName(item) {
     const u = fomoUser(item);
     const handle = typeof u.userHandle === 'string' ? u.userHandle.trim() : '';
@@ -3621,8 +3656,9 @@ Select to open Flap tax details`;
       return;
     }
     for (const item of items.slice(0, 50)) {
+      const trade = normalizeFomoPopupTrade(item);
       const row = document.createElement('div');
-      row.className = 'gdh-fomo__item';
+      row.className = `gdh-fomo__item${trade.side ? ` is-${trade.side}` : ''}`;
 
       const head = document.createElement('div');
       head.className = 'gdh-fomo__head';
@@ -3641,9 +3677,24 @@ Select to open Flap tax details`;
       head.appendChild(name);
       attachFomoBoard(head, fomoUser(item)?.userHandle);
 
-      const trade = item?.authorTrade;
-      const pnl = Number(trade
-        ? (trade.closedAt ? trade.realizedPnlUsd : (trade.realizedPnlUsd || 0) + (trade.unrealizedPnlUsd || 0))
+      if (kind === 'swaps' && (trade.side === 'buy' || trade.side === 'sell')) {
+        const side = document.createElement('span');
+        side.className = `gdh-fomo__side gdh-fomo__side--${trade.side}`;
+        side.textContent = trade.side === 'sell' ? '↓ Sell' : '↑ Buy';
+        side.title = trade.side === 'sell' ? 'Sell activity' : 'Buy activity';
+        head.appendChild(side);
+        if (trade.position) {
+          const position = document.createElement('span');
+          position.className = 'gdh-fomo__position';
+          position.textContent = trade.position;
+          position.title = `Position change: ${trade.position}`;
+          head.appendChild(position);
+        }
+      }
+
+      const authorTrade = item?.authorTrade;
+      const pnl = Number(authorTrade
+        ? (authorTrade.closedAt ? authorTrade.realizedPnlUsd : (authorTrade.realizedPnlUsd || 0) + (authorTrade.unrealizedPnlUsd || 0))
         : (item?.pnlChange ?? deepPick(item, /(pnl|profit)(usd)?$/i, 'number')));
       if (Number.isFinite(pnl) && pnl !== 0) {
         const pnlEl = document.createElement('span');
@@ -3651,12 +3702,12 @@ Select to open Flap tax details`;
         pnlEl.textContent = fomoUsd(pnl);
         head.appendChild(pnlEl);
       }
-      const sizeUsd = Number(trade?.usdValue
+      const sizeUsd = Number(item?.usdAmount ?? authorTrade?.usdValue
         ?? item?.positionUsd ?? deepPick(item, /(amount|size|value|position)(usd)?$/i, 'number'));
-      if (Number.isFinite(sizeUsd) && sizeUsd > 0) {
+      if (Number.isFinite(sizeUsd) && Math.abs(sizeUsd) > 0) {
         const sz = document.createElement('span');
-        sz.className = 'gdh-fomo__size';
-        sz.textContent = fomoUsd(sizeUsd);
+        sz.className = `gdh-fomo__size${trade.side ? ` is-${trade.side}` : ''}`;
+        sz.textContent = fomoUsd(Math.abs(sizeUsd));
         head.appendChild(sz);
       }
       const time = document.createElement('span');
@@ -5307,16 +5358,21 @@ Select to open Flap tax details`;
     transferIn: { label: 'Transfer in', cls: 'is-transfer' },
     refund: { label: 'Refund / failed', cls: 'is-refund' },
   };
+  const FOMO_FEED_MARKERS = {
+    followed: { label: 'Following', icon: '★' },
+  };
   const PUMP_FEED_DEFAULT_TOKEN_FILTERS = new Set([
     'SPCXB', 'SKHYB', 'SPYB', 'XAUT', 'QQQB', 'NVDAB', 'AAPLB', 'TSLAB',
     'MSFTB', 'GOOGLB', 'HOODB', 'BABAB', 'GMEB', 'NFLXB', 'MSTRB', 'DJTB',
   ]);
   let fomoFeedEvents = [];
+  let fomoFollowedEvents = [];
   let pumpFeedEvents = [];
   const fomoFeedCards = new Map();
   const fomoFeedSeen = new Set();
   const FOMO_FEED_SEEN_MAX = 600;
   let fomoFeedLastPollAt = 0;
+  let fomoFollowedLastPollAt = 0;
   let pumpFeedLastPollAt = 0;
   let pumpDefaultWallets = new Set();
   let monitorFomoCfg = {
@@ -5398,18 +5454,19 @@ Select to open Flap tax details`;
   }
 
   function fomoFeedEventAllowed(ev) {
-    if (!monitorFomoCfg.connected) return false;
     const types = settings.fomoFeedTypes || DEFAULTS.fomoFeedTypes;
     if (types[ev.type] === false) return false;
-    if (!monitorFomoCfg.watch.has(ev.handle)) return false;
-    if (monitorFomoCfg.muted.has(ev.handle)) return false;
-    const pref = monitorFomoCfg.prefs[ev.handle];
-    if (pref?.types && pref.types[ev.type] === false) return false;
     if (ev.addr && isTokenBlocked(ev.addr)) return false;
+    if (ev?.source === 'fomo-followed') return ev.followed === true;
     const symbolKey = pumpFeedTokenKey(ev.symbol);
     const addressKey = pumpFeedTokenKey(ev.addr);
     if ((symbolKey && monitorFomoCfg.tokenFilters.has(symbolKey))
       || (addressKey && monitorFomoCfg.tokenFilters.has(addressKey))) return false;
+    if (!monitorFomoCfg.connected) return false;
+    if (!monitorFomoCfg.watch.has(ev.handle)) return false;
+    if (monitorFomoCfg.muted.has(ev.handle)) return false;
+    const pref = monitorFomoCfg.prefs[ev.handle];
+    if (pref?.types && pref.types[ev.type] === false) return false;
     const personal = Number(monitorFomoCfg.filters?.[ev.handle]?.minTradeUsd
       ?? monitorFomoCfg.filters?.[ev.handle]);
     const minUsd = Math.max(
@@ -5502,6 +5559,11 @@ Select to open Flap tax details`;
     const chain = settings.fomoFeedChainOnly === true ? currentChainSlug() : '';
     const out = [];
     if (settings.enableFomoFeed !== false) {
+      for (const ev of fomoFollowedEvents) {
+        if (!ev?.key || !ev.ts || !fomoFeedEventAllowed(ev)) continue;
+        if (chain && ev.chain && ev.chain !== chain) continue;
+        out.push(ev);
+      }
       for (const ev of fomoFeedEvents) {
         if (!ev?.key || !ev.ts || !fomoFeedEventAllowed(ev)) continue;
         if (chain && ev.chain && ev.chain !== chain) continue;
@@ -5541,6 +5603,28 @@ Select to open Flap tax details`;
     }
   }
 
+  function pollFomoFollowedFeed() {
+    if (!settings.enabled || settings.enableFomoFeed === false) return;
+    if (!document.querySelector(TRACK_TAB_CELL) && !trackerCards().length) return;
+    fomoFollowedLastPollAt = Date.now();
+    try {
+      chrome.runtime.sendMessage({ type: 'fomo-followed-feed' }, (resp) => {
+        if (chrome.runtime.lastError) return;
+        if (!resp?.ok) {
+          if (resp?.reason === 'not-connected') { fomoFollowedEvents = []; scheduleScan(); }
+          return;
+        }
+        fomoFollowedEvents = (Array.isArray(resp.events) ? resp.events : []).map((event) => ({
+          ...event,
+          source: 'fomo-followed',
+          followed: true,
+        }));
+        scheduleScan();
+      });
+    } catch {
+    }
+  }
+
   function fomoFeedRelTime(ts) {
     const diff = Math.max(0, Date.now() - ts);
     if (diff < 60000) return `${Math.max(5, Math.ceil(diff / 5000) * 5)}s`;
@@ -5569,11 +5653,35 @@ Select to open Flap tax details`;
     if (ev?.source === 'pump') {
       return { source: 'Pump', title: 'Open Pump profile', url: String(ev.profileUrl || '') };
     }
+    if (ev?.source === 'fomo-followed') {
+      return {
+        source: `${FOMO_FEED_MARKERS.followed.icon} ${FOMO_FEED_MARKERS.followed.label}`,
+        title: `@${ev?.handle || ''} · Followed on FOMO`,
+        url: ev?.handle ? `https://fomo.family/profile/${encodeURIComponent(ev.handle)}` : '',
+      };
+    }
     return {
       source: 'fomo',
       title: `@${ev?.handle || ''} · Open FOMO profile`,
       url: ev?.handle ? `https://fomo.family/profile/${encodeURIComponent(ev.handle)}` : '',
     };
+  }
+
+  function appendFomoFollowedMarkers(container, ev) {
+    if (ev?.source !== 'fomo-followed') return;
+    const icon = document.createElement('span');
+    icon.className = `gdh-fomofeed__event-icon is-${ev.type || 'position'}`;
+    icon.textContent = ev.type === 'sell' ? '↘' : ev.type === 'thesis' ? '✦' : '↗';
+    icon.title = ev.type === 'sell' ? 'Followed user sold' : ev.type === 'thesis'
+      ? 'Followed user posted a thesis' : 'Followed user bought';
+    container.appendChild(icon);
+    if (ev.position) {
+      const position = document.createElement('span');
+      position.className = 'gdh-fomofeed__position';
+      position.textContent = ev.position;
+      position.title = `FOMO position action: ${ev.position}`;
+      container.appendChild(position);
+    }
   }
 
 
@@ -5610,7 +5718,8 @@ Select to open Flap tax details`;
     name.addEventListener('click', openProfile);
     const src = document.createElement('span');
     src.className = 'gdh-fomofeed__src';
-    src.textContent = profile.source;
+    src.textContent = ev.source === 'fomo-followed' ? FOMO_FEED_MARKERS.followed.icon : profile.source;
+    src.title = ev.source === 'fomo-followed' ? FOMO_FEED_MARKERS.followed.label : profile.source;
     who.append(av, name, src);
 
     const sym = document.createElement('span');
@@ -5631,6 +5740,7 @@ Select to open Flap tax details`;
     act.className = 'gdh-fomofeed__tag';
     act.textContent = tag.label;
     sym.append(symText, act);
+    appendFomoFollowedMarkers(sym, ev);
 
     const amt = document.createElement('span');
     amt.className = 'gdh-fomofeed__tcell gdh-fomofeed__tamt';
@@ -5656,7 +5766,7 @@ Select to open Flap tax details`;
     const tag = FOMO_FEED_TAGS[ev.type] || { label: 'fomo', cls: '' };
     const profile = trackingFeedProfileMeta(ev);
     const card = document.createElement('div');
-    card.className = `gdh-fomofeed ${tag.cls}${ev.source === 'pump' ? ' is-pump' : ''}`;
+    card.className = `gdh-fomofeed ${tag.cls}${ev.source === 'pump' ? ' is-pump' : ''}${ev.source === 'fomo-followed' ? ' is-followed' : ''}`;
     card.dataset.gdhFomoKey = ev.key;
     card.dataset.gdhFeedSource = ev.source || 'fomo';
 
@@ -5714,7 +5824,9 @@ Select to open Flap tax details`;
     time.className = 'gdh-fomofeed__time';
     time.textContent = fomoFeedRelTime(ev.ts);
 
-    r1.append(av, name, tagEl, src, time);
+    r1.append(av, name, tagEl);
+    appendFomoFollowedMarkers(r1, ev);
+    r1.append(src, time);
     card.appendChild(r1);
 
     const r2 = document.createElement('div');
@@ -5948,6 +6060,7 @@ Select to open Flap tax details`;
     if (fomoFeedLastMode !== null && fomoFeedLastMode !== mode) teardownFomoFeed();
     fomoFeedLastMode = mode;
     if (settings.enableFomoFeed !== false && Date.now() - fomoFeedLastPollAt > FOMO_FEED_POLL_MS) pollFomoFeed();
+    if (settings.enableFomoFeed !== false && Date.now() - fomoFollowedLastPollAt > FOMO_FEED_POLL_MS) pollFomoFollowedFeed();
     if (settings.enablePumpFeed !== false && Date.now() - pumpFeedLastPollAt > FOMO_FEED_POLL_MS) pollPumpFeed();
 
     const cards = trackerCards().filter((c) => c.isConnected);
@@ -6450,6 +6563,8 @@ Select to open Flap tax details`;
       }
       if (key === 'fomoToken') {
         fomoTokenArrived = !!change.newValue?.token;
+        fomoFollowedEvents = [];
+        fomoFollowedLastPollAt = 0;
         continue;
       }
       if (key === 'monitorFomoConfig') {

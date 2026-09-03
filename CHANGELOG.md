@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.48.0 - 2026-09-03
+
+- Kept FOMO sell activity in the popup Trades tab and added explicit Buy/Sell plus First/More/Partial/All position labels.
+- Added authenticated polling of FOMO's current following list and recent trading activity, filtering activity to followed user IDs before it reaches the GMGN page.
+- Injected followed-user buys, sells, and theses into GMGN's tracker alongside native rows while preserving native-row deduplication and virtual-list positioning.
+- Added a subtle followed-user highlight, star marker, event-specific buy/sell/thesis icons, and position-action badges in both compact and table tracker layouts.
+- Routed FOMO's `430`/`431` unauthorized responses through the existing token-refresh path instead of treating them as generic HTTP failures.
+- Added API-contract, filtering, normalization, sell-rendering, and real-browser visual regression coverage.
+
 ## 0.47.3 - 2026-09-03
 
 - Scoped click suppression to the clicked watched card so moving directly to another watched card shows its tooltip normally.
