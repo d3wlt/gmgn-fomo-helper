@@ -1,6 +1,6 @@
 # better gmgn
 
-An independent private copy of the Chrome MV3 extension “better gmgn.” Version 0.47.1 is based on upstream version 0.46.27 and adds trading-oriented interface enhancements to GMGN.ai and DeBot without executing trades.
+An independent private copy of the Chrome MV3 extension “better gmgn.” Version 0.47.2 is based on upstream version 0.46.27 and adds trading-oriented interface enhancements to GMGN.ai and DeBot without executing trades.
 
 This repository is not affiliated with GMGN, DeBot, FOMO, Pump, 985monitor, or the original upstream author.
 

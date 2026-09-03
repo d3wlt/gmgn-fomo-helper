@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.47.2 - 2026-09-03
+
+- Fixed the developer-performance hover card remaining attached to the cursor after clicking a watched GMGN token card or chart.
+- Dismissed the tooltip before click interactions and suppressed it until the pointer leaves the watched card.
+- Added stale-card detection so GMGN DOM replacements cannot strand the tooltip onscreen.
+
 ## 0.47.1 - 2026-09-02
 
 - Fixed overlapping wallet-tracker rows after GMGN changed its virtual list to position rows with CSS transforms.

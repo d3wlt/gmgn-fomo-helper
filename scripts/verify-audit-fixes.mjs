@@ -15,7 +15,7 @@ const debotStyles = read('debot-styles.css');
 const manifest = JSON.parse(read('manifest.json'));
 const releaseBuild = read('scripts/build-release.ps1');
 const releaseWorkflow = read('.github/workflows/release.yml');
-const releaseNote = read('release-notes/v0.47.1.md');
+const releaseNote = read('release-notes/v0.47.2.md');
 const readme = read('README.md');
 const popup = read('popup.js');
 const popupHtml = read('popup.html');
@@ -1302,6 +1302,76 @@ await test('Every FOMO and DeBot narrative render path queues an English sibling
   assert.ok(content.includes("`${fomoStats.thesisCount} narratives`"));
 });
 
+await test('Developer tooltip dismisses on click and stale hover targets', () => {
+  const hide = extractFunction(content, 'hideTooltip');
+  const suppress = extractFunction(content, 'suppressTooltipUntilPointerExit');
+  const move = extractFunction(content, 'handleTooltipPointerMove');
+  const detachedResult = evaluate([hide, suppress, move], `(() => {
+    activeCard = { isConnected: false };
+    tooltip = { classList: { remove(value) { removed = value; } } };
+    handleTooltipPointerMove({ target: {} });
+    return { activeCard, removed };
+  })()`, {
+    activeCard: null,
+    tooltip: null,
+    tooltipSuppressedUntilOutside: false,
+    removed: '',
+    findWatchedCard: () => null,
+    positionTooltip: () => { throw new Error('detached tooltip repositioned'); },
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(detachedResult)), {
+    activeCard: null,
+    removed: 'gdh-tooltip--visible',
+  });
+
+  const card = { isConnected: true };
+  const clickResult = evaluate([hide, suppress, move], `(() => {
+    activeCard = card;
+    tooltip = { classList: { remove(value) { removed = value; } } };
+    suppressTooltipUntilPointerExit();
+    handleTooltipPointerMove({ target: card });
+    const suppressedOnCard = tooltipSuppressedUntilOutside;
+    handleTooltipPointerMove({ target: outside });
+    return { activeCard, removed, positioned, suppressedOnCard, suppressedAfterExit: tooltipSuppressedUntilOutside };
+  })()`, {
+    activeCard: null,
+    tooltip: null,
+    tooltipSuppressedUntilOutside: false,
+    card,
+    outside: {},
+    removed: '',
+    findWatchedCard: (target) => target === card ? card : null,
+    positionTooltip: () => { positioned += 1; },
+    positioned: 0,
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(clickResult)), {
+    activeCard: null,
+    removed: 'gdh-tooltip--visible',
+    positioned: 0,
+    suppressedOnCard: true,
+    suppressedAfterExit: false,
+  });
+
+  const counter = { value: 0 };
+  const activeResult = evaluate([hide, suppress, move], `(() => {
+    activeCard = card;
+    tooltip = { classList: { remove() { throw new Error('active tooltip hidden'); } } };
+    handleTooltipPointerMove({ target: card });
+    return { sameCard: activeCard === card, positioned: counter.value };
+  })()`, {
+    activeCard: null,
+    tooltip: null,
+    tooltipSuppressedUntilOutside: false,
+    card,
+    counter,
+    findWatchedCard: (target) => target === card ? card : null,
+    positionTooltip: () => { counter.value += 1; },
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(activeResult)), { sameCard: true, positioned: 1 });
+  assert.ok(content.includes("document.addEventListener('pointerdown', suppressTooltipUntilPointerExit, true);"));
+  assert.ok(content.includes("if (!card) { tooltipSuppressedUntilOutside = false; hideTooltip(); return; }"));
+});
+
 await test('Maintained sources are English-only and the release surface is ZIP-only', () => {
   const ignored = new Set(['.git', 'dist']);
   const files = [];
@@ -1328,11 +1398,11 @@ await test('Maintained sources are English-only and the release surface is ZIP-o
   assert.ok(!popup.includes('get-' + 'update-state'));
   assert.equal(fs.existsSync(path.join(root, 'native' + '-updater')), false);
   assert.equal(fs.existsSync(path.join(root, 'scripts', 'build-native-' + 'installer.ps1')), false);
-  assert.equal(manifest.version, '0.47.1');
+  assert.equal(manifest.version, '0.47.2');
   assert.ok(popupHtml.startsWith('<!doctype html>\n<html lang="en">\n'));
-  assert.ok(readme.includes('Version 0.47.1'));
-  assert.ok(releaseNote.startsWith('# better gmgn v0.47.1\n'));
-  assert.deepEqual(fs.readdirSync(path.join(root, 'release-notes')).filter((name) => /^v.*\.md$/.test(name)), ['v0.47.1.md']);
+  assert.ok(readme.includes('Version 0.47.2'));
+  assert.ok(releaseNote.startsWith('# better gmgn v0.47.2\n'));
+  assert.deepEqual(fs.readdirSync(path.join(root, 'release-notes')).filter((name) => /^v.*\.md$/.test(name)), ['v0.47.2.md']);
   assert.ok(releaseBuild.includes('985gmgn-helper-v$version.zip'));
   assert.ok(releaseBuild.includes('"$zipPath.sha256"'));
   assert.ok(releaseBuild.includes('Get-ChildItem -LiteralPath $dist -File | Remove-Item -Force'));

@@ -293,6 +293,7 @@
   let blacklistModalOpen = false;
   let activeCard = null;
   let tooltip = null;
+  let tooltipSuppressedUntilOutside = false;
 
 
   function setBoundedMap(map, key, value, max) {
@@ -6267,11 +6268,37 @@ Select to open Flap tax details`;
     return target.closest(`${CARD_SELECTOR}[data-gdh-watched="1"]`);
   }
 
+  function hideTooltip() {
+    activeCard = null;
+    tooltip?.classList.remove('gdh-tooltip--visible');
+  }
+
+  function suppressTooltipUntilPointerExit() {
+    if (!activeCard) return;
+    tooltipSuppressedUntilOutside = true;
+    hideTooltip();
+  }
+
+  function handleTooltipPointerMove(event) {
+    const card = findWatchedCard(event.target);
+    if (tooltipSuppressedUntilOutside) {
+      if (!card) tooltipSuppressedUntilOutside = false;
+      return;
+    }
+    if (!activeCard) return;
+    if (!activeCard.isConnected || card !== activeCard) {
+      hideTooltip();
+      return;
+    }
+    positionTooltip(event);
+  }
+
   document.addEventListener(
     'pointerover',
     (event) => {
       const card = findWatchedCard(event.target);
-      if (!card || card === activeCard) return;
+      if (!card) { tooltipSuppressedUntilOutside = false; hideTooltip(); return; }
+      if (tooltipSuppressedUntilOutside || card === activeCard) return;
       activeCard = card;
       fillTooltip(card);
       ensureTooltip().classList.add('gdh-tooltip--visible');
@@ -6287,13 +6314,13 @@ Select to open Flap tax details`;
       if (event.relatedTarget instanceof Node && activeCard.contains(event.relatedTarget)) return;
       const leavingCard = findWatchedCard(event.target);
       if (leavingCard !== activeCard) return;
-      activeCard = null;
-      tooltip?.classList.remove('gdh-tooltip--visible');
+      hideTooltip();
     },
     true,
   );
 
-  document.addEventListener('pointermove', positionTooltip, true);
+  document.addEventListener('pointerdown', suppressTooltipUntilPointerExit, true);
+  document.addEventListener('pointermove', handleTooltipPointerMove, true);
   document.addEventListener('scroll', scheduleScrollScan, true);
 
   const GDH_SELF_SELECTOR = '[data-gdh-fomo-key], .gdh-flap-row, .gdh-flap, .gdh-marked, .gdh-remind-card, .gdh-notification-launcher, .gdh-notification-panel, .gdh-fomo, .gdh-tooltip, .gdh-tokenblock';
