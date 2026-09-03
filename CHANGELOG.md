@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.47.3 - 2026-09-03
+
+- Scoped click suppression to the clicked watched card so moving directly to another watched card shows its tooltip normally.
+- Kept suppression across same-card DOM replacement while allowing normal re-hover after pointer movement.
+- Dismissed active developer tooltips on scroll, window blur, hidden-tab transitions, and active-card removal.
+- Added broader regression and real-browser lifecycle coverage for card changes, replacement, scrolling, blur, visibility, and removal.
+
 ## 0.47.2 - 2026-09-03
 
 - Fixed the developer-performance hover card remaining attached to the cursor after clicking a watched GMGN token card or chart.

@@ -15,7 +15,7 @@ const debotStyles = read('debot-styles.css');
 const manifest = JSON.parse(read('manifest.json'));
 const releaseBuild = read('scripts/build-release.ps1');
 const releaseWorkflow = read('.github/workflows/release.yml');
-const releaseNote = read('release-notes/v0.47.2.md');
+const releaseNote = read('release-notes/v0.47.3.md');
 const readme = read('README.md');
 const popup = read('popup.js');
 const popupHtml = read('popup.html');
@@ -1302,74 +1302,140 @@ await test('Every FOMO and DeBot narrative render path queues an English sibling
   assert.ok(content.includes("`${fomoStats.thesisCount} narratives`"));
 });
 
-await test('Developer tooltip dismisses on click and stale hover targets', () => {
-  const hide = extractFunction(content, 'hideTooltip');
-  const suppress = extractFunction(content, 'suppressTooltipUntilPointerExit');
-  const move = extractFunction(content, 'handleTooltipPointerMove');
-  const detachedResult = evaluate([hide, suppress, move], `(() => {
-    activeCard = { isConnected: false };
-    tooltip = { classList: { remove(value) { removed = value; } } };
-    handleTooltipPointerMove({ target: {} });
-    return { activeCard, removed };
-  })()`, {
-    activeCard: null,
-    tooltip: null,
-    tooltipSuppressedUntilOutside: false,
-    removed: '',
-    findWatchedCard: () => null,
-    positionTooltip: () => { throw new Error('detached tooltip repositioned'); },
-  });
-  assert.deepEqual(JSON.parse(JSON.stringify(detachedResult)), {
-    activeCard: null,
-    removed: 'gdh-tooltip--visible',
-  });
+await test('Developer tooltip dismissal covers clicks, card changes, and lifecycle exits', () => {
+  const functions = [
+    extractFunction(content, 'hideTooltip'),
+    extractFunction(content, 'suppressTooltipUntilPointerExit'),
+    extractFunction(content, 'dismissTooltipForLifecycle'),
+    extractFunction(content, 'handleTooltipPointerMove'),
+    extractFunction(content, 'handleTooltipScroll'),
+    extractFunction(content, 'showTooltipForCard'),
+  ];
+  const cardA = { isConnected: true };
+  const cardB = { isConnected: true };
+  const findWatchedCard = (target) => target === cardA ? cardA : target === cardB ? cardB : null;
 
-  const card = { isConnected: true };
-  const clickResult = evaluate([hide, suppress, move], `(() => {
-    activeCard = card;
-    tooltip = { classList: { remove(value) { removed = value; } } };
+  const clickTooltip = {
+    classList: {
+      remove(value) { clickCounters.removed = value; },
+      add(value) { clickCounters.added = value; },
+    },
+  };
+  const clickCounters = { positioned: 0, removed: '', added: '', filledOtherCard: false };
+  const clickResult = evaluate(functions, `(() => {
+    activeCard = cardA;
+    tooltip = clickTooltip;
     suppressTooltipUntilPointerExit();
-    handleTooltipPointerMove({ target: card });
-    const suppressedOnCard = tooltipSuppressedUntilOutside;
-    handleTooltipPointerMove({ target: outside });
-    return { activeCard, removed, positioned, suppressedOnCard, suppressedAfterExit: tooltipSuppressedUntilOutside };
+    handleTooltipPointerMove({ target: cardA });
+    const suppressedOnClickedCard = suppressedTooltipCard === cardA;
+    handleTooltipPointerMove({ target: cardB });
+    return {
+      activeOtherCard: activeCard === cardB,
+      removed: clickCounters.removed,
+      added: clickCounters.added,
+      positioned: clickCounters.positioned,
+      filledOtherCard: clickCounters.filledOtherCard,
+      suppressedOnClickedCard,
+      suppressionClearedForOtherCard: suppressedTooltipCard === null,
+    };
   })()`, {
     activeCard: null,
     tooltip: null,
-    tooltipSuppressedUntilOutside: false,
-    card,
-    outside: {},
-    removed: '',
-    findWatchedCard: (target) => target === card ? card : null,
-    positionTooltip: () => { positioned += 1; },
-    positioned: 0,
+    suppressedTooltipCard: null,
+    cardA,
+    cardB,
+    clickTooltip,
+    clickCounters,
+    findWatchedCard,
+    fillTooltip: (card) => { clickCounters.filledOtherCard = card === cardB; },
+    ensureTooltip: () => clickTooltip,
+    positionTooltip: () => { clickCounters.positioned += 1; },
+    scheduleScrollScan: () => {},
   });
   assert.deepEqual(JSON.parse(JSON.stringify(clickResult)), {
-    activeCard: null,
+    activeOtherCard: true,
     removed: 'gdh-tooltip--visible',
-    positioned: 0,
-    suppressedOnCard: true,
-    suppressedAfterExit: false,
+    added: 'gdh-tooltip--visible',
+    positioned: 1,
+    filledOtherCard: true,
+    suppressedOnClickedCard: true,
+    suppressionClearedForOtherCard: true,
   });
 
-  const counter = { value: 0 };
-  const activeResult = evaluate([hide, suppress, move], `(() => {
-    activeCard = card;
-    tooltip = { classList: { remove() { throw new Error('active tooltip hidden'); } } };
-    handleTooltipPointerMove({ target: card });
-    return { sameCard: activeCard === card, positioned: counter.value };
+  const replacementResult = evaluate(functions, `(() => {
+    suppressedTooltipCard = detachedCard;
+    handleTooltipPointerMove({ target: replacementCard });
+    return { adoptedReplacement: suppressedTooltipCard === replacementCard, positioned: counters.positioned };
   })()`, {
     activeCard: null,
     tooltip: null,
-    tooltipSuppressedUntilOutside: false,
-    card,
-    counter,
-    findWatchedCard: (target) => target === card ? card : null,
-    positionTooltip: () => { counter.value += 1; },
+    suppressedTooltipCard: null,
+    detachedCard: { isConnected: false },
+    replacementCard: cardB,
+    counters: { positioned: 0 },
+    findWatchedCard: (target) => target === cardB ? cardB : null,
+    positionTooltip: () => { throw new Error('replacement tooltip repositioned'); },
+    scheduleScrollScan: () => {},
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(replacementResult)), {
+    adoptedReplacement: true,
+    positioned: 0,
+  });
+
+  const lifecycleCounters = { scroll: 0 };
+  const lifecycleResult = evaluate(functions, `(() => {
+    activeCard = cardA;
+    suppressedTooltipCard = cardA;
+    tooltip = { classList: { remove(value) { removed = value; } } };
+    handleTooltipScroll(scrollEvent);
+    return {
+      activeCard,
+      suppressedTooltipCard,
+      removed,
+      scrollCalls: lifecycleCounters.scroll,
+    };
+  })()`, {
+    activeCard: null,
+    tooltip: null,
+    suppressedTooltipCard: null,
+    cardA,
+    removed: '',
+    scrollEvent: { type: 'scroll' },
+    lifecycleCounters,
+    findWatchedCard,
+    positionTooltip: () => {},
+    scheduleScrollScan: () => { lifecycleCounters.scroll += 1; },
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(lifecycleResult)), {
+    activeCard: null,
+    suppressedTooltipCard: null,
+    removed: 'gdh-tooltip--visible',
+    scrollCalls: 1,
+  });
+
+  const positionCounters = { positioned: 0 };
+  const activeResult = evaluate(functions, `(() => {
+    activeCard = cardA;
+    tooltip = { classList: { remove() { throw new Error('active tooltip hidden'); } } };
+    handleTooltipPointerMove({ target: cardA });
+    return { sameCard: activeCard === cardA, positioned: positionCounters.positioned };
+  })()`, {
+    activeCard: null,
+    tooltip: null,
+    suppressedTooltipCard: null,
+    cardA,
+    positionCounters,
+    findWatchedCard,
+    positionTooltip: () => { positionCounters.positioned += 1; },
+    scheduleScrollScan: () => {},
   });
   assert.deepEqual(JSON.parse(JSON.stringify(activeResult)), { sameCard: true, positioned: 1 });
+
   assert.ok(content.includes("document.addEventListener('pointerdown', suppressTooltipUntilPointerExit, true);"));
-  assert.ok(content.includes("if (!card) { tooltipSuppressedUntilOutside = false; hideTooltip(); return; }"));
+  assert.ok(content.includes("document.addEventListener('scroll', handleTooltipScroll, true);"));
+  assert.ok(content.includes("window.addEventListener('blur', dismissTooltipForLifecycle);"));
+  assert.ok(content.includes("if (document.visibilityState === 'hidden') dismissTooltipForLifecycle();"));
+  assert.ok(content.includes('if (activeCard && !activeCard.isConnected) hideTooltip();'));
 });
 
 await test('Maintained sources are English-only and the release surface is ZIP-only', () => {
@@ -1398,11 +1464,11 @@ await test('Maintained sources are English-only and the release surface is ZIP-o
   assert.ok(!popup.includes('get-' + 'update-state'));
   assert.equal(fs.existsSync(path.join(root, 'native' + '-updater')), false);
   assert.equal(fs.existsSync(path.join(root, 'scripts', 'build-native-' + 'installer.ps1')), false);
-  assert.equal(manifest.version, '0.47.2');
+  assert.equal(manifest.version, '0.47.3');
   assert.ok(popupHtml.startsWith('<!doctype html>\n<html lang="en">\n'));
-  assert.ok(readme.includes('Version 0.47.2'));
-  assert.ok(releaseNote.startsWith('# better gmgn v0.47.2\n'));
-  assert.deepEqual(fs.readdirSync(path.join(root, 'release-notes')).filter((name) => /^v.*\.md$/.test(name)), ['v0.47.2.md']);
+  assert.ok(readme.includes('Version 0.47.3'));
+  assert.ok(releaseNote.startsWith('# better gmgn v0.47.3\n'));
+  assert.deepEqual(fs.readdirSync(path.join(root, 'release-notes')).filter((name) => /^v.*\.md$/.test(name)), ['v0.47.3.md']);
   assert.ok(releaseBuild.includes('985gmgn-helper-v$version.zip'));
   assert.ok(releaseBuild.includes('"$zipPath.sha256"'));
   assert.ok(releaseBuild.includes('Get-ChildItem -LiteralPath $dist -File | Remove-Item -Force'));

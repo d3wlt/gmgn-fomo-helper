@@ -293,7 +293,7 @@
   let blacklistModalOpen = false;
   let activeCard = null;
   let tooltip = null;
-  let tooltipSuppressedUntilOutside = false;
+  let suppressedTooltipCard = null;
 
 
   function setBoundedMap(map, key, value, max) {
@@ -5271,8 +5271,7 @@ Select to open Flap tax details`;
     scanScheduled = false;
     scanRafId = 0;
     if (settings.showDevTooltip === false) {
-      activeCard = null;
-      tooltip?.classList.remove('gdh-tooltip--visible');
+      dismissTooltipForLifecycle();
     }
     document.documentElement.style.setProperty(
       '--gdh-highlight',
@@ -6275,17 +6274,29 @@ Select to open Flap tax details`;
 
   function suppressTooltipUntilPointerExit() {
     if (!activeCard) return;
-    tooltipSuppressedUntilOutside = true;
+    suppressedTooltipCard = activeCard;
+    hideTooltip();
+  }
+
+  function dismissTooltipForLifecycle() {
+    suppressedTooltipCard = null;
     hideTooltip();
   }
 
   function handleTooltipPointerMove(event) {
     const card = findWatchedCard(event.target);
-    if (tooltipSuppressedUntilOutside) {
-      if (!card) tooltipSuppressedUntilOutside = false;
+    if (suppressedTooltipCard) {
+      if (card === suppressedTooltipCard) return;
+      if (!suppressedTooltipCard.isConnected && card) {
+        suppressedTooltipCard = card;
+        return;
+      }
+      suppressedTooltipCard = null;
+    }
+    if (!activeCard) {
+      if (card) showTooltipForCard(card, event);
       return;
     }
-    if (!activeCard) return;
     if (!activeCard.isConnected || card !== activeCard) {
       hideTooltip();
       return;
@@ -6293,16 +6304,33 @@ Select to open Flap tax details`;
     positionTooltip(event);
   }
 
+  function handleTooltipScroll(event) {
+    dismissTooltipForLifecycle();
+    scheduleScrollScan(event);
+  }
+
+  function showTooltipForCard(card, event) {
+    activeCard = card;
+    fillTooltip(card);
+    ensureTooltip().classList.add('gdh-tooltip--visible');
+    positionTooltip(event);
+  }
+
   document.addEventListener(
     'pointerover',
     (event) => {
       const card = findWatchedCard(event.target);
-      if (!card) { tooltipSuppressedUntilOutside = false; hideTooltip(); return; }
-      if (tooltipSuppressedUntilOutside || card === activeCard) return;
-      activeCard = card;
-      fillTooltip(card);
-      ensureTooltip().classList.add('gdh-tooltip--visible');
-      positionTooltip(event);
+      if (!card) { dismissTooltipForLifecycle(); return; }
+      if (suppressedTooltipCard) {
+        if (card === suppressedTooltipCard) return;
+        if (!suppressedTooltipCard.isConnected) {
+          suppressedTooltipCard = card;
+          return;
+        }
+        suppressedTooltipCard = null;
+      }
+      if (card === activeCard) return;
+      showTooltipForCard(card, event);
     },
     true,
   );
@@ -6310,6 +6338,15 @@ Select to open Flap tax details`;
   document.addEventListener(
     'pointerout',
     (event) => {
+      if (suppressedTooltipCard) {
+        const leavingSuppressedCard = findWatchedCard(event.target);
+        if (leavingSuppressedCard === suppressedTooltipCard
+          && !(event.relatedTarget instanceof Node && suppressedTooltipCard.contains(event.relatedTarget))) {
+          suppressedTooltipCard = null;
+          const enteringCard = findWatchedCard(event.relatedTarget);
+          if (enteringCard) showTooltipForCard(enteringCard, event);
+        }
+      }
       if (!activeCard) return;
       if (event.relatedTarget instanceof Node && activeCard.contains(event.relatedTarget)) return;
       const leavingCard = findWatchedCard(event.target);
@@ -6321,10 +6358,12 @@ Select to open Flap tax details`;
 
   document.addEventListener('pointerdown', suppressTooltipUntilPointerExit, true);
   document.addEventListener('pointermove', handleTooltipPointerMove, true);
-  document.addEventListener('scroll', scheduleScrollScan, true);
+  document.addEventListener('scroll', handleTooltipScroll, true);
+  window.addEventListener('blur', dismissTooltipForLifecycle);
 
   const GDH_SELF_SELECTOR = '[data-gdh-fomo-key], .gdh-flap-row, .gdh-flap, .gdh-marked, .gdh-remind-card, .gdh-notification-launcher, .gdh-notification-panel, .gdh-fomo, .gdh-tooltip, .gdh-tokenblock';
   const observer = new MutationObserver((records) => {
+    if (activeCard && !activeCard.isConnected) hideTooltip();
     for (const record of records) {
       const target = record.target instanceof Element ? record.target : record.target?.parentElement;
       if (target && target.closest(GDH_SELF_SELECTOR)) continue;
@@ -6471,6 +6510,7 @@ Select to open Flap tax details`;
     if (document.visibilityState !== 'hidden') scanVisibleCards();
   }, 1000);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState !== 'hidden') scheduleScan();
+    if (document.visibilityState === 'hidden') dismissTooltipForLifecycle();
+    else scheduleScan();
   });
 })();
