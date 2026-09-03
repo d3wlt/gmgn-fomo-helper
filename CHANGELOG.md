@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.48.1 - 2026-09-03
+
+- Rejected malformed, `success:false`, and unexpected application-status FOMO responses instead of caching them as successful empty following/feed results.
+- Retained the followed-user buy/sell/thesis tracker injection and explicit popup sell labels introduced in 0.48.0.
+
 ## 0.48.0 - 2026-09-03
 
 - Kept FOMO sell activity in the popup Trades tab and added explicit Buy/Sell plus First/More/Partial/All position labels.

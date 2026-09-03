@@ -15,7 +15,7 @@ const debotStyles = read('debot-styles.css');
 const manifest = JSON.parse(read('manifest.json'));
 const releaseBuild = read('scripts/build-release.ps1');
 const releaseWorkflow = read('.github/workflows/release.yml');
-const releaseNote = read('release-notes/v0.48.0.md');
+const releaseNote = read('release-notes/v0.48.1.md');
 const readme = read('README.md');
 const popup = read('popup.js');
 const popupHtml = read('popup.html');
@@ -255,6 +255,7 @@ await test('Followed FOMO polling filters the live activity response against cur
   const functions = [
     extractFunction(background, 'firstObjectArray'),
     extractFunction(background, 'fomoBodyUnauthed'),
+    extractFunction(background, 'fomoBodyFailed'),
     extractFunction(background, 'fomoActivitySide'),
     extractFunction(background, 'fomoActivityPosition'),
     extractFunction(background, 'fomoNetworkSlug'),
@@ -1113,6 +1114,15 @@ await test('FOMO recognizes authentication errors inside HTTP 200', () => {
   assert.ok(authedFetch.includes('res.status === 431'));
 });
 
+await test('FOMO rejects malformed and application-level failed responses', () => {
+  const fn = extractFunction(background, 'fomoBodyFailed');
+  assert.equal(evaluate([fn], 'fomoBodyFailed(null)'), true);
+  assert.equal(evaluate([fn], "fomoBodyFailed({ success: false })"), true);
+  assert.equal(evaluate([fn], "fomoBodyFailed({ statusCode: 201 })"), true);
+  assert.equal(evaluate([fn], "fomoBodyFailed({ success: true, statusCode: 200, responseObject: {} })"), false);
+  assert.equal(evaluate([fn], "fomoBodyFailed({ items: [] })"), false);
+});
+
 await test('The background avoids direct Privy session calls and public secrets', () => {
   assert.ok(!background.includes('auth.privy.io/api/v1/sessions'));
   assert.ok(!background.includes('gdh-marked-watch-2026'));
@@ -1606,11 +1616,11 @@ await test('Maintained sources are English-only and the release surface is ZIP-o
   assert.ok(!popup.includes('get-' + 'update-state'));
   assert.equal(fs.existsSync(path.join(root, 'native' + '-updater')), false);
   assert.equal(fs.existsSync(path.join(root, 'scripts', 'build-native-' + 'installer.ps1')), false);
-  assert.equal(manifest.version, '0.48.0');
+  assert.equal(manifest.version, '0.48.1');
   assert.ok(popupHtml.startsWith('<!doctype html>\n<html lang="en">\n'));
-  assert.ok(readme.includes('Version 0.48.0'));
-  assert.ok(releaseNote.startsWith('# better gmgn v0.48.0\n'));
-  assert.deepEqual(fs.readdirSync(path.join(root, 'release-notes')).filter((name) => /^v.*\.md$/.test(name)), ['v0.48.0.md']);
+  assert.ok(readme.includes('Version 0.48.1'));
+  assert.ok(releaseNote.startsWith('# better gmgn v0.48.1\n'));
+  assert.deepEqual(fs.readdirSync(path.join(root, 'release-notes')).filter((name) => /^v.*\.md$/.test(name)), ['v0.48.1.md']);
   assert.ok(releaseBuild.includes('985gmgn-helper-v$version.zip'));
   assert.ok(releaseBuild.includes('"$zipPath.sha256"'));
   assert.ok(releaseBuild.includes('Get-ChildItem -LiteralPath $dist -File | Remove-Item -Force'));

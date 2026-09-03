@@ -198,6 +198,14 @@ function fomoBodyUnauthed(body) {
     || message.includes('unauthorized') || message.includes('unauthenticated');
 }
 
+function fomoBodyFailed(body) {
+  if (!body || typeof body !== 'object') return true;
+  if (body.success === false) return true;
+  if (!Object.prototype.hasOwnProperty.call(body, 'statusCode')) return false;
+  const inner = Number(body.statusCode);
+  return !Number.isFinite(inner) || inner !== 200;
+}
+
 function fomoActivitySide(raw) {
   const direct = String(raw?.side || raw?.tradeSide || raw?.tradeType || raw?.type || raw?.body?.type || raw?.action || '')
     .trim().toLowerCase().replace(/[\s-]+/g, '_');
@@ -298,7 +306,7 @@ async function fetchFomoFollowingIds(force = false) {
   }
   const { res } = await fomoAuthedFetch('/v2/users/current/followingIds');
   const body = await res.json().catch(() => null);
-  if (!res.ok || fomoBodyUnauthed(body) || Number(body?.statusCode) >= 400) {
+  if (!res.ok || fomoBodyUnauthed(body) || fomoBodyFailed(body)) {
     const unauth = [401, 403, 430, 431].includes(res.status) || fomoBodyUnauthed(body);
     throw new Error(unauth ? 'not-connected' : `HTTP ${res.status}`);
   }
@@ -322,7 +330,7 @@ async function fetchFomoFollowedFeed() {
       }
       const { res } = await fomoAuthedFetch('/feed/tradingActivity?limit=100&page=0');
       const body = await res.json().catch(() => null);
-      if (!res.ok || fomoBodyUnauthed(body) || Number(body?.statusCode) >= 400) {
+      if (!res.ok || fomoBodyUnauthed(body) || fomoBodyFailed(body)) {
         const unauthorized = [401, 403, 430, 431].includes(res.status) || fomoBodyUnauthed(body);
         return { ok: false, reason: unauthorized ? 'not-connected' : 'fetch-failed', events: [] };
       }
