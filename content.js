@@ -1108,7 +1108,7 @@
 
   function flapTaxUrl(token) {
     if (!FLAP_ADDR_RE.test(token || '')) return '';
-    return `https://flap.sh/bnb/${token.toLowerCase()}/taxinfo?lang=zh`;
+    return `https://flap.sh/bnb/${token.toLowerCase()}/taxinfo?lang=en`;
   }
 
   function ensureFlapBadge(host, token, native) {
@@ -1266,6 +1266,101 @@ Select to open Flap tax details`;
   let markedMap = new Map();
   const markedByChain = new Map();
   let markedLoading = false;
+  const FOMO_FOLLOWED_HOLDERS_TTL = 30000;
+  const FOMO_FOLLOWED_HOLDERS_RETRY_MIN = 15000;
+  const FOMO_FOLLOWED_HOLDERS_RETRY_MAX = 120000;
+  const fomoFollowedHoldersByChain = new Map();
+  const fomoFollowedHoldersInflight = new Map();
+  const fomoFollowedHoldersFailures = new Map();
+  let fomoFollowedHoldersGeneration = 0;
+
+  function normalizeFomoTokenAddress(value) {
+    const source = String(value || '').trim();
+    return /^0x[a-fA-F0-9]{40}$/.test(source) ? source.toLowerCase()
+      : /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(source) ? source : '';
+  }
+
+  function visibleFomoTokenRefs() {
+    const chain = currentChain();
+    const networkId = FOMO_NETWORK_ID[chain];
+    if (!networkId) return [];
+    const addresses = new Set();
+    const add = (value) => {
+      const address = normalizeFomoTokenAddress(value);
+      if (address) addresses.add(address);
+    };
+    add(currentTokenRoute()?.address);
+    trackerCards().forEach((card) => add(card.dataset.gdhTrackAddr));
+    document.querySelectorAll(`a[href*="/${chain}/token/"]`).forEach((link) => {
+      const href = link.getAttribute('href') || '';
+      const raw = href.match(new RegExp(`/${chain}/token/([^/?#]+)`, 'i'))?.[1] || '';
+      try { add(decodeURIComponent(raw)); } catch { add(raw); }
+    });
+    return [...addresses].slice(0, 100).map((address) => ({ address, networkId }));
+  }
+
+  async function loadFomoFollowedHoldings() {
+    const chain = currentChain();
+    if (!FOMO_NETWORK_ID[chain]) return;
+    const failure = fomoFollowedHoldersFailures.get(chain);
+    if (failure && Date.now() < failure.retryAt) return;
+    const tokens = visibleFomoTokenRefs();
+    if (!tokens.length) return;
+    const requested = new Set(tokens.map((item) => item.address));
+    const cached = fomoFollowedHoldersByChain.get(chain);
+    const cacheCoversVisible = cached
+      && [...requested].every((address) => cached.requested.has(address));
+    if (cacheCoversVisible && Date.now() - cached.at < FOMO_FOLLOWED_HOLDERS_TTL) return;
+    if (fomoFollowedHoldersInflight.has(chain)) return fomoFollowedHoldersInflight.get(chain);
+
+    const generation = fomoFollowedHoldersGeneration;
+    const inflight = chrome.runtime.sendMessage({
+      type: 'fomo-followed-holders',
+      payload: { tokens },
+    }).then((res) => {
+      if (generation !== fomoFollowedHoldersGeneration) return;
+      if (!res?.ok) {
+        const count = (fomoFollowedHoldersFailures.get(chain)?.count || 0) + 1;
+        const delay = Math.min(
+          FOMO_FOLLOWED_HOLDERS_RETRY_MAX,
+          FOMO_FOLLOWED_HOLDERS_RETRY_MIN * (2 ** Math.min(count - 1, 3)),
+        );
+        fomoFollowedHoldersFailures.set(chain, { count, retryAt: Date.now() + delay });
+        if (res?.reason === 'not-connected') {
+          fomoFollowedHoldersByChain.delete(chain);
+          scheduleScan();
+        }
+        return;
+      }
+      fomoFollowedHoldersFailures.delete(chain);
+      const map = new Map();
+      for (const holding of (Array.isArray(res.holdings) ? res.holdings : [])) {
+        const address = normalizeFomoTokenAddress(holding?.address);
+        const count = Number(holding?.count);
+        if (!address || !(count > 0)) continue;
+        const names = (Array.isArray(holding?.users) ? holding.users : [])
+          .map((user) => String(user?.handle || user?.name || '').trim().replace(/^@/, ''))
+          .filter(Boolean);
+        map.set(address, { count, names: [...new Set(names)] });
+      }
+      fomoFollowedHoldersByChain.set(chain, { at: Date.now(), requested, map });
+      scheduleScan();
+    }).catch(() => {
+      if (generation !== fomoFollowedHoldersGeneration) return;
+      const count = (fomoFollowedHoldersFailures.get(chain)?.count || 0) + 1;
+      const delay = Math.min(
+        FOMO_FOLLOWED_HOLDERS_RETRY_MAX,
+        FOMO_FOLLOWED_HOLDERS_RETRY_MIN * (2 ** Math.min(count - 1, 3)),
+      );
+      fomoFollowedHoldersFailures.set(chain, { count, retryAt: Date.now() + delay });
+    }).finally(() => {
+      if (fomoFollowedHoldersInflight.get(chain) === inflight) {
+        fomoFollowedHoldersInflight.delete(chain);
+      }
+    });
+    fomoFollowedHoldersInflight.set(chain, inflight);
+    return inflight;
+  }
 
   function getMarkedHolders() {
     return (Array.isArray(settings.markedHolders) ? settings.markedHolders : [])
@@ -1396,9 +1491,14 @@ Select to open Flap tax details`;
   }
 
   function ensureMarkedBadge(host, tokenAddress) {
-    const names = markedMap.get(String(tokenAddress).toLowerCase());
+    const chain = currentChain();
+    const followedMode = Boolean(FOMO_NETWORK_ID[chain]);
+    const followed = fomoFollowedHoldersByChain.get(chain)?.map
+      ?.get(normalizeFomoTokenAddress(tokenAddress));
+    const names = followedMode ? followed?.names : markedMap.get(String(tokenAddress).toLowerCase());
+    const count = followedMode ? Number(followed?.count) || 0 : names?.length || 0;
     let badge = host.querySelector(':scope > .gdh-marked');
-    if (!names || !names.length) {
+    if (!count) {
       badge?.remove();
       return;
     }
@@ -1407,8 +1507,11 @@ Select to open Flap tax details`;
       badge.className = 'gdh-marked';
       host.appendChild(badge);
     }
-    badge.textContent = `👤${names.length}`;
-    badge.title = `Marked people holding this token: ${names.join(', ')}`;
+    badge.classList.toggle('is-followed', followedMode);
+    badge.textContent = `${followedMode ? '👥' : '👤'}${count}`;
+    badge.title = followedMode
+      ? `People you follow on FOMO holding this token${names?.length ? `: ${names.join(', ')}` : ''}`
+      : `Marked people holding this token: ${names.join(', ')}`;
   }
 
   function scanMarkedBadges() {
@@ -1416,8 +1519,9 @@ Select to open Flap tax details`;
       document.querySelectorAll('.gdh-marked').forEach((el) => el.remove());
       return;
     }
-    loadMarkedHoldings();
-    if (!markedMap.size) return;
+    const chain = currentChain();
+    if (FOMO_NETWORK_ID[chain]) loadFomoFollowedHoldings();
+    else loadMarkedHoldings();
 
     trackerCards().forEach((card) => {
       const addr = card.dataset.gdhTrackAddr;
@@ -1427,12 +1531,15 @@ Select to open Flap tax details`;
       else { card.querySelector(':scope .gdh-marked')?.remove(); }
     });
 
-    document.querySelectorAll('a[href*="/token/0x"]').forEach((link) => {
+    document.querySelectorAll('a[href*="/token/"]').forEach((link) => {
       if (link.closest(TRACKER_ITEM_SELECTOR)) return;
       if (link.querySelector(TRACKER_SYMBOL_CELL) || link.querySelector(TRACKER_MAKER_CELL)) return;
-      const m = link.getAttribute('href')?.match(/\/token\/(0x[a-fA-F0-9]{40})/);
-      if (!m) return;
-      ensureMarkedBadge(link, m[1]);
+      const raw = link.getAttribute('href')?.match(/\/token\/([^/?#]+)/)?.[1] || '';
+      let address = raw;
+      try { address = decodeURIComponent(raw); } catch {}
+      address = normalizeFomoTokenAddress(address);
+      if (!address) return;
+      ensureMarkedBadge(link, address);
     });
   }
 
@@ -2805,7 +2912,8 @@ Select to open Flap tax details`;
   const FOMO_ERR_COOLDOWN = 20000;
   let fomoLastItems = [];
   let fomoTimer = 0;
-  let fomoLoading = false;
+  let fomoLoadGeneration = 0;
+  let fomoLoadInflight = null;
 
   function currentTokenRoute() {
     const m = location.pathname.match(/^\/([a-z0-9]+)\/token\/([A-Za-z0-9]+)/);
@@ -3088,7 +3196,7 @@ Select to open Flap tax details`;
 
   function holderName(item) {
     const u = fomoUser(item);
-    const handle = typeof u.userHandle === 'string' ? u.userHandle.trim() : '';
+    const handle = typeof u.userHandle === 'string' ? u.userHandle.trim().replace(/^@/, '') : '';
     const display = typeof u.displayName === 'string' ? u.displayName.trim() : '';
     return handle || display
       || deepPick(item, /(username|handle|displayname|nickname)/i, 'string')
@@ -3558,6 +3666,7 @@ Select to open Flap tax details`;
     for (const item of items.slice(0, 60)) {
       const row = document.createElement('div');
       row.className = 'gdh-fomo__hrow';
+      row.classList.toggle('is-followed', item?.followed === true);
 
       const who = document.createElement('div');
       who.className = 'gdh-fomo__hwho';
@@ -3575,6 +3684,14 @@ Select to open Flap tax details`;
       name.textContent = holderName(item);
       who.appendChild(name);
       attachFomoBoard(who, fomoUser(item)?.userHandle);
+
+      if (item?.followed === true) {
+        const followed = document.createElement('span');
+        followed.className = 'gdh-fomo__following';
+        followed.textContent = '★ Following';
+        followed.title = 'You follow this user on FOMO';
+        who.appendChild(followed);
+      }
 
       if (settings.mergeFomoHolders !== false) {
         const rankEl = buildRankBadge(holderTokenAmount(item));
@@ -3956,8 +4073,14 @@ Select to open Flap tax details`;
     const key = `${fomoTab}|${route.chain}|${route.address}`;
     if (!force && key === fomoLoadedKey) return;
     if (!force && key === fomoErrKey && Date.now() - fomoErrAt < FOMO_ERR_COOLDOWN) return;
-    if (fomoLoading) return;
-    fomoLoading = true;
+    if (!force && fomoLoadInflight?.key === key) return;
+    const requestGeneration = ++fomoLoadGeneration;
+    fomoLoadInflight = { key, generation: requestGeneration };
+    const isCurrentRequest = () => {
+      if (requestGeneration !== fomoLoadGeneration || !fomoPanelEl) return false;
+      const current = currentTokenRoute();
+      return Boolean(current && `${fomoTab}|${current.chain}|${current.address}` === key);
+    };
     const list = fomoPanelEl.querySelector('.gdh-fomo__list');
     const keepingGuide = key === fomoErrKey && list.querySelector('.gdh-fomo__guide');
     if (key !== fomoLoadedKey && !keepingGuide) {
@@ -3972,7 +4095,7 @@ Select to open Flap tax details`;
         type: 'fomo-token-feed',
         payload: { tokenAddress: route.address, networkId: route.networkId, kind: fomoTab },
       });
-      if (!fomoPanelEl) return;
+      if (!isCurrentRequest()) return;
       if (res?.ok) {
         fomoLoadedKey = key;
         fomoErrKey = '';
@@ -3989,15 +4112,17 @@ Select to open Flap tax details`;
         renderFomoItems(list, fomoLastItems, fomoTab);
         fomoPanelEl.classList.remove('has-error');
       } else {
+        const box = await buildFomoErrorBox(res);
+        if (!isCurrentRequest()) return;
         fomoErrKey = key;
         fomoErrAt = Date.now();
-        const box = await buildFomoErrorBox(res);
         list.replaceChildren(box);
         fomoPanelEl.classList.add('has-error');
       }
     } catch {
+    } finally {
+      if (fomoLoadInflight?.generation === requestGeneration) fomoLoadInflight = null;
     }
-    fomoLoading = false;
   }
 
   function positionFomoPanel(panel) {
@@ -6377,7 +6502,8 @@ Select to open Flap tax details`;
 
   function findWatchedCard(target) {
     if (settings.showDevTooltip === false || !(target instanceof Element)) return null;
-    return target.closest(`${CARD_SELECTOR}[data-gdh-watched="1"]`);
+    const trigger = target.closest('.gdh-dev-performance');
+    return trigger?.closest(`${CARD_SELECTOR}[data-gdh-watched="1"]`) || null;
   }
 
   function hideTooltip() {
@@ -6553,18 +6679,46 @@ Select to open Flap tax details`;
     scheduleScan();
   });
 
+  function fomoStoredAccountIdentity(record) {
+    const token = String(record?.token || '');
+    const payload = token.split('.')[1] || '';
+    if (!payload) return '';
+    try {
+      const padded = payload.replace(/-/g, '+').replace(/_/g, '/')
+        .padEnd(Math.ceil(payload.length / 4) * 4, '=');
+      const body = JSON.parse(atob(padded));
+      return String(body?.sub || body?.userId || body?.uid || body?.did || '').trim();
+    } catch {
+      return '';
+    }
+  }
+
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== 'local') return;
-    let fomoTokenArrived = false;
+    let fomoTokenChanged = false;
     for (const [key, change] of Object.entries(changes)) {
       if (key === MANI_SEEN_STORE_KEY) {
         mergeManiSeenKeys(change.newValue);
         continue;
       }
       if (key === 'fomoToken') {
-        fomoTokenArrived = !!change.newValue?.token;
+        const oldIdentity = fomoStoredAccountIdentity(change.oldValue);
+        const newIdentity = fomoStoredAccountIdentity(change.newValue);
+        if (oldIdentity && newIdentity && oldIdentity === newIdentity) continue;
+        fomoTokenChanged = true;
+        fomoLoadGeneration += 1;
+        fomoLoadInflight = null;
+        fomoFollowedHoldersGeneration += 1;
+        fomoFollowedHoldersByChain.clear();
+        fomoFollowedHoldersInflight.clear();
+        fomoFollowedHoldersFailures.clear();
         fomoFollowedEvents = [];
         fomoFollowedLastPollAt = 0;
+        fomoLoadedKey = '';
+        fomoErrKey = '';
+        fomoLastItems = [];
+        fomoStats = { key: '', holders: null, thesisCount: null, supply: 0 };
+        renderFomoStats();
         continue;
       }
       if (key === 'monitorFomoConfig') {
@@ -6594,9 +6748,7 @@ Select to open Flap tax details`;
       }
       settings[key] = change.newValue;
     }
-    if (fomoTokenArrived && fomoPanelEl) {
-      fomoLoadedKey = '';
-      fomoErrKey = '';
+    if (fomoTokenChanged && fomoPanelEl) {
       loadFomoData(true);
     }
     rebuildWatchedMap();

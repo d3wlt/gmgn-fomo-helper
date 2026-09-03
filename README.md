@@ -1,6 +1,6 @@
 # better gmgn
 
-An independent private copy of the Chrome MV3 extension “better gmgn.” Version 0.48.1 is based on upstream version 0.46.27 and adds trading-oriented interface enhancements to GMGN.ai and DeBot without executing trades.
+An independent private copy of the Chrome MV3 extension “better gmgn.” Version 0.49.0 is based on upstream version 0.46.27 and adds trading-oriented interface enhancements to GMGN.ai and DeBot without executing trades.
 
 This repository is not affiliated with GMGN, DeBot, FOMO, Pump, 985monitor, or the original upstream author.
 
@@ -21,12 +21,12 @@ Chrome does not automatically update unpacked extensions. To update, download an
 - Save developer wallets from GMGN details and filter blocked callout accounts.
 - Show manifesto notifications and a time-ordered manifesto list.
 - Share special-watch wallet colors and pin preferences across GMGN and DeBot.
-- Add a FOMO panel for token holders, narratives, and trades using your browser-local FOMO session, with explicit buy/sell and First/More/Partial/All position labels.
+- Add a FOMO panel for token holders, narratives, and trades using your browser-local FOMO session, with explicit buy/sell and First/More/Partial/All position labels. When FOMO's token feed is empty, the Trades tab reconstructs activity from the visible holders' trade histories.
 - Translate non-English FOMO and DeBot narratives into English with the browser's local Translation API while keeping the original text.
 - Insert account-filtered FOMO and Pump activity from 985monitor into tracking feeds when that optional integration is connected.
-- Inject recent buys, sells, theses, and position actions from users followed on FOMO directly into the GMGN tracker, with followed-user highlighting and compact event badges.
+- Inject recent buys, sells, theses, and position actions from users followed on FOMO directly into the GMGN tracker, with followed-user highlighting, username-first labels, and compact event badges.
 - Alert on held-token price surges after confirming the current balance and GMGN app notification setting.
-- Show marked-holder and Flap tax badges.
+- Show 👥N beside tokens held by people you follow on FOMO, highlight those users in the FOMO Holders tab, and link Flap tax badges to the English tax page.
 - Hide the third-party Lightning Trade button.
 
 ## Privacy and safety

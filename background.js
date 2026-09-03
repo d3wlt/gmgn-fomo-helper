@@ -267,7 +267,7 @@ function slimFomoFollowedEvent(raw, followedIds) {
   const token = raw.token && typeof raw.token === 'object' ? raw.token : {};
   const addr = String(raw.tokenAddress || body.tokenAddress || token.address || '').trim();
   const networkId = Number(raw.networkId ?? body.networkId ?? token.networkId);
-  const handle = String(raw.userHandle || raw.handle || user.handle || body.userHandle || '').trim().replace(/^@/, '');
+  const handle = String(raw.userHandle || raw.handle || user.userHandle || user.handle || body.userHandle || '').trim().replace(/^@/, '');
   const key = String(raw.id || raw.key || raw.tradeId || `${type}:${userId}:${addr}:${ts}`).slice(0, 180);
   const rawComment = raw.comment && typeof raw.comment === 'object' ? raw.comment.comment : raw.comment;
   const comment = String(rawComment || raw.text || raw.thesis || body.comment || body.text || '').slice(0, 1500);
@@ -279,7 +279,7 @@ function slimFomoFollowedEvent(raw, followedIds) {
     followed: true,
     userId: userId.slice(0, 100),
     handle: handle.toLowerCase().slice(0, 64),
-    name: String(raw.displayName || raw.userName || user.displayName || handle || 'Followed user').slice(0, 48),
+    name: String(handle || raw.displayName || raw.userName || user.displayName || 'Followed user').slice(0, 48),
     avatar: fomoHttpsUrl(raw.profilePictureLink || raw.avatar || user.profilePictureLink),
     usd: Math.abs(Number(raw.usdAmount ?? raw.usdValue ?? body.totalVolume ?? trade.usdValue)) || 0,
     comment,
@@ -299,13 +299,30 @@ const FOMO_FOLLOWING_IDS_CACHE_MS = 120000;
 let fomoFollowedFeedCache = { events: [], updatedAt: 0, fetchedAt: 0 };
 let fomoFollowingIdsCache = { ids: new Set(), fetchedAt: 0 };
 let fomoFollowedFeedInflight = null;
+let fomoAuthGeneration = 0;
+
+function fomoAccountIdentity(record) {
+  const token = String(record?.token || '');
+  const payload = token.split('.')[1] || '';
+  if (!payload) return '';
+  try {
+    const padded = payload.replace(/-/g, '+').replace(/_/g, '/')
+      .padEnd(Math.ceil(payload.length / 4) * 4, '=');
+    const body = JSON.parse(atob(padded));
+    return String(body?.sub || body?.userId || body?.uid || body?.did || '').trim();
+  } catch {
+    return '';
+  }
+}
 
 async function fetchFomoFollowingIds(force = false) {
   if (!force && Date.now() - fomoFollowingIdsCache.fetchedAt < FOMO_FOLLOWING_IDS_CACHE_MS) {
     return fomoFollowingIdsCache.ids;
   }
+  const generation = fomoAuthGeneration;
   const { res } = await fomoAuthedFetch('/v2/users/current/followingIds');
   const body = await res.json().catch(() => null);
+  if (generation !== fomoAuthGeneration) throw new Error('not-connected');
   if (!res.ok || fomoBodyUnauthed(body) || fomoBodyFailed(body)) {
     const unauth = [401, 403, 430, 431].includes(res.status) || fomoBodyUnauthed(body);
     throw new Error(unauth ? 'not-connected' : `HTTP ${res.status}`);
@@ -317,11 +334,14 @@ async function fetchFomoFollowingIds(force = false) {
 }
 
 async function fetchFomoFollowedFeed() {
-  if (fomoFollowedFeedInflight) return fomoFollowedFeedInflight;
+  if (fomoFollowedFeedInflight?.generation === fomoAuthGeneration) {
+    return fomoFollowedFeedInflight.promise;
+  }
   if (Date.now() - fomoFollowedFeedCache.fetchedAt < FOMO_FOLLOWED_FEED_MIN_INTERVAL_MS) {
     return { ok: true, ...fomoFollowedFeedCache, stale: true };
   }
-  fomoFollowedFeedInflight = (async () => {
+  const generation = fomoAuthGeneration;
+  const promise = (async () => {
     try {
       const followedIds = await fetchFomoFollowingIds();
       if (!followedIds.size) {
@@ -330,6 +350,7 @@ async function fetchFomoFollowedFeed() {
       }
       const { res } = await fomoAuthedFetch('/feed/tradingActivity?limit=100&page=0');
       const body = await res.json().catch(() => null);
+      if (generation !== fomoAuthGeneration) throw new Error('not-connected');
       if (!res.ok || fomoBodyUnauthed(body) || fomoBodyFailed(body)) {
         const unauthorized = [401, 403, 430, 431].includes(res.status) || fomoBodyUnauthed(body);
         return { ok: false, reason: unauthorized ? 'not-connected' : 'fetch-failed', events: [] };
@@ -342,20 +363,24 @@ async function fetchFomoFollowedFeed() {
     } catch (error) {
       const message = String(error?.message || '').slice(0, 120);
       if (message === 'not-connected') {
-        fomoFollowedFeedCache = { events: [], updatedAt: 0, fetchedAt: 0 };
+        if (generation === fomoAuthGeneration) {
+          fomoFollowedFeedCache = { events: [], updatedAt: 0, fetchedAt: 0 };
+        }
         return { ok: false, reason: 'not-connected', message, events: [] };
       }
       if (fomoFollowedFeedCache.events.length) return { ok: true, ...fomoFollowedFeedCache, stale: true };
       return { ok: false, reason: 'fetch-failed', message, events: [] };
     } finally {
-      fomoFollowedFeedInflight = null;
+      if (fomoFollowedFeedInflight?.promise === promise) fomoFollowedFeedInflight = null;
     }
   })();
-  return fomoFollowedFeedInflight;
+  fomoFollowedFeedInflight = { generation, promise };
+  return promise;
 }
 
 
-async function fomoAuthedFetch(path) {
+async function fomoAuthedFetch(path, options) {
+  options = options || {};
   let stored = (await chrome.storage.local.get('fomoToken')).fomoToken || null;
   if (stored?.refresh && stored.exp && stored.exp - Date.now() < 10000) {
     stored = (await fomoRefreshSession())
@@ -363,9 +388,13 @@ async function fomoAuthedFetch(path) {
       || null;
   }
   const send = (token) => {
-    const headers = { Accept: 'application/json', 'X-Supported-Chains': FOMO_CHAINS };
+    const headers = {
+      Accept: 'application/json',
+      'X-Supported-Chains': FOMO_CHAINS,
+      ...(options.headers || {}),
+    };
     if (token) headers.Authorization = `Bearer ${token}`;
-    return fetch(`${FOMO_API}${path}`, { headers, credentials: 'include' });
+    return fetch(`${FOMO_API}${path}`, { ...options, headers, credentials: 'include' });
   };
   let res = await send(stored?.token);
   let renewed = false;
@@ -388,10 +417,281 @@ async function fomoAuthedFetch(path) {
   return { res, stored, renewed };
 }
 
+const FOMO_FOLLOWED_HOLDERS_TTL_MS = 30000;
+const FOMO_FOLLOWED_HOLDERS_CACHE_MAX = 30;
+const fomoFollowedHoldersCache = new Map();
+
+function normalizeFomoTokenRef(raw) {
+  const networkId = Number(raw?.networkId);
+  const source = String(raw?.address || raw?.tokenAddress || '').trim();
+  const evm = /^0x[a-fA-F0-9]{40}$/.test(source);
+  const sol = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(source);
+  if (!FOMO_NETWORK_SLUG[networkId] || (!evm && !sol)) return null;
+  return { address: evm ? source.toLowerCase() : source, networkId };
+}
+
+function slimFomoFollowedHolder(raw) {
+  const user = raw?.user && typeof raw.user === 'object' ? raw.user : raw || {};
+  const handle = String(user.userHandle || user.handle || raw?.userHandle || '').trim().replace(/^@/, '');
+  const display = String(user.displayName || raw?.displayName || '').trim();
+  const userId = String(user.id || raw?.userId || '').trim();
+  return {
+    userId: userId.slice(0, 100),
+    handle: handle.slice(0, 64),
+    name: (handle || display || 'Followed user').slice(0, 64),
+    avatar: fomoHttpsUrl(user.profilePictureLink || raw?.profilePictureLink),
+  };
+}
+
+async function fetchFomoFollowedHolders(payload) {
+  const tokens = payload?.tokens;
+  const normalized = (Array.isArray(tokens) ? tokens : [])
+    .map(normalizeFomoTokenRef)
+    .filter(Boolean)
+    .filter((item, index, all) => all.findIndex((other) => (
+      other.networkId === item.networkId && other.address === item.address
+    )) === index)
+    .slice(0, 100);
+  if (!normalized.length) return { ok: true, holdings: [] };
+  const key = normalized
+    .map((item) => `${item.networkId}:${item.address}`)
+    .sort()
+    .join('|');
+  const hit = fomoFollowedHoldersCache.get(key);
+  if (hit && Date.now() - hit.at < FOMO_FOLLOWED_HOLDERS_TTL_MS) return hit.data;
+
+  try {
+    const generation = fomoAuthGeneration;
+    const { res } = await fomoAuthedFetch('/hodlers/friends', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tokens: normalized }),
+    });
+    const body = await res.json().catch(() => null);
+    if (generation !== fomoAuthGeneration) {
+      return { ok: false, reason: 'not-connected', holdings: [] };
+    }
+    if (!res.ok || fomoBodyUnauthed(body) || fomoBodyFailed(body)) {
+      const unauthorized = [401, 403, 430, 431].includes(res.status) || fomoBodyUnauthed(body);
+      if (unauthorized) fomoFollowedHoldersCache.clear();
+      return { ok: false, reason: unauthorized ? 'not-connected' : 'fetch-failed', holdings: [] };
+    }
+    const boxes = Array.isArray(body?.responseObject) ? body.responseObject : [];
+    const holdings = boxes.map((box) => {
+      const ref = normalizeFomoTokenRef(box);
+      if (!ref) return null;
+      const users = (Array.isArray(box?.topHolders) ? box.topHolders : [])
+        .map(slimFomoFollowedHolder);
+      const count = Number(box?.totalHolders);
+      return {
+        ...ref,
+        count: Number.isFinite(count) && count >= 0 ? count : users.length,
+        users,
+      };
+    }).filter(Boolean);
+    const data = { ok: true, holdings };
+    setBoundedMap(fomoFollowedHoldersCache, key, { at: Date.now(), data }, FOMO_FOLLOWED_HOLDERS_CACHE_MAX);
+    return data;
+  } catch (error) {
+    return { ok: false, reason: 'network', message: String(error?.message || '').slice(0, 80), holdings: [] };
+  }
+}
+
+const FOMO_TRADE_DETAIL_TTL_MS = 60000;
+const FOMO_TRADE_DETAIL_CACHE_MAX = 500;
+const FOMO_TOKEN_TRADE_HOLDER_LIMIT = 50;
+const FOMO_TOKEN_TRADE_FALLBACK_TTL_MS = 120000;
+const FOMO_TOKEN_TRADE_FALLBACK_CACHE_MAX = 100;
+const fomoTradeDetailCache = new Map();
+const fomoTokenTradeFallbackCache = new Map();
+const fomoTradeDetailInflight = new Map();
+const fomoTokenTradeFallbackInflight = new Map();
+
+async function fomoMapLimit(values, limit, worker) {
+  const items = Array.from(values || []);
+  const output = new Array(items.length);
+  let next = 0;
+  const run = async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      output[index] = await worker(items[index], index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, limit), items.length) }, run));
+  return output;
+}
+
+async function fetchFomoTradeDetail(tradeId) {
+  const id = String(tradeId || '').trim();
+  if (!/^[0-9a-f-]{20,80}$/i.test(id)) return null;
+  const hit = fomoTradeDetailCache.get(id);
+  if (hit && Date.now() - hit.at < FOMO_TRADE_DETAIL_TTL_MS) return hit.data;
+  const generation = fomoAuthGeneration;
+  const active = fomoTradeDetailInflight.get(id);
+  if (active?.generation === generation) return active.promise;
+  const promise = (async () => {
+    try {
+      const { res } = await fomoAuthedFetch(`/trades/${encodeURIComponent(id)}`);
+      const body = await res.json().catch(() => null);
+      if (generation !== fomoAuthGeneration) return null;
+      if (!res.ok || fomoBodyUnauthed(body) || fomoBodyFailed(body)) return null;
+      const value = body?.responseObject;
+      const data = value && typeof value === 'object' ? value : null;
+      if (data) setBoundedMap(fomoTradeDetailCache, id, { at: Date.now(), data }, FOMO_TRADE_DETAIL_CACHE_MAX);
+      return data;
+    } catch {
+      return null;
+    } finally {
+      if (fomoTradeDetailInflight.get(id)?.promise === promise) fomoTradeDetailInflight.delete(id);
+    }
+  })();
+  fomoTradeDetailInflight.set(id, { generation, promise });
+  return promise;
+}
+
+function slimFomoTokenSwap(raw, detail, tokenAddress, positionAction) {
+  if (!raw || typeof raw !== 'object') return null;
+  const target = String(tokenAddress || '').toLowerCase();
+  const inAddress = String(raw.inTokenAddress || '').toLowerCase();
+  const outAddress = String(raw.outTokenAddress || '').toLowerCase();
+  const side = outAddress === target ? 'buy' : inAddress === target ? 'sell' : '';
+  if (!side) return null;
+  const trade = detail?.trade && typeof detail.trade === 'object' ? detail.trade : {};
+  const user = detail?.user && typeof detail.user === 'object' ? detail.user : {};
+  const usdAmount = Number(side === 'buy' ? raw.humanUsdAmountIn : raw.humanUsdAmountOut);
+  const fallbackUsd = Math.max(
+    Math.abs(Number(raw.humanUsdAmountIn) || 0),
+    Math.abs(Number(raw.humanUsdAmountOut) || 0),
+  );
+  return {
+    id: String(raw.id || `${trade.id || 'trade'}:${raw.txHash || raw.createdAt || ''}`).slice(0, 180),
+    type: side === 'buy' ? 'swap_buy' : 'swap_sell',
+    side,
+    positionAction,
+    isBuy: side === 'buy',
+    isSell: side === 'sell',
+    isFirstTrade: positionAction === 'First',
+    isFullExit: positionAction === 'All',
+    createdAt: raw.createdAt || trade.openedAt || '',
+    txHash: String(raw.txHash || '').slice(0, 180),
+    tradeId: String(trade.id || '').slice(0, 100),
+    tokenAddress,
+    networkId: Number(trade.networkId),
+    usdAmount: Number.isFinite(usdAmount) && usdAmount !== 0 ? Math.abs(usdAmount) : fallbackUsd,
+    user: {
+      id: String(user.id || trade.userId || '').slice(0, 100),
+      userHandle: String(user.userHandle || '').trim().replace(/^@/, '').slice(0, 64),
+      displayName: String(user.displayName || '').slice(0, 64),
+      profilePictureLink: fomoHttpsUrl(user.profilePictureLink),
+    },
+    authorTrade: {
+      id: String(trade.id || '').slice(0, 100),
+      openedAt: trade.openedAt || '',
+      closedAt: trade.closedAt || '',
+      usdValue: Number(trade.usdValue) || 0,
+      realizedPnlUsd: Number(trade.realizedPnlUsd) || 0,
+      unrealizedPnlUsd: Number(trade.unrealizedPnlUsd) || 0,
+    },
+  };
+}
+
+function fomoSwapsFromTrade(detail, tokenAddress) {
+  const trade = detail?.trade && typeof detail.trade === 'object' ? detail.trade : {};
+  const target = String(tokenAddress || '').toLowerCase();
+  const swaps = (Array.isArray(detail?.swaps) ? detail.swaps : [])
+    .filter((swap) => {
+      const input = String(swap?.inTokenAddress || '').toLowerCase();
+      const output = String(swap?.outTokenAddress || '').toLowerCase();
+      return input === target || output === target;
+    })
+    .sort((a, b) => (Date.parse(a?.createdAt || '') || 0) - (Date.parse(b?.createdAt || '') || 0));
+  let sawBuy = false;
+  return swaps.map((swap, index) => {
+    const side = String(swap?.outTokenAddress || '').toLowerCase() === target ? 'buy' : 'sell';
+    let positionAction;
+    if (side === 'buy') {
+      positionAction = sawBuy ? 'More' : 'First';
+      sawBuy = true;
+    } else {
+      const isLast = index === swaps.length - 1;
+      positionAction = trade.closedAt && isLast ? 'All' : 'Partial';
+    }
+    return slimFomoTokenSwap(swap, detail, tokenAddress, positionAction);
+  }).filter(Boolean);
+}
+
+async function fetchFomoTokenTradeFallback(tokenAddress, holders) {
+  const generation = fomoAuthGeneration;
+  const seen = new Set();
+  const trades = (Array.isArray(holders) ? holders : [])
+    .map((item) => ({
+      id: String(item?.tradeId || item?.authorTrade?.id || '').trim(),
+      user: item?.user && typeof item.user === 'object' ? item.user : {},
+    }))
+    .filter((item) => {
+      if (!item.id || seen.has(item.id)) return false;
+      seen.add(item.id);
+      return true;
+    })
+    .slice(0, FOMO_TOKEN_TRADE_HOLDER_LIMIT);
+  if (!trades.length) return [];
+  const cacheKey = `${String(tokenAddress || '').toLowerCase()}|${trades.map((item) => item.id).sort().join(',')}`;
+  const cached = fomoTokenTradeFallbackCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < FOMO_TOKEN_TRADE_FALLBACK_TTL_MS) return cached.items;
+  const active = fomoTokenTradeFallbackInflight.get(cacheKey);
+  if (active?.generation === generation) return active.promise;
+  const promise = (async () => {
+    try {
+      const details = await fomoMapLimit(trades, 6, async (item) => {
+        const detail = await fetchFomoTradeDetail(item.id);
+        if (!detail) return null;
+        const detailUser = detail.user && typeof detail.user === 'object' ? detail.user : {};
+        return {
+          ...detail,
+          user: {
+            ...item.user,
+            ...detailUser,
+            id: detailUser.id || item.user.id || '',
+            userHandle: detailUser.userHandle || item.user.userHandle || '',
+            displayName: detailUser.displayName || item.user.displayName || '',
+            profilePictureLink: detailUser.profilePictureLink || item.user.profilePictureLink || '',
+          },
+        };
+      });
+      if (generation !== fomoAuthGeneration) return [];
+      const items = details.flatMap((detail) => fomoSwapsFromTrade(detail, tokenAddress))
+        .sort((a, b) => (Date.parse(b.createdAt || '') || 0) - (Date.parse(a.createdAt || '') || 0));
+      if (details.every(Boolean)) {
+        setBoundedMap(
+          fomoTokenTradeFallbackCache,
+          cacheKey,
+          { at: Date.now(), items },
+          FOMO_TOKEN_TRADE_FALLBACK_CACHE_MAX,
+        );
+      }
+      return items;
+    } finally {
+      if (fomoTokenTradeFallbackInflight.get(cacheKey)?.promise === promise) {
+        fomoTokenTradeFallbackInflight.delete(cacheKey);
+      }
+    }
+  })();
+  fomoTokenTradeFallbackInflight.set(cacheKey, { generation, promise });
+  return promise;
+}
+
 async function fomoFetchToken({ tokenAddress, networkId, kind }) {
+  const ref = normalizeFomoTokenRef({ address: tokenAddress, networkId });
+  if (!ref || !['holders', 'thesis', 'swaps'].includes(kind)) {
+    return { ok: false, reason: 'bad-request', items: [] };
+  }
+  tokenAddress = ref.address;
+  networkId = ref.networkId;
   const key = `${kind}|${networkId}|${tokenAddress}`;
   const hit = fomoCache.get(key);
   if (hit && Date.now() - hit.at < FOMO_CACHE_MS) return hit.data;
+  const generation = fomoAuthGeneration;
 
   let token;
 
@@ -406,6 +706,9 @@ async function fomoFetchToken({ tokenAddress, networkId, kind }) {
   }
   try {
     const { res, stored, renewed } = await fomoAuthedFetch(path);
+    if (generation !== fomoAuthGeneration) {
+      return { ok: false, reason: 'not-connected', items: [] };
+    }
     token = stored?.token;
     if (!res.ok && [401, 403, 430, 431].includes(res.status) && !token) {
       return { ok: false, reason: 'no-token', status: res.status, tokenAt: 0 };
@@ -447,9 +750,26 @@ async function fomoFetchToken({ tokenAddress, networkId, kind }) {
       items = Array.isArray(ro) ? ro : ro?.items;
     }
     if (!Array.isArray(items)) items = firstObjectArray(ro, 0) || [];
+    if (kind === 'holders' && items.length) {
+      const followedIds = await fetchFomoFollowingIds().catch(() => new Set());
+      items = items.map((item) => {
+        const user = item?.user && typeof item.user === 'object' ? item.user : {};
+        const userId = String(user.id || item?.userId || '').trim();
+        return followedIds.has(userId) ? { ...item, followed: true } : item;
+      });
+    }
+    let cacheable = true;
+    if (kind === 'swaps' && !items.length) {
+      const holders = await fomoFetchToken({ tokenAddress, networkId, kind: 'holders' });
+      if (holders?.ok) items = await fetchFomoTokenTradeFallback(tokenAddress, holders.items);
+      if (!items.length) cacheable = false;
+    }
+    if (generation !== fomoAuthGeneration) {
+      return { ok: false, reason: 'not-connected', items: [] };
+    }
     const data = { ok: true, items, count: items.length };
     if (Number.isFinite(total)) data.total = total;
-    setBoundedMap(fomoCache, key, { at: Date.now(), data }, FOMO_CACHE_MAX);
+    if (cacheable) setBoundedMap(fomoCache, key, { at: Date.now(), data }, FOMO_CACHE_MAX);
     return data;
   } catch (error) {
     return {
@@ -1191,8 +1511,18 @@ async function connectFomoSse() {
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'local') return;
   if (changes.fomoToken) {
-    fomoFollowedFeedCache = { events: [], updatedAt: 0, fetchedAt: 0 };
-    fomoFollowingIdsCache = { ids: new Set(), fetchedAt: 0 };
+    const oldIdentity = fomoAccountIdentity(changes.fomoToken.oldValue);
+    const newIdentity = fomoAccountIdentity(changes.fomoToken.newValue);
+    const sameAccount = oldIdentity && newIdentity && oldIdentity === newIdentity;
+    if (!sameAccount) {
+      fomoAuthGeneration += 1;
+      fomoFollowedFeedCache = { events: [], updatedAt: 0, fetchedAt: 0 };
+      fomoFollowingIdsCache = { ids: new Set(), fetchedAt: 0 };
+      fomoFollowedHoldersCache.clear();
+      fomoTradeDetailCache.clear();
+      fomoTokenTradeFallbackCache.clear();
+      fomoCache.clear();
+    }
   }
   if (!changes.monitor985SessionV1) return;
   resetMonitor985EventCaches();
@@ -1483,6 +1813,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === 'fomo-followed-feed') {
     fetchFomoFollowedFeed()
+      .then(sendResponse)
+      .catch((error) => sendResponse({ ok: false, reason: 'error', message: String(error?.message || '') }));
+    return true;
+  }
+
+  if (message?.type === 'fomo-followed-holders') {
+    fetchFomoFollowedHolders(message.payload || {})
       .then(sendResponse)
       .catch((error) => sendResponse({ ok: false, reason: 'error', message: String(error?.message || '') }));
     return true;

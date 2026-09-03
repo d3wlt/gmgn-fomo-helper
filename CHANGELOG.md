@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.49.0 - 2026-09-03
+
+- Restricted the watched-developer tooltip to the compact `M` / `L` / rate / `ATH` badge instead of the entire GMGN card.
+- Replaced the token holder-count badge on supported chains with the number of FOMO users you follow who currently hold that token.
+- Highlighted followed users in the FOMO Holders tab and displayed their `userHandle` without `@` instead of their display nickname.
+- Added a per-token trade-history fallback so the FOMO Trades tab can reconstruct buys and sells from top-holder trade details when `/feed/token` returns no activity.
+- Changed Flap tax links from Chinese to explicit English.
+- Verified the reported Robinhood token against live FOMO data: its top-holder trade histories contained both buys and sells even though its token feed was empty.
+- Prevented slow FOMO responses from repainting a different account, token, or tab, and invalidated account-bound caches without disrupting same-account token refreshes.
+- Coalesced concurrent trade-detail fallbacks, backed off followed-holder retries, and avoided caching transiently empty/partial trade histories as complete results.
+
 ## 0.48.1 - 2026-09-03
 
 - Rejected malformed, `success:false`, and unexpected application-status FOMO responses instead of caching them as successful empty following/feed results.

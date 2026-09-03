@@ -43,7 +43,8 @@
   font: 700 10px/22px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   letter-spacing: -0.02em;
   white-space: nowrap;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: help;
   transition: color 160ms ease, border-color 160ms ease, background-color 160ms ease,
     box-shadow 160ms ease;
 }
@@ -1023,6 +1024,11 @@ a[data-sentry-component="TrackerListItem"] > .gdh-star-button,
   border-bottom: 1px solid rgba(139, 147, 161, 0.12);
 }
 
+.gdh-fomo__hrow.is-followed {
+  background: linear-gradient(90deg, rgba(250, 204, 21, 0.105), rgba(139, 92, 246, 0.04) 70%, transparent);
+  box-shadow: inset 3px 0 rgba(250, 204, 21, 0.8);
+}
+
 .gdh-fomo__hwho {
   display: flex;
   align-items: center;
@@ -1032,6 +1038,19 @@ a[data-sentry-component="TrackerListItem"] > .gdh-star-button,
 .gdh-fomo__hhold {
   color: #8b93a1;
   font-size: 11px;
+}
+
+.gdh-fomo__following {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid rgba(250, 204, 21, 0.38);
+  border-radius: 4px;
+  background: rgba(250, 204, 21, 0.09);
+  color: #facc15;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 14px;
+  white-space: nowrap;
 }
 
 
@@ -2115,6 +2134,11 @@ a[data-sentry-component="TrackerListItem"] > .gdh-star-button,
   white-space: nowrap;
   cursor: default;
   vertical-align: middle;
+}
+
+.gdh-marked.is-followed {
+  background: rgba(250, 204, 21, 0.16);
+  color: #facc15;
 }
 
 

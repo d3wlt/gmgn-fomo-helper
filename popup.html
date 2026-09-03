@@ -172,14 +172,14 @@
           </div>
           <label class="switch-row">
             <span>
-              <strong>Marked-holder badge</strong>
-              <small>Show 👤N beside a token when marked people hold it; hover to see who</small>
+              <strong>FOMO-following holder badge</strong>
+              <small>Show 👥N beside a token when people you follow on FOMO hold it; hover to see usernames</small>
             </span>
             <input id="enable-marked-holders" type="checkbox" />
           </label>
-          <label class="color-row" for="marked-list" style="align-items:flex-start">
-            <span>Marked people</span>
-            <textarea id="marked-list" rows="3" placeholder="0x address and note (one per line)"></textarea>
+          <label class="color-row" for="marked-list" style="display:none" aria-hidden="true">
+            <span>Legacy marked people</span>
+            <textarea id="marked-list" rows="3" tabindex="-1"></textarea>
           </label>
           <label class="switch-row">
             <span>
