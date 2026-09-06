@@ -22,7 +22,7 @@ const DEFAULTS = {
   enableFomoFeed: true,
   enablePumpFeed: true,
   fomoFeedChainOnly: false,
-  fomoFeedTypes: { buy: true, sell: true, swap: true, thesis: true, transferIn: true, refund: true },
+  fomoFeedTypes: { buy: true, sell: true, thesis: true },
   markedHolders: [
     { address: '0x38e47fece3ea323e864c65410f6458c820eaa897', name: 'Cow' },
     { address: '0xbf004bff64725914ee36d03b87d6965b0ced4903', name: 'Afeng Main 1' },
@@ -55,7 +55,7 @@ const colorInput = document.querySelector('#highlight-color');
 const surgeThresholdInput = document.querySelector('#holding-surge-threshold');
 const surgeCooldownInput = document.querySelector('#holding-surge-cooldown');
 const gmgnHoldingSyncStatus = document.querySelector('#gmgn-holding-sync-status');
-const monitor985SyncStatus = document.querySelector('#monitor-985-sync-status');
+const j7TrackerSyncStatus = document.querySelector('#j7tracker-sync-status');
 const mergeHoldersInput = document.querySelector('#enable-merge-fomo-holders');
 const markedEnableInput = document.querySelector('#enable-marked-holders');
 const flapEnableInput = document.querySelector('#enable-flap-tax');
@@ -66,10 +66,7 @@ const fomoFeedChainOnlyInput = document.querySelector('#fomo-feed-chain-only');
 const fomoFeedTypeInputs = {
   buy: document.querySelector('#fomo-feed-buy'),
   sell: document.querySelector('#fomo-feed-sell'),
-  swap: document.querySelector('#fomo-feed-swap'),
   thesis: document.querySelector('#fomo-feed-thesis'),
-  transferIn: document.querySelector('#fomo-feed-transfer-in'),
-  refund: document.querySelector('#fomo-feed-refund'),
 };
 
 async function ensureRpcPermission(url) {
@@ -126,20 +123,30 @@ function renderGmgnHoldingSyncState(state) {
   gmgnHoldingSyncStatus.className = 'sync-status is-ok';
 }
 
-function short985Account(raw) {
+function shortJ7TrackerAccount(raw) {
   const value = String(raw || '');
   return value.length > 14 ? `${value.slice(0, 6)}…${value.slice(-5)}` : value;
 }
 
-function renderMonitor985SyncState(state) {
+function renderJ7TrackerSyncState(state) {
   if (!state?.connected) {
-    monitor985SyncStatus.textContent = 'Not connected: open 985monitor once while signed in';
-    monitor985SyncStatus.className = 'sync-status is-warn';
+    j7TrackerSyncStatus.textContent = state?.reason === 'session-expired'
+      ? 'J7Tracker session expired: sign in again and open j7tracker.io'
+      : (state?.reason === 'verifying'
+        ? 'Verifying J7Tracker session…'
+        : (state?.reason === 'network'
+          ? 'J7Tracker refresh failed; retrying automatically.'
+          : 'Not connected: open j7tracker.io once while signed in'));
+    j7TrackerSyncStatus.className = 'sync-status is-warn';
     return;
   }
-  const account = String(state.displayName || '').trim() || short985Account(state.accountId);
-  monitor985SyncStatus.textContent = `985monitor account settings connected${account ? `: ${account}` : ''}`;
-  monitor985SyncStatus.className = 'sync-status is-ok';
+  const account = String(state.displayName || '').trim() || shortJ7TrackerAccount(state.accountId);
+  const fomoCount = Number(state.fomoTrackedCount);
+  const pumpCount = Number(state.pumpTrackedCount);
+  const hasCounts = Number.isInteger(fomoCount) && fomoCount >= 0 && Number.isInteger(pumpCount) && pumpCount >= 0;
+  const counts = hasCounts ? ` · FOMO ${fomoCount} · Pump ${pumpCount}` : '';
+  j7TrackerSyncStatus.textContent = `J7Tracker connected${account ? `: ${account}` : ''}${counts}`;
+  j7TrackerSyncStatus.className = `sync-status ${hasCounts && fomoCount + pumpCount === 0 ? 'is-warn' : 'is-ok'}`;
 }
 
 function parseDevList(text) {
@@ -201,16 +208,16 @@ chrome.storage.local.get({ gmgnHoldingSignalSyncState: null }, (stored) => {
   renderGmgnHoldingSyncState(stored.gmgnHoldingSignalSyncState);
 });
 
-chrome.storage.local.get({ monitor985SyncStateV1: null }, (stored) => {
-  renderMonitor985SyncState(stored.monitor985SyncStateV1);
+chrome.storage.local.get({ j7TrackerSyncStateV1: null }, (stored) => {
+  renderJ7TrackerSyncState(stored.j7TrackerSyncStateV1);
 });
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === 'local' && changes.gmgnHoldingSignalSyncState) {
     renderGmgnHoldingSyncState(changes.gmgnHoldingSignalSyncState.newValue);
   }
-  if (areaName === 'local' && changes.monitor985SyncStateV1) {
-    renderMonitor985SyncState(changes.monitor985SyncStateV1.newValue);
+  if (areaName === 'local' && changes.j7TrackerSyncStateV1) {
+    renderJ7TrackerSyncState(changes.j7TrackerSyncStateV1.newValue);
   }
 });
 

@@ -29,6 +29,7 @@ function harness(route) {
   const ctx = vm.createContext({
     console, Date: Clock, URL, URLSearchParams, atob, btoa, AbortController, TextDecoder,
     setTimeout, clearTimeout, setInterval, clearInterval,
+    importScripts() {},
     fetch: async (url, options) => {
       const path = String(url).replace('https://prod-api.fomo.family', '');
       calls.push({ path, options });

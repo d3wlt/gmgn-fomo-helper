@@ -142,6 +142,8 @@
 .gdh-debot-feed__row.is-sell .gdh-debot-feed__amount { color: var(--error-10, #ef5350); }
 .gdh-debot-feed__action.is-swap { color: #eab308; }
 .gdh-debot-feed__action.is-thesis { color: #b48ae0; }
+.gdh-debot-feed__action.is-callout { color: #22d3ee; }
+.gdh-debot-feed__action.is-reply { color: #60a5fa; }
 .gdh-debot-feed__action.is-transfer { color: var(--text-tertiary, #8a93a6); }
 .gdh-debot-feed__action.is-refund { color: #fb923c; }
 
@@ -293,6 +295,8 @@
 .gdh-debot-sidefeed__action.is-sell { color: var(--error-10, #ef5350); }
 .gdh-debot-sidefeed__action.is-swap { color: #eab308; }
 .gdh-debot-sidefeed__action.is-thesis { color: #b48ae0; }
+.gdh-debot-sidefeed__action.is-callout { color: #22d3ee; }
+.gdh-debot-sidefeed__action.is-reply { color: #60a5fa; }
 .gdh-debot-sidefeed__action.is-transfer { color: var(--text-tertiary, #8a93a6); }
 .gdh-debot-sidefeed__action.is-refund { color: #fb923c; }
 

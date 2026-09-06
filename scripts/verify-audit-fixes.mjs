@@ -8,6 +8,7 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const read = (name) => fs.readFileSync(path.join(root, name), 'utf8');
 const background = read('background.js');
 const content = read('content.js');
+const j7Content = read('j7-content.js');
 const bridge = read('page-bridge.js');
 const debotContent = read('debot-content.js');
 const debotBridge = read('debot-bridge.js');
@@ -77,6 +78,7 @@ function backgroundHarness(route) {
   const context = vm.createContext({
     console, Date, URL, URLSearchParams, atob, btoa, AbortController, TextDecoder,
     setTimeout, clearTimeout, setInterval, clearInterval,
+    importScripts() {},
     fetch: async (url, options) => {
       const requestPath = new URL(url).pathname + new URL(url).search;
       calls.push(requestPath);
@@ -186,22 +188,21 @@ await test('Position surge requires a confirmed positive balance', async () => {
   assert.ok(start.includes('await syncHoldingWatchFromApi()'));
 });
 
-await test('FOMO refund and failure events survive unknown-type filtering', () => {
-  const fn = extractFunction(background, 'slimFomoEvent');
+await test('J7 history ignores unsupported system events instead of mislabeling them', () => {
+  const functions = [
+    extractFunction(background, 'j7TrackerHttpsUrl'),
+    extractFunction(background, 'j7TrackerChain'),
+    extractFunction(background, 'j7TrackerTimestamp'),
+    extractFunction(background, 'slimJ7TrackerFomoEvent'),
+  ];
   const raw = {
-    key: 'refund:1', eventType: 'FOMO_REFUND', ts: 1770000000000,
-    handle: 'alice', chainName: 'BSC', tokenAddress: '0xabc', symbol: 'ABC',
-    failReason: 'TRANSACTION_REVERTED',
+    channel: 'fomo_event', payload: { kind: 'new_account', data: {
+      id: 'account-1', timestamp: '2026-09-06T12:00:00Z', userHandle: 'alice',
+    } },
   };
-  const result = evaluate([fn], `slimFomoEvent(${JSON.stringify(raw)})`, {
-    FOMO_FEED_TYPE: { FOMO_REFUND: 'refund' },
-    FOMO_CHAIN_SLUG: { bsc: 'bsc' },
-  });
-  assert.equal(result.type, 'refund');
-  assert.equal(result.comment, 'On-chain transaction failed · TRANSACTION_REVERTED');
-  assert.ok(background.includes("FOMO_REFUND: 'refund'"));
-  assert.ok(content.includes("refund: { label: 'Refund / failed'"));
-  assert.ok(popupHtml.includes('id="fomo-feed-refund"'));
+  assert.equal(evaluate(functions, `slimJ7TrackerFomoEvent(${JSON.stringify(raw)})`, { URL, Date }), null);
+  assert.ok(content.includes("callout: { label: 'Callout'"));
+  assert.ok(content.includes("reply: { label: 'Reply'"));
 });
 
 await test('FOMO popup keeps sell activity and labels position changes', () => {
@@ -582,73 +583,70 @@ await test('FOMO and Pump cards inherit the GMGN theme', () => {
   assert.ok(!styles.includes('.gdh-fomofeed__sym {\n  color: #e8ecf3;'));
 });
 
-await test('Pump trades use validated fields and GMGN chain mapping', () => {
+await test('J7 Pump callouts use validated fields and GMGN chain mapping', () => {
   const functions = [
-    extractFunction(background, 'pumpFeedHttpsUrl'),
-    extractFunction(background, 'pumpFeedChainSlug'),
-    extractFunction(background, 'slimPumpEvent'),
+    extractFunction(background, 'j7TrackerHttpsUrl'),
+    extractFunction(background, 'j7TrackerChain'),
+    extractFunction(background, 'j7TrackerTimestamp'),
+    extractFunction(background, 'slimJ7TrackerPumpEvent'),
   ];
   const event = {
-    key: 'pump:trade:tx1', eventType: 'PUMP_TRADE', createdAt: '2026-08-31T00:00:00Z',
-    content: { pumpTrade: {
-      wallet: 'BY58Z7N5Adarkx5ed78AzKvR7Kxrq795aa1boZsYyVBT', username: 'QuantJB',
-      side: 'buy', mint: 'HbF1o9Mgwibv9JcQzEVUs52d9z1ibYQpdx8bY8Ntpump', symbol: 'DUVAL',
-      amountUsd: 25, marketCapUsd: 7354, chainName: 'Solana', avatar: '/pump-avatars/a.png',
-      image: 'https://ipfs.io/ipfs/token', tradeTime: '2026-08-31T00:00:01Z', tx: 'TxSignature1',
+    channel: 'pump_event', payload: { kind: 'callout', data: {
+      id: 'pump-1', timestamp: '2026-08-31T00:00:01Z', text: 'Early call',
+      calledOutAtMcap: 7354,
+      author: { wallet: 'BY58Z7N5Adarkx5ed78AzKvR7Kxrq795aa1boZsYyVBT', username: 'QuantJB', profileImage: 'http://unsafe.example/avatar.png' },
+      token: { address: 'HbF1o9Mgwibv9JcQzEVUs52d9z1ibYQpdx8bY8Ntpump', symbol: 'DUVAL', network: 'Solana', tokenImageUrl: 'https://ipfs.io/ipfs/token' },
     } },
   };
-  const result = evaluate(functions, `slimPumpEvent(${JSON.stringify(event)})`, { Date, encodeURIComponent });
-  assert.equal(result.source, 'pump');
+  const result = evaluate(functions, `slimJ7TrackerPumpEvent(${JSON.stringify(event)})`, { Date, URL });
+  assert.equal(result.source, 'j7-pump');
   assert.equal(result.chain, 'sol');
-  assert.equal(result.type, 'buy');
-  assert.equal(result.usd, 25);
-  assert.equal(result.avatar, 'https://www.985monitor.xyz/pump-avatars/a.png');
-  assert.equal(result.pumpWallet, event.content.pumpTrade.wallet);
-  assert.equal(result.tx, 'TxSignature1');
-  assert.equal(evaluate(functions, `slimPumpEvent(${JSON.stringify({ ...event, eventType: 'NEW_TWEET' })})`, { Date, encodeURIComponent }), null);
+  assert.equal(result.type, 'callout');
+  assert.equal(result.usd, 0);
+  assert.equal(result.mc, 7354);
+  assert.equal(result.avatar, '');
+  assert.equal(result.name, 'QuantJB');
+  assert.equal(result.img, 'https://ipfs.io/ipfs/token');
+  assert.equal(result.pumpWallet, event.payload.data.author.wallet);
+  assert.equal(result.comment, 'Early call');
+  assert.equal(evaluate(functions, `slimJ7TrackerPumpEvent(${JSON.stringify({ ...event, payload: { kind: 'new_account', data: event.payload.data } })})`, { Date, URL }), null);
 });
 
-await test('FOMO and Pump share one semantic transaction identity', () => {
+await test('J7 FOMO trades share native GMGN transaction identity', () => {
   const functions = [
     extractFunction(content, 'trackingFeedNormalizedAddress'),
     extractFunction(content, 'trackingFeedNormalizedTx'),
     extractFunction(content, 'trackingFeedEventIdentity'),
   ];
   const tx = '0xABCDEF1234';
-  const fomo = { key: 'fomo:a', source: 'fomo', type: 'buy', tx };
-  const pump = { key: 'pump:b', source: 'pump', type: 'buy', tx: tx.toLowerCase() };
-  const fomoId = evaluate(functions, `trackingFeedEventIdentity(${JSON.stringify(fomo)})`);
-  const pumpId = evaluate(functions, `trackingFeedEventIdentity(${JSON.stringify(pump)})`);
-  assert.equal(fomoId, pumpId);
-  assert.equal(fomoId, 'tx:0xabcdef1234');
+  const j7 = { key: 'j7:fomo:a', source: 'j7-fomo', type: 'buy', tx };
+  const native = { key: 'native:b', source: 'native', type: 'buy', tx: tx.toLowerCase() };
+  const j7Id = evaluate(functions, `trackingFeedEventIdentity(${JSON.stringify(j7)})`);
+  const nativeId = evaluate(functions, `trackingFeedEventIdentity(${JSON.stringify(native)})`);
+  assert.equal(j7Id, nativeId);
+  assert.equal(j7Id, 'tx:0xabcdef1234');
 });
 
-await test('SSE replays notify once even when event keys change', () => {
-  const functions = [
-    extractFunction(background, 'slimFomoEvent'),
-    extractFunction(background, 'trackingFeedComparableId'),
-    extractFunction(background, 'fomoSseIngest'),
-  ];
-  const raw = {
-    key: 'fomo:first', eventType: 'FOMO_BUY', ts: 1770000000000,
-    chainName: 'BSC', tokenAddress: '0x1111111111111111111111111111111111111111',
-    handle: 'alice', usd: 100, txHash: '0xABCDEF',
-  };
-  const state = { calls: 0 };
-  const result = evaluate(functions, `(() => {
-    fomoSseIngest(${JSON.stringify(raw)});
-    fomoSseIngest(${JSON.stringify({ ...raw, key: 'fomo:replayed' })});
-    return { calls: state.calls, length: fomoFeedCache.events.length, key: fomoFeedCache.events[0].key };
+await test('J7 history refresh notifications target both supported tracking sites', () => {
+  const fn = extractFunction(background, 'notifyTrackerTabs');
+  const state = { query: null, sent: [] };
+  evaluate([fn], `(() => {
+    notifyTrackerTabs('gdh-fomo-push');
+    notifyTrackerTabs('gdh-pump-push');
   })()`, {
-    Date,
-    FOMO_FEED_TYPE: { FOMO_BUY: 'buy' },
-    FOMO_CHAIN_SLUG: { bsc: 'bsc' },
-    FOMO_FEED_KEEP: 150,
-    fomoFeedCache: { events: [], updatedAt: 0, fetchedAt: 0 },
     state,
-    fomoSseNotifyTabs: () => { state.calls += 1; },
+    chrome: {
+      runtime: { lastError: null },
+      tabs: {
+        query(options, callback) { state.query = options; callback([{ id: 1 }, { id: 2 }]); },
+        sendMessage(id, message, callback) { state.sent.push([id, message.type]); callback(); },
+      },
+    },
   });
-  assert.deepEqual(JSON.parse(JSON.stringify(result)), { calls: 1, length: 1, key: 'fomo:replayed' });
+  assert.deepEqual(JSON.parse(JSON.stringify(state.query)), { url: ['https://gmgn.ai/*', 'https://debot.ai/*'] });
+  assert.deepEqual(state.sent, [
+    [1, 'gdh-fomo-push'], [2, 'gdh-fomo-push'], [1, 'gdh-pump-push'], [2, 'gdh-pump-push'],
+  ]);
 });
 
 await test('Inserted events deduplicate against native GMGN trades', () => {
@@ -657,7 +655,7 @@ await test('Inserted events deduplicate against native GMGN trades', () => {
     extractFunction(content, 'trackingFeedNormalizedTx'),
     extractFunction(content, 'trackingFeedIsNativeDuplicate'),
   ];
-  const exact = { source: 'pump', type: 'buy', tx: '0xABC' };
+  const exact = { source: 'j7-fomo', type: 'buy', tx: '0xABC' };
   assert.equal(evaluate(functions, `trackingFeedIsNativeDuplicate(${JSON.stringify(exact)}, { tx: '0xabc' })`), true);
 
   const fomo = { source: 'fomo', type: 'buy', addr: '0xABCDEF', chain: 'bsc', ts: 100000, usd: 100 };
@@ -666,7 +664,7 @@ await test('Inserted events deduplicate against native GMGN trades', () => {
   assert.equal(evaluate(functions, `trackingFeedIsNativeDuplicate(${JSON.stringify({ ...fomo, type: 'thesis' })}, ${JSON.stringify(row)})`), false);
   assert.equal(evaluate(functions, `trackingFeedIsNativeDuplicate(${JSON.stringify({ ...fomo, usd: 130 })}, ${JSON.stringify(row)})`), false);
 
-  const pump = { source: 'pump', type: 'sell', addr: 'SolMint', chain: 'sol', ts: 100000, usd: 50, pumpWallet: 'Maker1' };
+  const pump = { source: 'j7-pump', type: 'sell', addr: 'SolMint', chain: 'sol', ts: 100000, usd: 50, pumpWallet: 'Maker1' };
   const pumpRow = { addr: 'SolMint', chain: 'sol', side: 'sell', ts: 101000, usd: 50, maker: 'Maker1' };
   assert.equal(evaluate(functions, `trackingFeedIsNativeDuplicate(${JSON.stringify(pump)}, ${JSON.stringify(pumpRow)})`), true);
   assert.equal(evaluate(functions, `trackingFeedIsNativeDuplicate(${JSON.stringify({ ...pump, pumpWallet: 'Maker2' })}, ${JSON.stringify(pumpRow)})`), false);
@@ -776,7 +774,7 @@ await test('DeBot feed integration does not write unknown React table rows', () 
   assert.ok(!debotContent.includes('new WebSocket'));
   assert.ok(!debotContent.includes('EventSource'));
   assert.ok(!debotContent.includes('/api/events-stream'));
-  assert.equal((background.match(/api\/extension\/events-stream/g) || []).length, 1);
+  assert.equal((background.match(/wallets\/socket\.io\//g) || []).length, 1);
   assert.match(background, /\['https:\/\/gmgn\.ai\/\*', 'https:\/\/debot\.ai\/\*'\]/);
   assert.ok(debotStyles.includes('.gdh-debot-feed__row.is-absolute'));
 });
@@ -973,80 +971,144 @@ await test('DeBot FOMO share prefers same-origin token supply', async () => {
   assert.match(privacy, /`debot\.ai`: augments token and tracking interfaces/);
 });
 
-await test('Pump cards follow watch, block, type, and minimum-value filters', () => {
-  const functions = [extractFunction(content, 'pumpFeedTokenKey'), extractFunction(content, 'pumpFeedEventAllowed')];
-  const wallet = 'BY58Z7N5Adarkx5ed78AzKvR7Kxrq795aa1boZsYyVBT';
-  const base = { pumpWallet: wallet, type: 'buy', usd: 25, symbol: 'DUVAL', addr: 'HbF1o9Mgwibv9JcQzEVUs52d9z1ibYQpdx8bY8Ntpump' };
-  const run = (cfg, defaults = [wallet], ev = base) => evaluate(functions, `pumpFeedEventAllowed(${JSON.stringify(ev)})`, {
-    monitorPumpCfg: cfg,
-    pumpDefaultWallets: new Set(defaults),
-    isTokenBlocked: () => false,
+await test('J7 Pump cards require a verified account and respect local token blocks', () => {
+  const functions = [extractFunction(content, 'pumpFeedEventAllowed')];
+  const event = { source: 'j7-pump', type: 'callout', addr: 'HbF1o9Mgwibv9JcQzEVUs52d9z1ibYQpdx8bY8Ntpump' };
+  const run = (connected, blocked = false, value = event) => evaluate(
+    functions,
+    `pumpFeedEventAllowed(${JSON.stringify(value)})`,
+    { j7TrackerPumpCfg: { connected }, isTokenBlocked: () => blocked },
+  );
+  assert.equal(run(true), true);
+  assert.equal(run(false), false);
+  assert.equal(run(true, true), false);
+  assert.equal(run(true, false, { ...event, source: 'pump' }), false);
+});
+
+await test('J7 social history normalizes tracked FOMO and Pump activity', () => {
+  const functions = [
+    extractFunction(background, 'j7TrackerHttpsUrl'),
+    extractFunction(background, 'j7TrackerChain'),
+    extractFunction(background, 'j7TrackerTimestamp'),
+    extractFunction(background, 'slimJ7TrackerFomoEvent'),
+    extractFunction(background, 'slimJ7TrackerPumpEvent'),
+    extractFunction(background, 'normalizeJ7TrackerHistory'),
+  ];
+  const records = [
+    { channel: 'fomo_event', payload: { kind: 'trade', data: {
+      id: 'fomo-1', side: 'buy', timestamp: '2026-09-06T12:00:00.000Z', userHandle: 'alice', displayName: 'Alice',
+      usdAmount: 42, token: { address: '0x1111111111111111111111111111111111111111', symbol: 'ONE', name: 'Token One', tokenImageUrl: 'https://images.example/one.png', networkId: 56, marketCapUsd: 500000 },
+    } } },
+    { channel: 'fomo_event', payload: { kind: 'thesis', data: {
+      id: 'fomo-2', timestamp: '2026-09-06T12:01:00.000Z', userHandle: 'alice', thesis: 'Early narrative',
+      token: { address: 'So11111111111111111111111111111111111111112', symbol: 'TWO', network: 'solana' },
+    } } },
+    { channel: 'pump_event', payload: { kind: 'callout', data: {
+      id: 'pump-1', timestamp: '2026-09-06T12:02:00.000Z', text: 'First call',
+      author: { username: 'bob', displayName: 'Bob', wallet: 'PumpWallet1' },
+      token: { address: 'PumpMint1', symbol: 'PUMP', network: 'solana', calledOutAtMcap: 10000 },
+    } } },
+  ];
+  const result = evaluate(functions, `normalizeJ7TrackerHistory(${JSON.stringify(records)})`, {
+    URL, J7TRACKER_HISTORY_LIMIT: 500,
   });
-  const cfg = { connected: true, muted: new Set(), prefs: {}, watch: new Set(), filters: {}, tokenFilters: new Set(), onlyMine: true, globalTradeMinUsd: 10 };
-  assert.equal(run(cfg), true);
-  assert.equal(run({ ...cfg, connected: false }), false);
-  assert.equal(run({ ...cfg, globalTradeMinUsd: 30 }), false);
-  assert.equal(run({ ...cfg, muted: new Set([wallet]) }), false);
-  assert.equal(run({ ...cfg, prefs: { [wallet]: { types: { buy: false } } } }), false);
-  assert.equal(run({ ...cfg, tokenFilters: new Set(['DUVAL']) }), false);
-  assert.equal(run(cfg, []), false);
-  assert.equal(run({ ...cfg, onlyMine: false }, []), true);
+  const plain = JSON.parse(JSON.stringify(result));
+  assert.deepEqual(plain.fomo.map((event) => [event.source, event.type, event.chain]), [
+    ['j7-fomo', 'thesis', 'sol'], ['j7-fomo', 'buy', 'bsc'],
+  ]);
+  assert.deepEqual(plain.pump.map((event) => [event.source, event.type, event.chain]), [
+    ['j7-pump', 'callout', 'sol'],
+  ]);
+  assert.equal(plain.fomo[0].comment, 'Early narrative');
+  assert.equal(plain.fomo[1].name, 'Alice');
+  assert.equal(plain.fomo[1].tokenName, 'Token One');
+  assert.equal(plain.fomo[1].img, 'https://images.example/one.png');
+  assert.equal(plain.pump[0].comment, 'First call');
+  assert.equal(evaluate([extractFunction(background, 'j7TrackerTimestamp')], 'j7TrackerTimestamp(1788696000)', { Date }), 1788696000000);
 });
 
-await test('An explicit empty Pump token filter stays empty', () => {
-  assert.match(content, /const tokenValues = Array\.isArray\(raw\?\.tokenFilters\)\s*\? raw\.tokenFilters\s*: \[\.\.\.PUMP_FEED_DEFAULT_TOKEN_FILTERS\]/);
-  assert.ok(!content.includes('Array.isArray(raw?.tokenFilters) && raw.tokenFilters.length'));
-  assert.ok(content.includes("monitorPumpConfig: { ...(config.pump || {})"));
+await test('J7 social history uses the verified Socket.IO contract and disconnects', async () => {
+  const calls = [];
+  const state = { disconnected: 0 };
+  const io = (origin, options) => {
+    const handlers = {};
+    const socket = {
+      on(name, handler) {
+        handlers[name] = handler;
+        if (name === 'error') queueMicrotask(() => handlers.connect());
+        return socket;
+      },
+      emit(name, payload, callback) {
+        calls.push({ name, payload });
+        callback({ events: [{ channel: 'fomo_event', payload: { kind: 'trade', data: { id: 'fixture' } } }] });
+      },
+      disconnect() { state.disconnected += 1; },
+    };
+    calls.push({ origin, options });
+    return socket;
+  };
+  const events = await evaluate(
+    [extractFunction(background, 'j7TrackerSocialHistory')],
+    "j7TrackerSocialHistory({ token: 'fixture-j7-token' })",
+    {
+      io, setTimeout, clearTimeout, queueMicrotask,
+      J7TRACKER_SOCKET_ORIGIN: 'https://nj.j7tracker.io',
+      J7TRACKER_SOCKET_PATH: '/wallets/socket.io/', J7TRACKER_HISTORY_LIMIT: 500,
+    },
+  );
+  assert.equal(calls[0].origin, 'https://nj.j7tracker.io');
+  assert.equal(calls[0].options.path, '/wallets/socket.io/');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0].options.transports)), ['websocket']);
+  assert.equal(calls[0].options.auth.token, 'fixture-j7-token');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[1])), { name: 'social_history', payload: { limit: 500 } });
+  assert.equal(events.length, 1);
+  assert.equal(state.disconnected, 1);
 });
 
-await test('Pump activity has an independent setting and shared SSE', () => {
+await test('J7 Pump activity has an independent setting and account-filtered history', () => {
   assert.ok(popupHtml.includes('id="enable-pump-feed"'));
   assert.ok(popup.includes('enablePumpFeed: true'));
   assert.ok(content.includes("chrome.runtime.sendMessage({ type: 'pump-feed' }"));
-  assert.ok(background.includes("eventType === 'pump-trade'"));
-  assert.ok(background.includes("type: 'gdh-pump-push'"));
-  assert.equal((background.match(/api\/extension\/events-stream/g) || []).length, 1);
+  assert.ok(background.includes("channel === 'pump_event'"));
+  assert.ok(background.includes("notifyTrackerTabs('gdh-pump-push')"));
+  assert.ok(background.includes("socket.emit('social_history'"));
+  assert.ok(background.includes("auth: { token: session.token }"));
 });
 
-await test('985monitor settings use a separate read-only session', () => {
-  assert.ok(content.includes("fetch('/api/extension/session'" ) || content.includes("? '/api/extension/session'"));
-  assert.ok(content.includes("'/api/extension/prefs'"));
-  assert.ok(content.includes('monitor985SessionV1'));
-  assert.ok(background.includes('/api/extension/config'));
-  assert.ok(background.includes('/api/extension/fomo-events?limit=150'));
-  assert.ok(background.includes('/api/extension/pump-trade-events?limit=150'));
-  assert.ok(background.includes("Authorization: `Bearer ${session.token}`"));
-  assert.ok(!background.includes('X-User-Token'));
-  assert.ok(!content.includes('monitor985SessionV1: { token: auth.token'));
-  assert.ok(popupHtml.includes('id="monitor-985-sync-status"'));
+await test('J7Tracker uses a separate read-only session bridge and pinned local Socket.IO client', () => {
+  assert.ok(j7Content.includes("readValue('sessionId')"));
+  assert.ok(j7Content.includes('j7TrackerSessionV1'));
+  assert.ok(background.includes("importScripts('vendor/socket.io.min.js')"));
+  assert.ok(background.includes("'/wallets/socket.io/'"));
+  assert.ok(background.includes('/api/fomo/list'));
+  assert.ok(background.includes('/api/pump/list'));
+  assert.match(background, /Authorization:\s*`[A-Za-z]+\s+\$\{session\.token\}`/);
+  assert.ok(popupHtml.includes('id="j7tracker-sync-status"'));
+  assert.ok(manifest.host_permissions.includes('https://nj.j7tracker.io/*'));
+  assert.ok(!manifest.host_permissions.includes('https://*.j7tracker.io/*'));
+  const bridge = manifest.content_scripts.find((entry) => entry.js?.includes('j7-content.js'));
+  assert.deepEqual(bridge?.matches, ['https://j7tracker.io/*']);
+  assert.equal(bridge?.run_at, 'document_start');
+  assert.ok(releaseBuild.includes("'j7-content.js'"));
+  assert.ok(releaseBuild.includes("'vendor/socket.io.min.js'"));
+  assert.ok(releaseBuild.includes("'vendor/LICENSE.socket.io-client.txt'"));
 });
 
-await test('FOMO cards apply account and event filters', () => {
-  const functions = [extractFunction(content, 'pumpFeedTokenKey'), extractFunction(content, 'fomoFeedEventAllowed')];
-  const ev = { handle: 'alice', type: 'buy', usd: 25, symbol: 'TEST', addr: '0x1111111111111111111111111111111111111111' };
+await test('J7 FOMO cards apply connection, event-type, and local block filters', () => {
+  const functions = [extractFunction(content, 'fomoFeedEventAllowed')];
+  const ev = { source: 'j7-fomo', handle: 'alice', type: 'buy', addr: '0x1111111111111111111111111111111111111111' };
   const settings = { fomoFeedTypes: { buy: true } };
-  const base = {
-    connected: true,
-    muted: new Set(),
-    prefs: {},
-    watch: new Set(['alice']),
-    filters: {},
-    tokenFilters: new Set(),
-    globalTradeMinUsd: 10,
-  };
-  const run = (cfg, event = ev) => evaluate(functions, `fomoFeedEventAllowed(${JSON.stringify(event)})`, {
-    monitorFomoCfg: cfg,
-    settings,
-    DEFAULTS: settings,
-    isTokenBlocked: () => false,
+  const run = (connected, event = ev, blocked = false, types = settings.fomoFeedTypes) => evaluate(functions, `fomoFeedEventAllowed(${JSON.stringify(event)})`, {
+    j7TrackerFomoCfg: { connected },
+    settings: { fomoFeedTypes: types },
+    DEFAULTS: { fomoFeedTypes: types },
+    isTokenBlocked: () => blocked,
   });
-  assert.equal(run(base), true);
-  assert.equal(run({ ...base, connected: false }), false);
-  assert.equal(run({ ...base, watch: new Set() }), false);
-  assert.equal(run({ ...base, muted: new Set(['alice']) }), false);
-  assert.equal(run({ ...base, prefs: { alice: { types: { buy: false } } } }), false);
-  assert.equal(run({ ...base, tokenFilters: new Set(['TEST']) }), false);
-  assert.equal(run({ ...base, globalTradeMinUsd: 30 }), false);
+  assert.equal(run(true), true);
+  assert.equal(run(false), false);
+  assert.equal(run(true, ev, true), false);
+  assert.equal(run(true, ev, false, { buy: false }), false);
+  assert.equal(run(true, { ...ev, source: 'fomo' }), false);
 });
 
 await test('The FOMO keeper uses a real non-discardable background page', async () => {

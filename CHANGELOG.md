@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.51.0 - 2026-09-06
+
+- Replaced the optional 985monitor feed connector with J7Tracker account filtering.
+- Added a browser-local J7Tracker session bridge, verified tracked-account state, bounded Socket.IO social-history catch-up, and account-isolated live FOMO/Pump events.
+- Injected J7Tracker FOMO buys, sells, and narratives plus Pump.fun callouts and replies into GMGN and DeBot tracking feeds.
+- Added explicit J7 source labels, callout/reply presentation, session-expiry guidance, controlled data-contract tests, and real MV3 session-bridge coverage.
+- Removed 985monitor host access and the old remote marked-holdings dependency; legacy marked-wallet lookups continue through GMGN's signed-in same-site API.
+
 ## 0.50.1 - 2026-09-06
 
 - Fixed FOMO-injected GMGN wallet-tracker timestamps so table rows advance every second and continue through minute, hour, and day labels instead of freezing at their initial age.

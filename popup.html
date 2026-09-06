@@ -140,18 +140,18 @@
           <label class="switch-row">
             <span>
               <strong>Insert FOMO activity into tracking</strong>
-              <small>Insert 985monitor FOMO trades and narratives into GMGN and DeBot tracking by time. Blocked people and event settings follow your 985monitor account.</small>
+              <small>Insert J7Tracker FOMO buys, sells, and narratives into GMGN and DeBot tracking by time. Activity is limited to FOMO accounts tracked by your J7Tracker login.</small>
             </span>
             <input id="enable-fomo-feed" type="checkbox" />
           </label>
           <label class="switch-row">
             <span>
-              <strong>Insert Pump trades into tracking</strong>
-              <small>Insert 985monitor Pump trades into GMGN and DeBot tracking by time, using your watch, block, trade-type, and minimum-value settings.</small>
-              <small id="monitor-985-sync-status" class="sync-status">985monitor account settings not connected</small>
+              <strong>Insert Pump activity into tracking</strong>
+              <small>Insert J7Tracker Pump.fun callouts and replies into GMGN and DeBot tracking by time. Activity is limited to callers tracked by your J7Tracker login.</small>
             </span>
             <input id="enable-pump-feed" type="checkbox" />
           </label>
+          <div id="j7tracker-sync-status" class="sync-status" aria-live="polite">J7Tracker not connected</div>
           <label class="switch-row">
             <span>
               <strong>Show FOMO activity for current chain only</strong>
@@ -164,10 +164,7 @@
             <span style="display:flex;gap:10px;flex-wrap:wrap">
               <label style="display:flex;gap:3px;align-items:center"><input id="fomo-feed-buy" type="checkbox" />Buy</label>
               <label style="display:flex;gap:3px;align-items:center"><input id="fomo-feed-sell" type="checkbox" />Sell</label>
-              <label style="display:flex;gap:3px;align-items:center"><input id="fomo-feed-swap" type="checkbox" />Swap</label>
               <label style="display:flex;gap:3px;align-items:center"><input id="fomo-feed-thesis" type="checkbox" />Narrative</label>
-              <label style="display:flex;gap:3px;align-items:center"><input id="fomo-feed-transfer-in" type="checkbox" />Transfer in</label>
-              <label style="display:flex;gap:3px;align-items:center"><input id="fomo-feed-refund" type="checkbox" />Refund / failed</label>
             </span>
           </div>
           <label class="switch-row">
@@ -224,7 +221,7 @@
       <div id="status" aria-live="polite"></div>
       <button id="save" type="button">Save settings</button>
 
-      <footer>Data is read directly from current GMGN cards. No API key is used.</footer>
+      <footer>Data comes from current GMGN cards and optional signed-in FOMO/J7Tracker sessions. No wallet signing or transaction execution is used.</footer>
     </main>
     <script src="popup.js"></script>
   </body>

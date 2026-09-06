@@ -15,8 +15,11 @@ if ($version -notmatch '^\d+\.\d+\.\d+(?:\.\d+)?$') {
 $files = @(
   'manifest.json',
   'background.js',
+  'vendor/socket.io.min.js',
+  'vendor/LICENSE.socket.io-client.txt',
   'page-bridge.js',
   'content.js',
+  'j7-content.js',
   'debot-bridge.js',
   'debot-content.js',
   'fomo-early.js',

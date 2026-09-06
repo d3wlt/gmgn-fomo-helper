@@ -11,7 +11,7 @@
     fomoTranslate: true,
     fomoFeedChainOnly: false,
     fomoFeedTypes: {
-      buy: true, sell: true, swap: true, thesis: true, transferIn: true, refund: true,
+      buy: true, sell: true, thesis: true,
     },
     enableSpecialWallet: true,
     specialWallets: [],
@@ -29,20 +29,16 @@
   const FEED_TAGS = {
     buy: { label: 'Buy', cls: 'is-buy' },
     sell: { label: 'Sell', cls: 'is-sell' },
-    swap: { label: 'Swap', cls: 'is-swap' },
     thesis: { label: 'Narrative', cls: 'is-thesis' },
-    transferIn: { label: 'Transfer in', cls: 'is-transfer' },
-    refund: { label: 'Refund / failed', cls: 'is-refund' },
+    callout: { label: 'Callout', cls: 'is-callout' },
+    reply: { label: 'Reply', cls: 'is-reply' },
   };
   const CHAIN_COLORS = {
     sol: '#7b44f2', bsc: '#eab204', base: '#3073ff', eth: '#4d84f7', robinhood: '#9fc700',
     stable: '#007b4f', arc: '#5c8de5', xlayer: '#4a4a4a', hyperevm: '#55c6ab',
     megaeth: '#2a2a2a', monad: '#6a52f1',
   };
-  const PUMP_DEFAULT_TOKEN_FILTERS = [
-    'SPCXB', 'SKHYB', 'SPYB', 'XAUT', 'QQQB', 'NVDAB', 'AAPLB', 'TSLAB',
-    'MSFTB', 'GOOGLB', 'HOODB', 'BABAB', 'GMEB', 'NFLXB', 'MSTRB', 'DJTB',
-  ];
+
   const FEED_POLL_MS = 18000;
   const FEED_ROW_HEIGHT = 46;
   const FEED_RENDER_CAP = 40;
@@ -62,12 +58,8 @@
   let fomoEvents = [];
   let debotFollowedEvents = [];
   let pumpEvents = [];
-  let pumpDefaultWallets = new Set();
-  let monitorFomo = { muted: new Set(), prefs: {} };
-  let monitorPump = {
-    muted: new Set(), prefs: {}, watch: new Set(), filters: {},
-    tokenFilters: new Set(PUMP_DEFAULT_TOKEN_FILTERS), onlyMine: true, globalTradeMinUsd: 10,
-  };
+  let j7TrackerFomo = { connected: false, trackedCount: 0 };
+  let j7TrackerPump = { connected: false, trackedCount: 0 };
   let feedLastFomoAt = 0;
   let feedLastPumpAt = 0;
   let feedRenderRaf = 0;
@@ -474,33 +466,17 @@
     return link;
   }
 
-  function pumpTokenKey(value) {
-    const text = safeText(value, 96);
-    if (/^0x[a-fA-F0-9]{40}$/.test(text)) return text.toLowerCase();
-    if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(text)) return text;
-    const symbol = text.replace(/^\$+/, '').toUpperCase();
-    return /^[A-Z0-9._-]{1,20}$/.test(symbol) ? symbol : '';
-  }
-
-  function loadMonitorFomo(raw) {
-    monitorFomo = {
-      muted: new Set((Array.isArray(raw?.muted) ? raw.muted : [])
-        .map((value) => safeText(value, 80).toLowerCase()).filter(Boolean)),
-      prefs: raw?.prefs && typeof raw.prefs === 'object' && !Array.isArray(raw.prefs) ? raw.prefs : {},
+  function loadJ7TrackerFomo(raw) {
+    j7TrackerFomo = {
+      connected: raw?.connected === true,
+      trackedCount: Math.max(0, Number(raw?.trackedCount) || 0),
     };
   }
 
-  function loadMonitorPump(raw) {
-    const tokenValues = Array.isArray(raw?.tokenFilters) ? raw.tokenFilters : PUMP_DEFAULT_TOKEN_FILTERS;
-    const globalMin = Number(raw?.globalTradeMinUsd);
-    monitorPump = {
-      muted: new Set((Array.isArray(raw?.muted) ? raw.muted : []).map(String).filter(Boolean)),
-      prefs: raw?.prefs && typeof raw.prefs === 'object' && !Array.isArray(raw.prefs) ? raw.prefs : {},
-      watch: new Set((Array.isArray(raw?.watch) ? raw.watch : []).map(String).filter(Boolean)),
-      filters: raw?.filters && typeof raw.filters === 'object' && !Array.isArray(raw.filters) ? raw.filters : {},
-      tokenFilters: new Set(tokenValues.map(pumpTokenKey).filter(Boolean)),
-      onlyMine: raw?.onlyMine !== false,
-      globalTradeMinUsd: Number.isFinite(globalMin) && globalMin >= 0 ? globalMin : 10,
+  function loadJ7TrackerPump(raw) {
+    j7TrackerPump = {
+      connected: raw?.connected === true,
+      trackedCount: Math.max(0, Number(raw?.trackedCount) || 0),
     };
   }
 
@@ -514,23 +490,12 @@
   function fomoAllowed(event, blocked) {
     if (settings.fomoFeedTypes?.[event.type] === false) return false;
     if (event.source === 'fomo-followed') return event.followed === true && !blocked.has(normalizeAddress(event.addr));
-    if (monitorFomo.muted.has(safeText(event.handle, 80).toLowerCase())) return false;
-    if (monitorFomo.prefs?.[event.handle]?.types?.[event.type] === false) return false;
-    return !blocked.has(normalizeAddress(event.addr));
+    return event.source === 'j7-fomo' && j7TrackerFomo.connected && !blocked.has(normalizeAddress(event.addr));
   }
 
   function pumpAllowed(event, blocked) {
-    const wallet = safeText(event.pumpWallet, 96);
-    if (!wallet || monitorPump.muted.has(wallet)) return false;
-    if (monitorPump.prefs?.[wallet]?.types?.[event.type] === false) return false;
-    if (blocked.has(normalizeAddress(event.addr))) return false;
-    if (monitorPump.tokenFilters.has(pumpTokenKey(event.symbol))
-      || monitorPump.tokenFilters.has(pumpTokenKey(event.addr))) return false;
-    const personal = Number(monitorPump.filters?.[wallet]?.minTradeUsd ?? monitorPump.filters?.[wallet]);
-    const minimum = Math.max(monitorPump.globalTradeMinUsd,
-      Number.isFinite(personal) && personal > 0 ? personal : 0);
-    if (minimum > 0 && Number(event.usd) > 0 && Number(event.usd) < minimum) return false;
-    return !monitorPump.onlyMine || monitorPump.watch.has(wallet) || pumpDefaultWallets.has(wallet);
+    return event.source === 'j7-pump' && j7TrackerPump.connected
+      && !blocked.has(normalizeAddress(event.addr));
   }
 
   function eventIdentity(event) {
@@ -566,8 +531,8 @@
     if (!event.addr || normalizeAddress(event.addr) !== row.addr || side !== row.side) return false;
     if (event.chain && row.chain && safeText(event.chain, 24).toLowerCase() !== row.chain) return false;
     if (!event.ts || !row.ts || Math.abs(Number(event.ts) - row.ts) > 15000) return false;
-    if (event.source === 'pump' && normalizeAddress(event.pumpWallet) !== row.maker) return false;
-    if (row.sidebar && event.source === 'pump') return true;
+    if (event.source === 'j7-pump' && normalizeAddress(event.pumpWallet) !== row.maker) return false;
+    if (row.sidebar && event.source === 'j7-pump') return true;
     const usd = Number(event.usd) || 0;
     return !!(usd && row.usd && Math.abs(usd - row.usd) <= Math.max(1, Math.max(usd, row.usd) * 0.05));
   }
@@ -600,8 +565,15 @@
   }
 
   function profileMeta(event) {
-    if (event.source === 'pump') {
-      return { source: 'Pump', url: safeText(event.profileUrl, 500), name: event.name || event.pumpWallet || 'Pump' };
+    if (event.source === 'j7-pump') {
+      return { source: `J7 · Pump${event.stale ? ' · stale' : ''}`, url: safeText(event.profileUrl, 500) || 'https://j7tracker.io/', name: event.displayName || event.pumpWallet || 'J7 Pump' };
+    }
+    if (event.source === 'j7-fomo') {
+      return {
+        source: `J7 · FOMO${event.stale ? ' · stale' : ''}`,
+        url: safeText(event.profileUrl, 500) || 'https://j7tracker.io/',
+        name: event.displayName || event.handle || 'J7 FOMO',
+      };
     }
     const handle = safeText(event.handle, 80);
     return {
@@ -622,8 +594,9 @@
     const tag = FEED_TAGS[event.type] || { label: 'Event', cls: '' };
     const profile = profileMeta(event);
     const card = document.createElement('a');
-    card.className = `gdh-debot-feed__row ${tag.cls}${event.source === 'pump' ? ' is-pump' : ''}`;
+    card.className = `gdh-debot-feed__row ${tag.cls}${event.source === 'j7-pump' ? ' is-pump' : ''}`;
     card.dataset.gdhDebotFomoKey = safeText(event.key, 220);
+    card.dataset.gdhDebotFomoStale = event.stale ? '1' : '0';
     card.href = debotTokenHref(event.chain, event.addr);
     bindDebotNavigation(card);
 
@@ -684,7 +657,7 @@
     const time = feedCell('gdh-debot-feed__time', relativeTime(event.ts));
     time.dataset.gdhTs = String(event.ts);
     card.append(who, token, action, amount, mc, time);
-    const commentText = (event.type === 'thesis' || event.type === 'refund')
+    const commentText = ['thesis', 'refund', 'callout', 'reply'].includes(event.type)
       ? safeMultilineText(event.comment) : '';
     if (commentText) {
       const comment = document.createElement('div');
@@ -704,6 +677,12 @@
 
   function feedCard(event) {
     let card = feedCards.get(event.key);
+    if (card && card.dataset.gdhDebotFomoStale !== (event.stale ? '1' : '0')) {
+      const replacement = buildFeedCard(event);
+      if (card.isConnected) card.replaceWith(replacement);
+      card = replacement;
+      feedCards.set(event.key, card);
+    }
     if (!card) {
       card = buildFeedCard(event);
       feedCards.set(event.key, card);
@@ -920,7 +899,7 @@
       const tag = FEED_TAGS[event.type] || { label: 'Event', cls: '' };
       const profile = profileMeta(event);
       card = document.createElement('a');
-      card.className = `gdh-debot-sidefeed__row is-${mode} ${tag.cls}${event.source === 'pump' ? ' is-pump' : ''}`;
+      card.className = `gdh-debot-sidefeed__row is-${mode} ${tag.cls}${event.source === 'j7-pump' ? ' is-pump' : ''}`;
       card.dataset.gdhDebotFomoKey = safeText(event.key, 220);
       card.dataset.gdhDebotMode = mode;
       card.href = debotTokenHref(event.chain, event.addr);
@@ -990,7 +969,7 @@
       const mc = document.createElement('span');
       mc.className = 'gdh-debot-sidefeed__mc';
       mc.textContent = Number(event.mc) > 0 ? `MC ${fomoUsd(event.mc)}` : '';
-      const commentText = (event.type === 'thesis' || event.type === 'refund')
+      const commentText = ['thesis', 'refund', 'callout', 'reply'].includes(event.type)
         ? safeMultilineText(event.comment) : '';
       const comment = commentText ? document.createElement('div') : null;
       if (comment) {
@@ -1575,7 +1554,7 @@
     ]);
     if (generation !== fomoUiAuthGeneration || path !== location.pathname || !isTrackShellPage()
       || settings.enabled === false || settings.enableFomoFeed === false) return;
-    if (response?.ok) fomoEvents = Array.isArray(response.events) ? response.events : [];
+    fomoEvents = (response?.ok || response?.stale) && Array.isArray(response.events) ? response.events : [];
     if (followed?.ok) {
       debotFollowedEvents = (Array.isArray(followed.events) ? followed.events : []).map((event) => ({ ...event, source: 'fomo-followed', followed: true }));
       renderFomoFollowedGap(followed);
@@ -1590,9 +1569,12 @@
     if (!force && Date.now() - feedLastPumpAt < FEED_POLL_MS) return;
     feedLastPumpAt = Date.now();
     const response = await runtimeMessage({ type: 'pump-feed' });
-    if (!response?.ok) return;
+    if (!response?.ok) {
+      pumpEvents = response?.stale && Array.isArray(response.events) ? response.events : [];
+      scheduleFeedLayout();
+      return;
+    }
     pumpEvents = Array.isArray(response.events) ? response.events : [];
-    pumpDefaultWallets = new Set((Array.isArray(response.defaultWallets) ? response.defaultWallets : []).map(String));
     scheduleFeedLayout();
   }
 
@@ -2430,16 +2412,16 @@
       rebuildSpecialWalletMap();
       syncRoute();
     });
-    chrome.storage.local.get({ monitorFomoConfig: null, monitorPumpConfig: null }, (stored) => {
-      loadMonitorFomo(stored.monitorFomoConfig);
-      loadMonitorPump(stored.monitorPumpConfig);
+    chrome.storage.local.get({ j7TrackerFomoConfigV1: null, j7TrackerPumpConfigV1: null }, (stored) => {
+      loadJ7TrackerFomo(stored.j7TrackerFomoConfigV1);
+      loadJ7TrackerPump(stored.j7TrackerPumpConfigV1);
       scheduleFeedLayout();
     });
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (areaName !== 'local') return;
       for (const [key, change] of Object.entries(changes)) {
-        if (key === 'monitorFomoConfig') loadMonitorFomo(change.newValue);
-        else if (key === 'monitorPumpConfig') loadMonitorPump(change.newValue);
+        if (key === 'j7TrackerFomoConfigV1') loadJ7TrackerFomo(change.newValue);
+        else if (key === 'j7TrackerPumpConfigV1') loadJ7TrackerPump(change.newValue);
         else if (key === 'fomoToken') {
           fomoUiAuthGeneration += 1;
           resetFomoUi(true);

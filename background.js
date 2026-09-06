@@ -1,24 +1,30 @@
 'use strict';
 
-const MONITOR985_SYNC_ALARM = '985gmgn-account-sync';
+importScripts('vendor/socket.io.min.js');
+
+const J7TRACKER_SYNC_ALARM = '985gmgn-j7tracker-sync';
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.alarms.create(MONITOR985_SYNC_ALARM, { periodInMinutes: 5 });
-  refreshMonitor985Config(true).then(() => restartFomoSse());
+  chrome.alarms.create(J7TRACKER_SYNC_ALARM, { periodInMinutes: 5 });
+  chrome.storage.local.remove([
+    'monitor985SessionV1', 'monitor985ClientIdV1', 'monitor985SyncStateV1',
+    'monitorFomoConfig', 'monitorPumpConfig',
+  ]).catch(() => {});
+  refreshJ7TrackerState(true);
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  chrome.alarms.create(MONITOR985_SYNC_ALARM, { periodInMinutes: 5 });
+  chrome.alarms.create(J7TRACKER_SYNC_ALARM, { periodInMinutes: 5 });
   fomoKeepAlive(true);
-  refreshMonitor985Config(true).then(() => restartFomoSse());
+  refreshJ7TrackerState(true);
 });
 
 const FOMO_KEEPALIVE_ALARM = '985gmgn-fomo-keepalive';
 chrome.alarms.get(FOMO_KEEPALIVE_ALARM).then((existing) => {
   if (!existing) chrome.alarms.create(FOMO_KEEPALIVE_ALARM, { periodInMinutes: 5 });
 }).catch(() => {});
-chrome.alarms.get(MONITOR985_SYNC_ALARM).then((existing) => {
-  if (!existing) chrome.alarms.create(MONITOR985_SYNC_ALARM, { periodInMinutes: 5 });
+chrome.alarms.get(J7TRACKER_SYNC_ALARM).then((existing) => {
+  if (!existing) chrome.alarms.create(J7TRACKER_SYNC_ALARM, { periodInMinutes: 5 });
 }).catch(() => {});
 
 const FOMO_REFRESH_AHEAD_MS = 20 * 60000;
@@ -110,9 +116,7 @@ async function fomoKeepAlive(force) {
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === FOMO_KEEPALIVE_ALARM) fomoKeepAlive();
-  if (alarm.name === MONITOR985_SYNC_ALARM) {
-    refreshMonitor985Config(true).then(() => restartFomoSse());
-  }
+  if (alarm.name === J7TRACKER_SYNC_ALARM) refreshJ7TrackerState(true);
 });
 
 const FOMO_API = 'https://prod-api.fomo.family';
@@ -296,6 +300,7 @@ function slimFomoFollowedEvent(raw, followedIds) {
 
 const FOMO_FOLLOWED_FEED_MIN_INTERVAL_MS = 15000;
 const FOMO_FOLLOWING_IDS_CACHE_MS = 120000;
+const FOMO_FEED_KEEP = 150;
 // Checkpoints are intentionally memory-only: a worker restart is NOT continuous coverage.
 const FOMO_FOLLOWED_FEED_PAGE_LIMIT = 100;
 const FOMO_FOLLOWED_FEED_MAX_PAGES = 5;
@@ -1166,523 +1171,504 @@ async function tokenSupply({ chain, address, rpc, apiQuery }) {
 }
 
 
-const MONITOR985_ORIGIN = 'https://www.985monitor.xyz';
-const MONITOR985_CONFIG_URL = `${MONITOR985_ORIGIN}/api/extension/config`;
-const FOMO_FEED_URL = `${MONITOR985_ORIGIN}/api/extension/fomo-events?limit=150`;
-const PUMP_FEED_URL = `${MONITOR985_ORIGIN}/api/extension/pump-trade-events?limit=150`;
-const MONITOR985_CONFIG_TTL_MS = 3 * 60 * 1000;
-let monitor985ConfigInflight = null;
-
-async function monitor985Session() {
-  const stored = await chrome.storage.local.get({ monitor985SessionV1: null });
-  const session = stored.monitor985SessionV1;
-  if (!session?.token || Number(session.expiresAt) <= Date.now()) return null;
-  return session;
+function notifyTrackerTabs(messageType) {
+  try {
+    chrome.tabs.query({ url: ['https://gmgn.ai/*', 'https://debot.ai/*'] }, (tabs) => {
+      if (chrome.runtime.lastError || !Array.isArray(tabs)) return;
+      for (const tab of tabs) {
+        chrome.tabs.sendMessage(tab.id, { type: messageType }, () => void chrome.runtime.lastError);
+      }
+    });
+  } catch {
+  }
 }
 
-function monitor985AuthHeaders(session, extra = {}) {
-  return { ...extra, Authorization: `Bearer ${session.token}` };
-}
+const J7TRACKER_API_ORIGIN = 'https://nj.j7tracker.io/wallets';
+const J7TRACKER_SOCKET_ORIGIN = 'https://nj.j7tracker.io';
+const J7TRACKER_SOCKET_PATH = '/wallets/socket.io/';
+const J7TRACKER_CONFIG_TTL_MS = 3 * 60000;
+const J7TRACKER_HISTORY_TTL_MS = 12000;
+const J7TRACKER_HISTORY_LIMIT = 500;
+const J7TRACKER_REQUEST_TIMEOUT_MS = 12000;
+const J7TRACKER_RETRY_MS = 15000;
+let j7TrackerConfigAt = 0;
+let j7TrackerConfigPromise = null;
+let j7TrackerConfigPromiseGeneration = -1;
+let j7TrackerHistoryAt = 0;
+let j7TrackerHistoryPromise = null;
+let j7TrackerHistoryPromiseGeneration = -1;
+let j7TrackerFomoCache = [];
+let j7TrackerPumpCache = [];
+let j7TrackerHistoryError = '';
+let j7TrackerSessionGeneration = 0;
+let j7TrackerRetryAt = 0;
+let j7TrackerFomoTrackedCount = 0;
+let j7TrackerPumpTrackedCount = 0;
+let j7TrackerLiveSocket = null;
+let j7TrackerLiveToken = '';
+let j7TrackerLiveGeneration = -1;
 
-function resetMonitor985EventCaches() {
-  fomoFeedCache = { events: [], updatedAt: 0, fetchedAt: 0 };
-  fomoFeedEtag = '';
-  pumpFeedCache = { events: [], updatedAt: 0, fetchedAt: 0 };
-  pumpDefaultWatchCache = { wallets: [], fetchedAt: 0 };
-}
-
-async function markMonitor985Disconnected(reason, clearSession = false) {
-  resetMonitor985EventCaches();
-  const patch = {
-    monitorFomoConfig: { connected: false, at: Date.now() },
-    monitorPumpConfig: { connected: false, at: Date.now() },
-    monitor985SyncStateV1: { connected: false, reason, checkedAt: Date.now() },
+async function readJ7TrackerSession() {
+  const stored = await chrome.storage.local.get(['j7TrackerSessionV1']);
+  const session = stored.j7TrackerSessionV1;
+  const token = String(session?.token || '').trim();
+  if (!token || token.length > 4096) return null;
+  return {
+    token,
+    accountId: String(session?.accountId || '').trim().slice(0, 160),
+    displayName: String(session?.displayName || '').trim().slice(0, 100),
   };
-  if (clearSession) patch.monitor985SessionV1 = null;
-  await chrome.storage.local.set(patch);
 }
 
-async function applyMonitor985Config(config, session) {
-  if (!config?.connected || !config?.account?.userId) return false;
-  const stored = await chrome.storage.local.get({ monitor985SyncStateV1: null });
-  const previousAccount = String(stored.monitor985SyncStateV1?.accountId || '');
-  if (previousAccount && previousAccount !== String(config.account.userId)) resetMonitor985EventCaches();
-  const at = Date.now();
+function resetJ7TrackerCaches() {
+  j7TrackerSessionGeneration += 1;
+  try { j7TrackerLiveSocket?.disconnect(); } catch {}
+  j7TrackerLiveSocket = null;
+  j7TrackerLiveToken = '';
+  j7TrackerLiveGeneration = -1;
+  j7TrackerConfigAt = 0;
+  j7TrackerHistoryAt = 0;
+  j7TrackerFomoCache = [];
+  j7TrackerPumpCache = [];
+  j7TrackerHistoryError = '';
+  j7TrackerRetryAt = 0;
+  j7TrackerFomoTrackedCount = 0;
+  j7TrackerPumpTrackedCount = 0;
+}
+
+async function setJ7TrackerDisconnected(reason = 'login-required') {
+  resetJ7TrackerCaches();
+  const checkedAt = Date.now();
   await chrome.storage.local.set({
-    monitorFomoConfig: { ...(config.fomo || {}), wallet: config.account.userId, connected: true, revision: config.revision, at },
-    monitorPumpConfig: { ...(config.pump || {}), wallet: config.account.userId, connected: true, revision: config.revision, at },
-    monitor985SyncStateV1: {
-      connected: true,
-      accountId: config.account.userId,
-      displayName: String(config.account.displayName || ''),
-      syncedAt: at,
-      expiresAt: Number(session?.expiresAt || config.sessionExpiresAt) || 0,
-    },
+    j7TrackerSyncStateV1: { connected: false, reason, checkedAt },
+    j7TrackerFomoConfigV1: { connected: false, trackedCount: 0, at: checkedAt },
+    j7TrackerPumpConfigV1: { connected: false, trackedCount: 0, at: checkedAt },
   });
+}
+
+async function fetchJ7TrackerJson(url, session) {
+  const controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(), J7TRACKER_REQUEST_TIMEOUT_MS);
+  try {
+  const resp = await fetch(url, {
+    method: 'GET',
+    headers: { Accept: 'application/json', Authorization: `Bearer ${session.token}` },
+    cache: 'no-store',
+    signal: controller.signal,
+  });
+  const body = await resp.json();
+  if (!resp.ok || !body || typeof body !== 'object' || body?.error) {
+    const error = new Error(`J7Tracker request failed (${resp.status || 0})`);
+    error.status = Number(resp.status || 0);
+    error.body = body;
+    throw error;
+  }
+  return body;
+  } finally {
+    clearTimeout(deadline);
+  }
+}
+
+function j7TrackerListCount(body, key) {
+  const list = Array.isArray(body?.[key]) ? body[key] : (Array.isArray(body) ? body : null);
+  return list ? list.length : null;
+}
+
+async function refreshJ7TrackerState(force = false) {
+  if (!force && Date.now() - j7TrackerConfigAt < J7TRACKER_CONFIG_TTL_MS) return true;
+  if (!force && Date.now() < j7TrackerRetryAt) return false;
+  const generation = j7TrackerSessionGeneration;
+  if (j7TrackerConfigPromise && j7TrackerConfigPromiseGeneration === generation) return j7TrackerConfigPromise;
+  const work = (async () => {
+    const session = await readJ7TrackerSession();
+    if (!session) {
+      await setJ7TrackerDisconnected('login-required');
+      j7TrackerHistoryError = 'not-connected';
+      return false;
+    }
+    try {
+      const [fomo, pump] = await Promise.all([
+        fetchJ7TrackerJson(`${J7TRACKER_API_ORIGIN}/api/fomo/list`, session),
+        fetchJ7TrackerJson(`${J7TRACKER_API_ORIGIN}/api/pump/list`, session),
+      ]);
+      const current = await readJ7TrackerSession();
+      if (generation !== j7TrackerSessionGeneration || current?.token !== session.token) return false;
+      const fomoTrackedCount = j7TrackerListCount(fomo, 'fomo_users');
+      const pumpTrackedCount = j7TrackerListCount(pump, 'pump_users');
+      if (!Number.isInteger(fomoTrackedCount) || !Number.isInteger(pumpTrackedCount)) {
+        throw new Error('J7Tracker config response is invalid');
+      }
+      j7TrackerFomoTrackedCount = fomoTrackedCount;
+      j7TrackerPumpTrackedCount = pumpTrackedCount;
+      const at = Date.now();
+      await chrome.storage.local.set({
+        j7TrackerSyncStateV1: {
+          connected: true,
+          accountId: session.accountId,
+          displayName: session.displayName,
+          fomoTrackedCount,
+          pumpTrackedCount,
+          verifiedAt: at,
+        },
+        j7TrackerFomoConfigV1: { connected: true, trackedCount: fomoTrackedCount, at },
+        j7TrackerPumpConfigV1: { connected: true, trackedCount: pumpTrackedCount, at },
+      });
+      j7TrackerConfigAt = at;
+      ensureJ7TrackerLiveSocket(session, generation);
+      return true;
+    } catch (error) {
+      const current = await readJ7TrackerSession();
+      if (generation !== j7TrackerSessionGeneration || current?.token !== session.token) return false;
+      if (error?.status === 401 || error?.status === 403) {
+        await chrome.storage.local.set({ j7TrackerSessionV1: null });
+        await setJ7TrackerDisconnected('session-expired');
+        j7TrackerHistoryError = 'not-connected';
+      } else {
+        j7TrackerHistoryError = 'network';
+        j7TrackerRetryAt = Date.now() + J7TRACKER_RETRY_MS;
+        await chrome.storage.local.set({
+          j7TrackerSyncStateV1: { connected: false, reason: 'network', checkedAt: Date.now() },
+        });
+      }
+      return false;
+    }
+  })();
+  j7TrackerConfigPromise = work;
+  j7TrackerConfigPromiseGeneration = generation;
+  try {
+    return await work;
+  } finally {
+    if (j7TrackerConfigPromise === work) {
+      j7TrackerConfigPromise = null;
+      j7TrackerConfigPromiseGeneration = -1;
+    }
+  }
+}
+
+function j7TrackerSocialHistory(session) {
+  return new Promise((resolve, reject) => {
+    if (typeof io !== 'function') {
+      reject(new Error('J7Tracker Socket.IO client is unavailable'));
+      return;
+    }
+    let settled = false;
+    let socket = null;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { socket?.disconnect(); } catch {}
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const timer = setTimeout(() => finish(new Error('J7Tracker history timed out')), 12000);
+    try {
+      socket = io(J7TRACKER_SOCKET_ORIGIN, {
+        path: J7TRACKER_SOCKET_PATH,
+        transports: ['websocket'],
+        upgrade: false,
+        reconnection: false,
+        timeout: 8000,
+        auth: { token: session.token },
+      });
+      socket.on('connect', () => {
+        socket.emit('social_history', { limit: J7TRACKER_HISTORY_LIMIT }, (response) => {
+          if (response?.error) {
+            const error = new Error(String(response.error));
+            error.status = /invalid token|unauthor/i.test(error.message) ? 401 : 0;
+            finish(error);
+            return;
+          }
+          if (!Array.isArray(response?.events)) {
+            finish(new Error('J7Tracker history response is invalid'));
+            return;
+          }
+          finish(null, response.events);
+        });
+      });
+      socket.on('connect_error', (cause) => {
+        const error = new Error(String(cause?.message || 'J7Tracker connection failed'));
+        error.status = /invalid token|unauthor/i.test(error.message) ? 401 : 0;
+        finish(error);
+      });
+      socket.on('error', (cause) => finish(new Error(String(cause?.message || cause || 'J7Tracker socket failed'))));
+    } catch (error) {
+      finish(error);
+    }
+  });
+}
+
+function j7TrackerHttpsUrl(value) {
+  try {
+    const parsed = new URL(String(value || ''));
+    return parsed.protocol === 'https:' ? parsed.href.slice(0, 1000) : '';
+  } catch {
+    return '';
+  }
+}
+
+function j7TrackerChain(data, token) {
+  const raw = String(
+    token?.network || token?.chain || token?.chainName || data?.network || data?.chain || data?.chainName || '',
+  ).toLowerCase();
+  const networkId = Number(token?.networkId ?? data?.networkId ?? NaN);
+  if (raw.includes('sol') || networkId === 1399811149) return 'sol';
+  if (raw.includes('base') || networkId === 8453) return 'base';
+  if (raw.includes('bsc') || raw.includes('bnb') || networkId === 56) return 'bsc';
+  if (raw.includes('robin') || networkId === 4663) return 'robinhood';
+  if (raw.includes('mono') || networkId === 143) return 'monad';
+  if (raw.includes('eth') || networkId === 1) return 'eth';
+  return raw.replace(/[^a-z0-9_-]/g, '').slice(0, 30);
+}
+
+function j7TrackerTimestamp(value) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return numeric < 1e12 ? numeric * 1000 : numeric;
+  const parsed = Date.parse(String(value || ''));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function slimJ7TrackerFomoEvent(record) {
+  const payload = record?.payload && typeof record.payload === 'object' ? record.payload : record;
+  const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
+  const kind = String(payload?.kind || data?.kind || '').toLowerCase();
+  if (!['trade', 'thesis'].includes(kind)) return null;
+  const token = data?.token && typeof data.token === 'object' ? data.token : {};
+  const id = String(data?.id || data?.tradeId || data?.thesisId || record?.id || '').trim().slice(0, 180);
+  const ts = j7TrackerTimestamp(data?.timestamp || data?.createdAt || payload?.received_at || record?.received_at);
+  if (!id || !Number.isFinite(ts) || ts <= 0) return null;
+  const side = String(data?.side || data?.type || '').toLowerCase();
+  const type = kind === 'thesis' ? 'thesis' : (side === 'sell' ? 'sell' : 'buy');
+  const handle = String(data?.userHandle || data?.username || data?.displayName || '').replace(/^@/, '').trim().slice(0, 120);
+  return {
+    key: `j7:fomo:${id}`,
+    id,
+    source: 'j7-fomo',
+    type,
+    ts,
+    chain: j7TrackerChain(data, token),
+    addr: String(token?.address || token?.contractAddress || data?.tokenAddress || data?.address || '').trim().slice(0, 160),
+    symbol: String(token?.symbol || data?.symbol || '').trim().slice(0, 40),
+    name: String(data?.displayName || handle || 'J7 FOMO').trim().slice(0, 120),
+    tokenName: String(token?.name || data?.tokenName || '').trim().slice(0, 120),
+    avatar: j7TrackerHttpsUrl(data?.userImageUrl || data?.avatarUrl),
+    img: j7TrackerHttpsUrl(token?.tokenImageUrl || token?.imageUrl || data?.tokenImageUrl),
+    usd: Math.max(0, Number(data?.usdAmount || data?.amountUsd || 0) || 0),
+    mc: Math.max(0, Number(token?.marketCapUsd || data?.marketCapUsd || 0) || 0),
+    handle,
+    displayName: String(data?.displayName || handle || 'J7 FOMO').trim().slice(0, 120),
+    profileUrl: handle ? `https://fomo.family/profile/${encodeURIComponent(handle)}` : '',
+    tx: String(data?.txHash || data?.transactionHash || '').trim().slice(0, 180),
+    comment: String(data?.thesis || data?.text || '').trim().slice(0, 500),
+  };
+}
+
+function slimJ7TrackerPumpEvent(record) {
+  const payload = record?.payload && typeof record.payload === 'object' ? record.payload : record;
+  const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
+  const kind = String(payload?.kind || data?.kind || '').toLowerCase();
+  if (!['callout', 'reply'].includes(kind)) return null;
+  const token = data?.token && typeof data.token === 'object' ? data.token : {};
+  const author = data?.author && typeof data.author === 'object' ? data.author : {};
+  const id = String(data?.id || data?.calloutId || data?.replyId || record?.id || '').trim().slice(0, 180);
+  const ts = j7TrackerTimestamp(data?.timestamp || data?.createdAt || payload?.received_at || record?.received_at);
+  if (!id || !Number.isFinite(ts) || ts <= 0) return null;
+  const wallet = String(author?.wallet || data?.wallet || '').trim().slice(0, 160);
+  const handle = String(author?.username || data?.username || wallet).replace(/^@/, '').trim().slice(0, 120);
+  return {
+    key: `j7:pump:${id}`,
+    id,
+    source: 'j7-pump',
+    type: kind,
+    ts,
+    chain: j7TrackerChain(data, token),
+    addr: String(token?.address || token?.contractAddress || data?.tokenAddress || data?.address || '').trim().slice(0, 160),
+    symbol: String(token?.symbol || data?.symbol || '').trim().slice(0, 40),
+    name: String(author?.displayName || author?.username || data?.displayName || handle || 'J7 Pump').trim().slice(0, 120),
+    tokenName: String(token?.name || data?.tokenName || '').trim().slice(0, 120),
+    avatar: j7TrackerHttpsUrl(author?.profileImage || author?.avatarUrl || author?.avatar || data?.avatarUrl),
+    img: j7TrackerHttpsUrl(token?.tokenImageUrl || token?.imageUrl || data?.tokenImageUrl),
+    usd: 0,
+    mc: Math.max(0, Number(token?.marketCapUsd || data?.marketCapUsd || data?.calledOutAtMcap || 0) || 0),
+    handle,
+    displayName: String(author?.displayName || author?.username || data?.displayName || handle || 'J7 Pump').trim().slice(0, 120),
+    pumpWallet: wallet,
+    profileUrl: j7TrackerHttpsUrl(author?.profileUrl) || (wallet ? `https://pump.fun/profile/${encodeURIComponent(wallet)}` : ''),
+    tx: '',
+    comment: String(data?.text || data?.comment || '').trim().slice(0, 500),
+  };
+}
+
+function normalizeJ7TrackerHistory(records) {
+  const fomo = [];
+  const pump = [];
+  for (const record of Array.isArray(records) ? records : []) {
+    const channel = String(record?.channel || '').toLowerCase();
+    const event = channel === 'fomo_event'
+      ? slimJ7TrackerFomoEvent(record)
+      : (channel === 'pump_event' ? slimJ7TrackerPumpEvent(record) : null);
+    if (!event) continue;
+    (event.source === 'j7-fomo' ? fomo : pump).push(event);
+  }
+  const finalize = (events) => Array.from(new Map(events.map((event) => [event.key, event])).values())
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, J7TRACKER_HISTORY_LIMIT);
+  return { fomo: finalize(fomo), pump: finalize(pump) };
+}
+
+async function acceptJ7TrackerLiveEvent(channel, payload, generation, token) {
+  const current = await readJ7TrackerSession();
+  if (generation !== j7TrackerSessionGeneration || current?.token !== token) return false;
+  const record = { channel, payload };
+  const event = channel === 'fomo_event' ? slimJ7TrackerFomoEvent(record) : slimJ7TrackerPumpEvent(record);
+  if (!event) return false;
+  const cache = event.source === 'j7-fomo' ? j7TrackerFomoCache : j7TrackerPumpCache;
+  const merged = [event, ...cache.filter((item) => item.key !== event.key)]
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, J7TRACKER_HISTORY_LIMIT);
+  if (event.source === 'j7-fomo') {
+    j7TrackerFomoCache = merged;
+    notifyTrackerTabs('gdh-fomo-push');
+  } else {
+    j7TrackerPumpCache = merged;
+    notifyTrackerTabs('gdh-pump-push');
+  }
   return true;
 }
 
-async function refreshMonitor985Config(force = false) {
-  if (monitor985ConfigInflight) return monitor985ConfigInflight;
-  monitor985ConfigInflight = (async () => {
-    const stored = await chrome.storage.local.get({ monitor985SessionV1: null, monitor985SyncStateV1: null });
-    const session = stored.monitor985SessionV1;
-    if (!session?.token || Number(session.expiresAt) <= Date.now()) {
-      await markMonitor985Disconnected('login-required', Boolean(session));
+function ensureJ7TrackerLiveSocket(session, generation) {
+  if (typeof io !== 'function' || !session?.token) return;
+  if (j7TrackerLiveSocket && j7TrackerLiveToken === session.token && j7TrackerLiveGeneration === generation) return;
+  try { j7TrackerLiveSocket?.disconnect(); } catch {}
+  const socket = io(J7TRACKER_SOCKET_ORIGIN, {
+    path: J7TRACKER_SOCKET_PATH,
+    transports: ['websocket'],
+    upgrade: false,
+    reconnection: true,
+    reconnectionDelay: 2000,
+    reconnectionDelayMax: 30000,
+    timeout: 8000,
+    auth: { token: session.token },
+  });
+  j7TrackerLiveSocket = socket;
+  j7TrackerLiveToken = session.token;
+  j7TrackerLiveGeneration = generation;
+  socket.on('fomo_event', (payload) => { void acceptJ7TrackerLiveEvent('fomo_event', payload, generation, session.token); });
+  socket.on('pump_event', (payload) => { void acceptJ7TrackerLiveEvent('pump_event', payload, generation, session.token); });
+  socket.on('connect_error', async (cause) => {
+    if (!/invalid token|unauthor/i.test(String(cause?.message || ''))) return;
+    const current = await readJ7TrackerSession();
+    if (generation !== j7TrackerSessionGeneration || current?.token !== session.token) return;
+    await chrome.storage.local.set({ j7TrackerSessionV1: null });
+    await setJ7TrackerDisconnected('session-expired');
+    j7TrackerHistoryError = 'not-connected';
+  });
+}
+
+async function refreshJ7TrackerHistory(force = false) {
+  if (!force && Date.now() - j7TrackerHistoryAt < J7TRACKER_HISTORY_TTL_MS) return true;
+  if (!force && Date.now() < j7TrackerRetryAt) return false;
+  const generation = j7TrackerSessionGeneration;
+  if (j7TrackerHistoryPromise && j7TrackerHistoryPromiseGeneration === generation) return j7TrackerHistoryPromise;
+  const work = (async () => {
+    const session = await readJ7TrackerSession();
+    if (!session) {
+      await setJ7TrackerDisconnected('login-required');
+      j7TrackerHistoryError = 'not-connected';
       return false;
     }
-    if (!force && stored.monitor985SyncStateV1?.connected
-      && Date.now() - Number(stored.monitor985SyncStateV1.syncedAt) < MONITOR985_CONFIG_TTL_MS) return true;
     try {
-      const response = await fetch(MONITOR985_CONFIG_URL, {
-        headers: monitor985AuthHeaders(session, { Accept: 'application/json' }),
-        cache: 'no-store',
+      const records = await j7TrackerSocialHistory(session);
+      const current = await readJ7TrackerSession();
+      if (generation !== j7TrackerSessionGeneration || current?.token !== session.token) return false;
+      const normalized = normalizeJ7TrackerHistory(records);
+      const oldFomo = new Set(j7TrackerFomoCache.map((event) => event.key));
+      const oldPump = new Set(j7TrackerPumpCache.map((event) => event.key));
+      const fomoChanged = normalized.fomo.some((event) => !oldFomo.has(event.key));
+      const pumpChanged = normalized.pump.some((event) => !oldPump.has(event.key));
+      j7TrackerFomoCache = normalized.fomo;
+      j7TrackerPumpCache = normalized.pump;
+      j7TrackerHistoryAt = Date.now();
+      j7TrackerHistoryError = '';
+      j7TrackerRetryAt = 0;
+      await chrome.storage.local.set({
+        j7TrackerSyncStateV1: {
+          connected: true,
+          accountId: session.accountId,
+          displayName: session.displayName,
+          fomoTrackedCount: j7TrackerFomoTrackedCount,
+          pumpTrackedCount: j7TrackerPumpTrackedCount,
+          verifiedAt: j7TrackerHistoryAt,
+        },
       });
-      const body = await response.json().catch(() => null);
-      if (response.status === 401) {
-        await markMonitor985Disconnected('unauthorized', true);
-        return false;
-      }
-      if (!response.ok || body?.ok !== true || !body?.config) throw new Error(`HTTP ${response.status}`);
-      return applyMonitor985Config(body.config, session);
-    } catch {
-      return Boolean(stored.monitor985SyncStateV1?.connected);
-    }
-  })().finally(() => { monitor985ConfigInflight = null; });
-  return monitor985ConfigInflight;
-}
-
-const FOMO_FEED_MIN_INTERVAL_MS = 15000;
-const FOMO_FEED_KEEP = 150;
-let fomoFeedCache = { events: [], updatedAt: 0, fetchedAt: 0 };
-let fomoFeedEtag = '';
-let fomoFeedFailCount = 0;
-let fomoFeedBackoffUntil = 0;
-let fomoFeedInflight = null;
-
-const FOMO_FEED_TYPE = {
-  FOMO_BUY: 'buy',
-  FOMO_SELL: 'sell',
-  FOMO_SWAP: 'swap',
-  FOMO_THESIS: 'thesis',
-  FOMO_TRANSFER_IN: 'transferIn',
-  FOMO_REFUND: 'refund',
-};
-
-const FOMO_CHAIN_SLUG = { bnb: 'bsc', bsc: 'bsc', sol: 'sol', solana: 'sol', eth: 'eth', ethereum: 'eth', base: 'base', robinhood: 'robinhood', 'chain 143': 'monad' };
-
-function slimFomoEvent(raw) {
-  if (!raw || typeof raw !== 'object') return null;
-  const type = FOMO_FEED_TYPE[String(raw.eventType || '')];
-  if (!type) return null;
-  const ts = Number(raw.ts) || Date.parse(raw.createdAt || '') || 0;
-  if (!ts) return null;
-  const chainName = String(raw.chainName || '').trim();
-  const content = raw.content && typeof raw.content === 'object' ? raw.content : {};
-  return {
-    key: String(raw.key || '').slice(0, 120),
-    source: 'fomo',
-    type,
-    handle: String(raw.handle || '').toLowerCase().slice(0, 64),
-    name: String(raw.userName || raw.handle || '').slice(0, 48),
-    avatar: String(raw.avatar || '').slice(0, 300),
-    usd: Number(raw.usd) || 0,
-    comment: String(raw.comment || content.comment || content.text
-      || (type === 'refund' ? `On-chain transaction failed · ${String(raw.failReason || 'Refunded')}` : '')).slice(0, 1500),
-    addr: String(raw.tokenAddress || '').slice(0, 64),
-    chain: FOMO_CHAIN_SLUG[chainName.toLowerCase()] || chainName.toLowerCase(),
-    chainName,
-    symbol: String(raw.symbol || '').slice(0, 24),
-    img: String(raw.tokenImage || '').slice(0, 300),
-    mc: Number(raw.marketCap) || 0,
-    ts,
-    tx: String(raw.txHash || raw.transactionHash || raw.transaction_hash
-      || content.txHash || content.transactionHash || content.transaction_hash || '').trim().slice(0, 180),
-  };
-}
-
-async function fetchFomoFeed() {
-  if (fomoFeedInflight) return fomoFeedInflight;
-  const session = await monitor985Session();
-  if (!session) return { ok: false, reason: 'not-connected', events: [] };
-  await refreshMonitor985Config(false);
-  const now = Date.now();
-  if (now - fomoFeedCache.fetchedAt < FOMO_FEED_MIN_INTERVAL_MS || now < fomoFeedBackoffUntil) {
-    return { ok: true, ...fomoFeedCache, stale: true };
-  }
-  fomoFeedInflight = (async () => {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 25000);
-      const headers = monitor985AuthHeaders(session, fomoFeedEtag ? { 'If-None-Match': fomoFeedEtag } : {});
-      let response;
-      try {
-        response = await fetch(FOMO_FEED_URL, { headers, cache: 'no-store', signal: controller.signal });
-      } finally {
-        clearTimeout(timer);
-      }
-      if (response.status === 304) {
-        fomoFeedCache.fetchedAt = Date.now();
-        fomoFeedFailCount = 0;
-        return { ok: true, ...fomoFeedCache };
-      }
-      if (response.status === 401) {
-        await markMonitor985Disconnected('unauthorized', true);
-        return { ok: false, reason: 'not-connected', events: [] };
-      }
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body = await response.json();
-      const events = (Array.isArray(body?.events) ? body.events : [])
-        .map(slimFomoEvent)
-        .filter(Boolean)
-        .sort((a, b) => b.ts - a.ts)
-        .slice(0, FOMO_FEED_KEEP);
-      fomoFeedCache = { events, updatedAt: Number(body?.updatedAt) || Date.now(), fetchedAt: Date.now() };
-      fomoFeedEtag = response.headers.get('ETag') || '';
-      fomoFeedFailCount = 0;
-      fomoFeedBackoffUntil = 0;
-      return { ok: true, ...fomoFeedCache };
+      if (fomoChanged) notifyTrackerTabs('gdh-fomo-push');
+      if (pumpChanged) notifyTrackerTabs('gdh-pump-push');
+      return true;
     } catch (error) {
-      fomoFeedFailCount += 1;
-      fomoFeedBackoffUntil = Date.now() + Math.min(15 * 60000, 60000 * Math.pow(2, fomoFeedFailCount - 1));
-      if (fomoFeedCache.events.length) return { ok: true, ...fomoFeedCache, stale: true };
-      return { ok: false, reason: 'fetch-failed', message: String(error?.message || '').slice(0, 120) };
-    } finally {
-      fomoFeedInflight = null;
-    }
-  })();
-  return fomoFeedInflight;
-}
-
-
-const PUMP_FEED_MIN_INTERVAL_MS = 15000;
-const PUMP_FEED_KEEP = 150;
-let pumpFeedCache = { events: [], updatedAt: 0, fetchedAt: 0 };
-let pumpFeedFailCount = 0;
-let pumpFeedBackoffUntil = 0;
-let pumpFeedInflight = null;
-let pumpDefaultWatchCache = { wallets: [], fetchedAt: 0 };
-
-function pumpFeedHttpsUrl(raw, allowLocalAvatar = false) {
-  const value = String(raw || '').trim();
-  if (allowLocalAvatar && value.startsWith('/pump-avatars/')) {
-    return `https://www.985monitor.xyz${value}`.slice(0, 400);
-  }
-  return /^https:\/\//i.test(value) ? value.slice(0, 400) : '';
-}
-
-function pumpFeedChainSlug(trade) {
-  const direct = String(trade?.chainSlug || trade?.chain || '').trim().toLowerCase();
-  if (/^(sol|bsc|base|eth|robinhood|hyperevm)$/.test(direct)) return direct;
-  const byName = {
-    sol: 'sol', solana: 'sol', bnb: 'bsc', bsc: 'bsc', binance: 'bsc',
-    base: 'base', eth: 'eth', ethereum: 'eth', robinhood: 'robinhood',
-    hyperliquid: 'hyperevm', hyperevm: 'hyperevm',
-  };
-  const named = byName[String(trade?.chainName || '').trim().toLowerCase()];
-  if (named) return named;
-  return ({ 1: 'eth', 56: 'bsc', 8453: 'base', 1399811149: 'sol' })[Number(trade?.chainId)] || '';
-}
-
-function slimPumpEvent(raw) {
-  if (!raw || String(raw.eventType || '').toUpperCase() !== 'PUMP_TRADE') return null;
-  const trade = raw?.content?.pumpTrade;
-  if (!trade || typeof trade !== 'object') return null;
-  const type = String(trade.side || '').trim().toLowerCase();
-  if (type !== 'buy' && type !== 'sell') return null;
-  const ts = Date.parse(trade.tradeTime || raw.createdAt || '') || Number(raw.ts) || 0;
-  const chain = pumpFeedChainSlug(trade);
-  const addr = String(trade.mint || trade.tokenAddress || trade.contractAddress || '').trim();
-  const wallet = String(trade.wallet || '').trim();
-  const key = String(raw.key || (trade.tx ? `pump:trade:${trade.tx}` : '')).slice(0, 180);
-  if (!key || !ts || !chain || !addr || !wallet) return null;
-  return {
-    key,
-    source: 'pump',
-    type,
-    handle: String(trade.username || trade.watchName || trade.walletName || '').trim().toLowerCase().slice(0, 64),
-    name: String(trade.watchName || trade.walletName || trade.username || wallet).slice(0, 48),
-    avatar: pumpFeedHttpsUrl(trade.avatar, true),
-    usd: Number(trade.amountUsd) || 0,
-    comment: '',
-    addr: addr.slice(0, 80),
-    chain,
-    chainName: String(trade.chainName || '').slice(0, 32),
-    symbol: String(trade.symbol || '').slice(0, 24),
-    img: pumpFeedHttpsUrl(trade.image),
-    mc: Number(trade.marketCapUsd) || 0,
-    ts,
-    tx: String(trade.tx || '').trim().slice(0, 180),
-    pumpWallet: wallet.slice(0, 48),
-    profileUrl: `https://pump.fun/profile/${encodeURIComponent(wallet)}`,
-  };
-}
-
-async function fetchPumpFeed() {
-  if (pumpFeedInflight) return pumpFeedInflight;
-  const session = await monitor985Session();
-  if (!session) return { ok: false, reason: 'not-connected', events: [], defaultWallets: [] };
-  await refreshMonitor985Config(false);
-  const now = Date.now();
-  if (now - pumpFeedCache.fetchedAt < PUMP_FEED_MIN_INTERVAL_MS || now < pumpFeedBackoffUntil) {
-    return { ok: true, ...pumpFeedCache, defaultWallets: [], stale: true };
-  }
-  pumpFeedInflight = (async () => {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 25000);
-      let response;
-      try {
-        response = await fetch(PUMP_FEED_URL, {
-          headers: monitor985AuthHeaders(session),
-          cache: 'no-store',
-          signal: controller.signal,
+      const current = await readJ7TrackerSession();
+      if (generation !== j7TrackerSessionGeneration || current?.token !== session.token) return false;
+      if (error?.status === 401 || error?.status === 403) {
+        await chrome.storage.local.set({ j7TrackerSessionV1: null });
+        await setJ7TrackerDisconnected('session-expired');
+        j7TrackerHistoryError = 'not-connected';
+      } else {
+        j7TrackerHistoryError = 'network';
+        j7TrackerRetryAt = Date.now() + J7TRACKER_RETRY_MS;
+        await chrome.storage.local.set({
+          j7TrackerSyncStateV1: { connected: false, reason: 'network', checkedAt: Date.now() },
         });
-      } finally {
-        clearTimeout(timer);
       }
-      if (response.status === 401) {
-        await markMonitor985Disconnected('unauthorized', true);
-        return { ok: false, reason: 'not-connected', events: [], defaultWallets: [] };
-      }
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body = await response.json();
-      const events = (Array.isArray(body?.events) ? body.events : [])
-        .map(slimPumpEvent)
-        .filter(Boolean)
-        .sort((a, b) => b.ts - a.ts)
-        .slice(0, PUMP_FEED_KEEP);
-      pumpFeedCache = { events, updatedAt: Number(body?.updatedAt) || Date.now(), fetchedAt: Date.now() };
-      pumpFeedFailCount = 0;
-      pumpFeedBackoffUntil = 0;
-      return { ok: true, ...pumpFeedCache, defaultWallets: [] };
-    } catch (error) {
-      pumpFeedFailCount += 1;
-      pumpFeedBackoffUntil = Date.now() + Math.min(15 * 60000, 60000 * Math.pow(2, pumpFeedFailCount - 1));
-      if (pumpFeedCache.events.length) {
-        return { ok: true, ...pumpFeedCache, defaultWallets: [], stale: true };
-      }
-      return { ok: false, reason: 'fetch-failed', message: String(error?.message || '').slice(0, 120) };
-    } finally {
-      pumpFeedInflight = null;
+      return false;
     }
   })();
-  return pumpFeedInflight;
-}
-
-
-const FOMO_SSE_URL = `${MONITOR985_ORIGIN}/api/extension/events-stream`;
-let fomoSseAbort = null;
-let fomoSseBackoff = 5000;
-let fomoSseReconnectTimer = 0;
-let fomoSseGeneration = 0;
-let monitor985LastEventId = '';
-
-function restartFomoSse() {
-  fomoSseGeneration += 1;
-  if (fomoSseReconnectTimer) clearTimeout(fomoSseReconnectTimer);
-  fomoSseReconnectTimer = 0;
-  try { fomoSseAbort?.abort(); } catch {}
-  fomoSseAbort = null;
-  setTimeout(connectFomoSse, 0);
-}
-
-function trackingFeedComparableId(ev) {
-  const tx = String(ev?.tx || '').trim();
-  if (tx) return `tx:${tx.startsWith('0x') ? tx.toLowerCase() : tx}`;
-  const key = String(ev?.key || '').trim();
-  return key ? `key:${key}` : '';
-}
-
-function fomoSseNotifyTabs() {
+  j7TrackerHistoryPromise = work;
+  j7TrackerHistoryPromiseGeneration = generation;
   try {
-    chrome.tabs.query({ url: ['https://gmgn.ai/*', 'https://debot.ai/*'] }, (tabs) => {
-      if (chrome.runtime.lastError || !Array.isArray(tabs)) return;
-      for (const tab of tabs) {
-        chrome.tabs.sendMessage(tab.id, { type: 'gdh-fomo-push' }, () => void chrome.runtime.lastError);
-      }
-    });
-  } catch {
-  }
-}
-
-function fomoSseIngest(raw) {
-  const ev = slimFomoEvent(raw);
-  if (!ev) return;
-  const comparableId = trackingFeedComparableId(ev);
-  const duplicate = fomoFeedCache.events.some((item) => item.key === ev.key
-    || (comparableId && trackingFeedComparableId(item) === comparableId));
-  const rest = fomoFeedCache.events.filter((item) => item.key !== ev.key
-    && (!comparableId || trackingFeedComparableId(item) !== comparableId));
-  rest.unshift(ev);
-  rest.sort((a, b) => b.ts - a.ts);
-  fomoFeedCache = { ...fomoFeedCache, events: rest.slice(0, FOMO_FEED_KEEP), updatedAt: Date.now() };
-  if (!duplicate) fomoSseNotifyTabs();
-}
-
-function pumpSseNotifyTabs() {
-  try {
-    chrome.tabs.query({ url: ['https://gmgn.ai/*', 'https://debot.ai/*'] }, (tabs) => {
-      if (chrome.runtime.lastError || !Array.isArray(tabs)) return;
-      for (const tab of tabs) {
-        chrome.tabs.sendMessage(tab.id, { type: 'gdh-pump-push' }, () => void chrome.runtime.lastError);
-      }
-    });
-  } catch {
-  }
-}
-
-function pumpSseIngest(raw) {
-  const ev = slimPumpEvent(raw);
-  if (!ev) return;
-  const comparableId = trackingFeedComparableId(ev);
-  const duplicate = pumpFeedCache.events.some((item) => item.key === ev.key
-    || (comparableId && trackingFeedComparableId(item) === comparableId));
-  const rest = pumpFeedCache.events.filter((item) => item.key !== ev.key
-    && (!comparableId || trackingFeedComparableId(item) !== comparableId));
-  rest.unshift(ev);
-  rest.sort((a, b) => b.ts - a.ts);
-  pumpFeedCache = { ...pumpFeedCache, events: rest.slice(0, PUMP_FEED_KEEP), updatedAt: Date.now() };
-  if (!duplicate) pumpSseNotifyTabs();
-}
-
-async function connectFomoSse() {
-  if (fomoSseAbort) return;
-  const session = await monitor985Session();
-  if (!session || fomoSseAbort) return;
-  await refreshMonitor985Config(false);
-  const generation = fomoSseGeneration;
-  const controller = new AbortController();
-  fomoSseAbort = controller;
-  try {
-    const response = await fetch(FOMO_SSE_URL, {
-      headers: monitor985AuthHeaders(session, {
-        Accept: 'text/event-stream',
-        ...(monitor985LastEventId ? { 'Last-Event-ID': monitor985LastEventId } : {}),
-      }),
-      cache: 'no-store',
-      signal: controller.signal,
-    });
-    if (response.status === 401) {
-      await markMonitor985Disconnected('unauthorized', true);
-      return;
-    }
-    if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
-    fomoSseBackoff = 5000;
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let eventType = '';
-    let eventId = '';
-    let dataLines = [];
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, idx).replace(/\r$/, '');
-        buffer = buffer.slice(idx + 1);
-        if (line === '') {
-          if ((eventType === 'fomo' || eventType === 'pump-trade') && dataLines.length) {
-            try {
-              const payload = JSON.parse(dataLines.join('\n'));
-              if (payload?.event && eventType === 'fomo') fomoSseIngest(payload.event);
-              if (payload?.event && eventType === 'pump-trade') pumpSseIngest(payload.event);
-            } catch {
-            }
-          }
-          if (eventId) monitor985LastEventId = eventId;
-          eventType = '';
-          eventId = '';
-          dataLines = [];
-          continue;
-        }
-        if (line.startsWith('id:')) eventId = line.slice(3).trim();
-        else if (line.startsWith('event:')) eventType = line.slice(6).trim();
-        else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
-      }
-    }
-  } catch {
+    return await work;
   } finally {
-    if (fomoSseAbort === controller) fomoSseAbort = null;
+    if (j7TrackerHistoryPromise === work) {
+      j7TrackerHistoryPromise = null;
+      j7TrackerHistoryPromiseGeneration = -1;
+    }
   }
-  if (generation !== fomoSseGeneration || !(await monitor985Session())) return;
-  fomoSseReconnectTimer = setTimeout(() => {
-    fomoSseReconnectTimer = 0;
-    connectFomoSse();
-  }, fomoSseBackoff);
-  fomoSseBackoff = Math.min(120000, fomoSseBackoff * 2);
 }
 
-chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName !== 'local') return;
-  if (changes.fomoToken) {
-    const oldIdentity = fomoAccountIdentity(changes.fomoToken.oldValue);
-    const newIdentity = fomoAccountIdentity(changes.fomoToken.newValue);
-    const sameAccount = oldIdentity && newIdentity && oldIdentity === newIdentity;
-    if (!sameAccount) {
-      fomoAuthGeneration += 1;
-      fomoFollowedFeedCache = { ...emptyFomoFollowedFeed(), gapReason: 'account-baseline' };
-      fomoFollowedFeedCheckpoint = null;
-      fomoFollowingIdsCache = { ids: new Set(), fetchedAt: 0 };
-      fomoApiRetryAt = 0;
-      fomoApiFailures = 0;
-      fomoFollowedHoldersCache.clear();
-      fomoTradeDetailCache.clear();
-      fomoTokenTradeFallbackCache.clear();
-      fomoCache.clear();
-    }
+async function fetchJ7TrackerFomoFeed() {
+  const configured = await refreshJ7TrackerState(false);
+  if (!configured) {
+    const reason = j7TrackerHistoryError || 'not-connected';
+    const events = reason === 'network' ? j7TrackerFomoCache.map((event) => ({ ...event, stale: true })) : [];
+    return { ok: false, reason, events, stale: events.length > 0, source: 'j7tracker', fetchedAt: j7TrackerHistoryAt || 0 };
   }
-  if (!changes.monitor985SessionV1) return;
-  resetMonitor985EventCaches();
-  monitor985LastEventId = '';
-  fomoSseBackoff = 5000;
-  restartFomoSse();
-});
-
-
-const MARKED_FEED_URL = 'https://www.985monitor.xyz/marked-holdings.json';
-const MARKED_FEED_MIN_INTERVAL_MS = 120000;
-let markedFeedCache = { doc: null, fetchedAt: 0 };
-let markedFeedEtag = '';
-let markedFeedFailCount = 0;
-let markedFeedBackoffUntil = 0;
-let markedFeedInflight = null;
-
-async function fetchMarkedFeed() {
-  if (markedFeedInflight) return markedFeedInflight;
-  const now = Date.now();
-  if ((now - markedFeedCache.fetchedAt < MARKED_FEED_MIN_INTERVAL_MS || now < markedFeedBackoffUntil)) {
-    return markedFeedCache.doc ? { ok: true, ...markedFeedCache.doc, stale: true } : { ok: false, reason: 'not-ready' };
+  const refreshed = await refreshJ7TrackerHistory(false);
+  if (!refreshed) {
+    const reason = j7TrackerHistoryError || 'network';
+    const events = reason === 'network' ? j7TrackerFomoCache.map((event) => ({ ...event, stale: true })) : [];
+    return { ok: false, reason, events, stale: events.length > 0, source: 'j7tracker', fetchedAt: j7TrackerHistoryAt || 0 };
   }
-  markedFeedInflight = (async () => {
-    try {
-      const headers = markedFeedEtag ? { 'If-None-Match': markedFeedEtag } : {};
-      const response = await fetch(MARKED_FEED_URL, { headers, cache: 'no-store' });
-      if (response.status === 304) {
-        markedFeedCache.fetchedAt = Date.now();
-        markedFeedFailCount = 0;
-        return { ok: true, ...markedFeedCache.doc };
-      }
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const doc = await response.json();
-      if (!doc || !Array.isArray(doc.holdings)) throw new Error('bad-body');
-      markedFeedCache = { doc, fetchedAt: Date.now() };
-      markedFeedEtag = response.headers.get('ETag') || '';
-      markedFeedFailCount = 0;
-      markedFeedBackoffUntil = 0;
-      return { ok: true, ...doc };
-    } catch (error) {
-      markedFeedFailCount += 1;
-      markedFeedBackoffUntil = Date.now() + Math.min(15 * 60000, 60000 * Math.pow(2, markedFeedFailCount - 1));
-      if (markedFeedCache.doc) return { ok: true, ...markedFeedCache.doc, stale: true };
-      return { ok: false, reason: 'fetch-failed', message: String(error?.message || '').slice(0, 120) };
-    } finally {
-      markedFeedInflight = null;
-    }
-  })();
-  return markedFeedInflight;
+  return {
+    ok: true, events: j7TrackerFomoCache.slice(), source: 'j7tracker',
+    fetchedAt: j7TrackerHistoryAt || Date.now(), stale: false,
+  };
+}
+
+async function fetchJ7TrackerPumpFeed() {
+  const configured = await refreshJ7TrackerState(false);
+  if (!configured) {
+    const reason = j7TrackerHistoryError || 'not-connected';
+    const events = reason === 'network' ? j7TrackerPumpCache.map((event) => ({ ...event, stale: true })) : [];
+    return { ok: false, reason, events, stale: events.length > 0, source: 'j7tracker', fetchedAt: j7TrackerHistoryAt || 0 };
+  }
+  const refreshed = await refreshJ7TrackerHistory(false);
+  if (!refreshed) {
+    const reason = j7TrackerHistoryError || 'network';
+    const events = reason === 'network' ? j7TrackerPumpCache.map((event) => ({ ...event, stale: true })) : [];
+    return { ok: false, reason, events, stale: events.length > 0, source: 'j7tracker', fetchedAt: j7TrackerHistoryAt || 0 };
+  }
+  return {
+    ok: true, events: j7TrackerPumpCache.slice(), source: 'j7tracker',
+    fetchedAt: j7TrackerHistoryAt || Date.now(), stale: false,
+  };
 }
 
 const HOLDING_WATCH_PER_CHAIN_MAX = 100;
@@ -1852,10 +1838,53 @@ async function recordFomoPageHeartbeat(message, sender) {
   }
 }
 
+function resetFomoAccountCaches() {
+  fomoAuthGeneration += 1;
+  fomoApiRetryAt = 0;
+  fomoApiFailures = 0;
+  fomoFollowedFeedCache = emptyFomoFollowedFeed();
+  fomoFollowedFeedCheckpoint = null;
+  fomoFollowingIdsCache = { ids: new Set(), fetchedAt: 0 };
+  fomoFollowingIdsInflight = null;
+  fomoFollowedFeedInflight = null;
+  fomoCache.clear();
+  fomoFollowedHoldersCache.clear();
+  fomoTradeDetailCache.clear();
+  fomoTokenTradeFallbackCache.clear();
+  fomoTradeDetailInflight.clear();
+  fomoTokenTradeFallbackInflight.clear();
+  fomoTokenInflight.clear();
+  fomoPnlCache.clear();
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  if (changes.fomoToken) {
+    const previousAccount = fomoAccountIdentity(changes.fomoToken.oldValue);
+    const nextAccount = fomoAccountIdentity(changes.fomoToken.newValue);
+    if (previousAccount !== nextAccount) resetFomoAccountCaches();
+  }
+  if (changes.j7TrackerSessionV1) resetJ7TrackerCaches();
+});
+
+function isJ7TrackerSender(sender) {
+  try {
+    const hostname = new URL(String(sender?.url || sender?.tab?.url || '')).hostname;
+    return hostname === 'j7tracker.io';
+  } catch {
+    return false;
+  }
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type === '985-monitor-session-updated') {
-    refreshMonitor985Config(true)
-      .then((ok) => { restartFomoSse(); sendResponse({ ok: Boolean(ok) }); })
+  if (message?.type === 'j7tracker-session-updated') {
+    if (!isJ7TrackerSender(sender)) {
+      sendResponse({ ok: false });
+      return false;
+    }
+    resetJ7TrackerCaches();
+    refreshJ7TrackerState(true)
+      .then((ok) => sendResponse({ ok: Boolean(ok) }))
       .catch(() => sendResponse({ ok: false }));
     return true;
   }
@@ -1878,12 +1907,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message?.type === 'marked-holdings') {
-    fetchMarkedFeed()
-      .then(sendResponse)
-      .catch((error) => sendResponse({ ok: false, reason: 'error', message: String(error?.message || '') }));
-    return true;
-  }
 
   if (message?.type === 'holding-watch-update') {
     updateHoldingWatchList(message.payload || {})
@@ -1914,8 +1937,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === 'fomo-feed') {
-    connectFomoSse();
-    fetchFomoFeed()
+    fetchJ7TrackerFomoFeed()
       .then(sendResponse)
       .catch((error) => sendResponse({ ok: false, reason: 'error', message: String(error?.message || '') }));
     return true;
@@ -1936,8 +1958,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === 'pump-feed') {
-    connectFomoSse();
-    fetchPumpFeed()
+    fetchJ7TrackerPumpFeed()
       .then(sendResponse)
       .catch((error) => sendResponse({ ok: false, reason: 'error', message: String(error?.message || '') }));
     return true;

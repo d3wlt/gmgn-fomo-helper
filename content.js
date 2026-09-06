@@ -87,144 +87,6 @@
     return;
   }
 
-
-  if (/(^|\.)985monitor\.xyz$/.test(location.hostname)) {
-    const readJson = (key, fallback) => {
-      try {
-        const parsed = JSON.parse(window.localStorage.getItem(key) || fallback);
-        return parsed == null ? JSON.parse(fallback) : parsed;
-      } catch {
-        return JSON.parse(fallback);
-      }
-    };
-    const storageGet = (defaults) => new Promise((resolve) => {
-      try { chrome.storage.local.get(defaults, resolve); } catch { resolve(defaults); }
-    });
-    const storageSet = (values) => new Promise((resolve) => {
-      try { chrome.storage.local.set(values, resolve); } catch { resolve(); }
-    });
-    const accountKey = (value) => (/^0x/i.test(String(value || ''))
-      ? String(value || '').toLowerCase() : String(value || ''));
-    const pageAuth = () => {
-      try {
-        const wallet = String(window.localStorage.getItem('xMonitorWalletAddress') || '').trim();
-        const token = String(window.localStorage.getItem('xMonitorWalletToken') || '').trim();
-        return { wallet, token };
-      } catch {
-        return { wallet: '', token: '' };
-      }
-    };
-    const pagePrefs = () => {
-      let fomoMuted = readJson('xMonitorFomoMutedV1', '[]');
-      let fomoPrefs = readJson('xMonitorFomoPrefsV1', '{}');
-      let pumpMuted = readJson('xMonitorPumpMutedV1', '[]');
-      let pumpPrefs = readJson('xMonitorPumpPrefsV1', '{}');
-      if (!Array.isArray(fomoMuted)) fomoMuted = [];
-      if (!fomoPrefs || typeof fomoPrefs !== 'object' || Array.isArray(fomoPrefs)) fomoPrefs = {};
-      if (!Array.isArray(pumpMuted)) pumpMuted = [];
-      if (!pumpPrefs || typeof pumpPrefs !== 'object' || Array.isArray(pumpPrefs)) pumpPrefs = {};
-      let onlyMine = true;
-      try { onlyMine = window.localStorage.getItem('xMonitorPumpOnlyMineV1') !== 'false'; } catch {}
-      return {
-        fomo: { muted: fomoMuted, prefs: fomoPrefs },
-        pump: { muted: pumpMuted, prefs: pumpPrefs, onlyMine },
-      };
-    };
-    const applyAccountConfig = async (config, session) => {
-      if (!config?.connected || !config?.account?.userId) return;
-      const at = Date.now();
-      const expiresAt = Number(session?.expiresAt || config.sessionExpiresAt) || 0;
-      await storageSet({
-        monitorFomoConfig: { ...(config.fomo || {}), wallet: config.account.userId, connected: true, revision: config.revision, at },
-        monitorPumpConfig: { ...(config.pump || {}), wallet: config.account.userId, connected: true, revision: config.revision, at },
-        monitor985SyncStateV1: {
-          connected: true,
-          accountId: config.account.userId,
-          displayName: String(config.account.displayName || ''),
-          syncedAt: at,
-          expiresAt,
-        },
-      });
-    };
-    const pageHeaders = ({ wallet, token }) => ({
-      'Content-Type': 'application/json',
-      'X-User-Id': wallet,
-      'X-User-Token': token,
-      'X-Wallet-Address': wallet,
-    });
-    let syncInflight = null;
-    let lastPrefsStamp = '';
-    let lastFullSyncAt = 0;
-    const syncAccount = async (force = false) => {
-      if (syncInflight) return syncInflight;
-      syncInflight = (async () => {
-        const auth = pageAuth();
-        const stored = await storageGet({ monitor985SessionV1: null, monitor985ClientIdV1: '', monitor985SyncStateV1: null });
-        let clientId = String(stored.monitor985ClientIdV1 || '').trim();
-        if (!clientId) {
-          clientId = typeof crypto.randomUUID === 'function'
-            ? crypto.randomUUID() : `chrome-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-          await storageSet({ monitor985ClientIdV1: clientId });
-        }
-        const session = stored.monitor985SessionV1;
-        const sameAccount = accountKey(session?.accountId) === accountKey(auth.wallet);
-        const sessionFresh = sameAccount && session?.token && Number(session.expiresAt) > Date.now() + 24 * 60 * 60 * 1000;
-        if (!auth.wallet || !auth.token) {
-          if (!sessionFresh) {
-            await storageSet({ monitor985SyncStateV1: { connected: false, reason: 'login-required', checkedAt: Date.now() } });
-          }
-          return;
-        }
-        const prefs = pagePrefs();
-        const prefsStamp = JSON.stringify(prefs);
-        const needsRebind = !sessionFresh || stored.monitor985SyncStateV1?.reason === 'unauthorized';
-        const periodic = Date.now() - lastFullSyncAt >= 3 * 60 * 1000;
-        if (!force && !needsRebind && prefsStamp === lastPrefsStamp && !periodic) return;
-        const endpoint = needsRebind ? '/api/extension/session' : '/api/extension/prefs';
-        const payload = needsRebind ? { clientId, prefs } : { prefs };
-        const response = await fetch(endpoint, {
-          method: 'POST',
-          headers: pageHeaders(auth),
-          cache: 'no-store',
-          body: JSON.stringify(payload),
-        });
-        const body = await response.json().catch(() => null);
-        if (!response.ok || body?.ok !== true || !body?.config) {
-          if (response.status === 401) {
-            await storageSet({ monitor985SyncStateV1: { connected: false, reason: 'login-required', checkedAt: Date.now() } });
-          }
-          return;
-        }
-        let activeSession = session;
-        if (body.session?.token) {
-          activeSession = {
-            token: body.session.token,
-            clientId: body.session.clientId || clientId,
-            expiresAt: Number(body.session.expiresAt) || 0,
-            accountId: body.config.account.userId,
-          };
-          await storageSet({ monitor985SessionV1: activeSession });
-        }
-        await applyAccountConfig(body.config, activeSession);
-        lastPrefsStamp = prefsStamp;
-        lastFullSyncAt = Date.now();
-        try {
-          chrome.runtime.sendMessage({ type: '985-monitor-session-updated' }, () => void chrome.runtime.lastError);
-        } catch {}
-      })().catch(() => {
-      }).finally(() => { syncInflight = null; });
-      return syncInflight;
-    };
-    syncAccount(true);
-    window.setInterval(() => syncAccount(false), 15000);
-    window.addEventListener('focus', () => syncAccount(true));
-    window.addEventListener('storage', () => syncAccount(false));
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') syncAccount(false);
-    });
-    return;
-  }
-
   const CARD_SELECTOR =
     '[data-testid="trench-token-card"], [data-sentry-source-file="TokenItem.tsx"][href*="/token/0x"]';
   const CALLOUT_SELECTOR = '[data-sentry-component="CalloutItem"]';
@@ -268,7 +130,7 @@
     enableFomoFeed: true,
     enablePumpFeed: true,
     fomoFeedChainOnly: false,
-    fomoFeedTypes: { buy: true, sell: true, swap: true, thesis: true, transferIn: true, refund: true },
+    fomoFeedTypes: { buy: true, sell: true, thesis: true },
     specialWallets: [],
     highlightColor: '#f5b83d',
   };
@@ -1421,31 +1283,7 @@ Select to open Flap tax details`;
       const list = next.get(key);
       if (!list.includes(label)) list.push(label);
     };
-    const covered = new Set();
-    try {
-      const server = await new Promise((resolve) => {
-        try {
-          chrome.runtime.sendMessage({ type: 'marked-holdings' }, (resp) => {
-            resolve(chrome.runtime.lastError ? null : resp);
-          });
-        } catch {
-          resolve(null);
-        }
-      });
-      if (server?.ok && Array.isArray(server.holdings)) {
-        const nameOf = new Map(people.map((p2) => [p2.address.toLowerCase(), p2.name]));
-        for (const h of server.holdings) {
-          if (h?.chain !== chain) continue;
-          const person = String(h.a || '').toLowerCase();
-          if (!nameOf.has(person)) continue;
-          covered.add(person);
-          if (!(Number(h.u) >= MARKED_MIN_USD)) continue;
-          put(h.t, `${nameOf.get(person)}(${fomoUsd(h.u)})`);
-        }
-      }
-    } catch {
-    }
-    const rest = people.filter((p2) => !covered.has(p2.address.toLowerCase()));
+    const rest = people;
     const apiQuery = rest.length ? gmgnApiQuery() : '';
     const accessToken = rest.length ? gmgnAccessToken() : '';
     try {
@@ -5727,18 +5565,13 @@ Select to open Flap tax details`;
   const FOMO_FEED_TAGS = {
     buy: { label: 'Buy', cls: 'is-buy' },
     sell: { label: 'Sell', cls: 'is-sell' },
-    swap: { label: 'Swap', cls: 'is-swap' },
     thesis: { label: 'Narrative', cls: 'is-thesis' },
-    transferIn: { label: 'Transfer in', cls: 'is-transfer' },
-    refund: { label: 'Refund / failed', cls: 'is-refund' },
+    callout: { label: 'Callout', cls: 'is-callout' },
+    reply: { label: 'Reply', cls: 'is-reply' },
   };
   const FOMO_FEED_MARKERS = {
     followed: { label: 'Following', icon: '★' },
   };
-  const PUMP_FEED_DEFAULT_TOKEN_FILTERS = new Set([
-    'SPCXB', 'SKHYB', 'SPYB', 'XAUT', 'QQQB', 'NVDAB', 'AAPLB', 'TSLAB',
-    'MSFTB', 'GOOGLB', 'HOODB', 'BABAB', 'GMEB', 'NFLXB', 'MSTRB', 'DJTB',
-  ]);
   let fomoFeedEvents = [];
   let fomoFollowedEvents = [];
   let pumpFeedEvents = [];
@@ -5748,74 +5581,21 @@ Select to open Flap tax details`;
   let fomoFeedLastPollAt = 0;
   let fomoFollowedLastPollAt = 0;
   let pumpFeedLastPollAt = 0;
-  let pumpDefaultWallets = new Set();
-  let monitorFomoCfg = {
-    connected: false, muted: new Set(), prefs: {}, watch: new Set(), filters: {},
-    tokenFilters: new Set(PUMP_FEED_DEFAULT_TOKEN_FILTERS), globalTradeMinUsd: 10,
-    wallet: '', at: 0,
-  };
-  let monitorPumpCfg = {
-    connected: false, muted: new Set(), prefs: {}, watch: new Set(), filters: {},
-    tokenFilters: new Set(PUMP_FEED_DEFAULT_TOKEN_FILTERS), onlyMine: true,
-    globalTradeMinUsd: 10, at: 0,
-  };
+  let j7TrackerFomoCfg = { connected: false, trackedCount: 0, at: 0 };
+  let j7TrackerPumpCfg = { connected: false, trackedCount: 0, at: 0 };
 
-  function loadMonitorFomoCfg(raw) {
-    const muted = new Set(
-      (Array.isArray(raw?.muted) ? raw.muted : []).map((h) => String(h || '').toLowerCase()).filter(Boolean),
-    );
-    const prefs = raw?.prefs && typeof raw.prefs === 'object' && !Array.isArray(raw.prefs) ? raw.prefs : {};
-    const watch = new Set(
-      (Array.isArray(raw?.watch) ? raw.watch : []).map((h) => String(h || '').toLowerCase()).filter(Boolean),
-    );
-    const filters = raw?.filters && typeof raw.filters === 'object' && !Array.isArray(raw.filters) ? raw.filters : {};
-    const tokenValues = Array.isArray(raw?.tokenFilters)
-      ? raw.tokenFilters : [...PUMP_FEED_DEFAULT_TOKEN_FILTERS];
-    const tokenFilters = new Set(tokenValues.map(pumpFeedTokenKey).filter(Boolean));
-    const globalTradeMinUsd = Number(raw?.globalTradeMinUsd);
-    monitorFomoCfg = {
+  function loadJ7TrackerFomoCfg(raw) {
+    j7TrackerFomoCfg = {
       connected: raw?.connected === true,
-      muted,
-      prefs,
-      watch,
-      filters,
-      tokenFilters,
-      globalTradeMinUsd: Number.isFinite(globalTradeMinUsd) && globalTradeMinUsd >= 0 ? globalTradeMinUsd : 10,
-      wallet: String(raw?.wallet || ''),
+      trackedCount: Math.max(0, Number(raw?.trackedCount) || 0),
       at: Number(raw?.at) || 0,
     };
   }
 
-  function pumpFeedTokenKey(raw) {
-    const value = String(raw || '').trim();
-    if (/^0x[a-fA-F0-9]{40}$/.test(value)) return value.toLowerCase();
-    if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value)) return value;
-    const symbol = value.replace(/^\$+/, '').toUpperCase();
-    return /^[A-Z0-9._-]{1,20}$/.test(symbol) ? symbol : '';
-  }
-
-  function loadMonitorPumpCfg(raw) {
-    const muted = new Set(
-      (Array.isArray(raw?.muted) ? raw.muted : []).map((item) => String(item || '')).filter(Boolean),
-    );
-    const prefs = raw?.prefs && typeof raw.prefs === 'object' && !Array.isArray(raw.prefs) ? raw.prefs : {};
-    const watch = new Set(
-      (Array.isArray(raw?.watch) ? raw.watch : []).map((item) => String(item || '')).filter(Boolean),
-    );
-    const filters = raw?.filters && typeof raw.filters === 'object' && !Array.isArray(raw.filters) ? raw.filters : {};
-    const tokenValues = Array.isArray(raw?.tokenFilters)
-      ? raw.tokenFilters : [...PUMP_FEED_DEFAULT_TOKEN_FILTERS];
-    const tokenFilters = new Set(tokenValues.map(pumpFeedTokenKey).filter(Boolean));
-    const globalTradeMinUsd = Number(raw?.globalTradeMinUsd);
-    monitorPumpCfg = {
+  function loadJ7TrackerPumpCfg(raw) {
+    j7TrackerPumpCfg = {
       connected: raw?.connected === true,
-      muted,
-      prefs,
-      watch,
-      filters,
-      tokenFilters,
-      onlyMine: raw?.onlyMine !== false,
-      globalTradeMinUsd: Number.isFinite(globalTradeMinUsd) && globalTradeMinUsd >= 0 ? globalTradeMinUsd : 10,
+      trackedCount: Math.max(0, Number(raw?.trackedCount) || 0),
       at: Number(raw?.at) || 0,
     };
   }
@@ -5832,45 +5612,12 @@ Select to open Flap tax details`;
     if (types[ev.type] === false) return false;
     if (ev.addr && isTokenBlocked(ev.addr)) return false;
     if (ev?.source === 'fomo-followed') return ev.followed === true;
-    const symbolKey = pumpFeedTokenKey(ev.symbol);
-    const addressKey = pumpFeedTokenKey(ev.addr);
-    if ((symbolKey && monitorFomoCfg.tokenFilters.has(symbolKey))
-      || (addressKey && monitorFomoCfg.tokenFilters.has(addressKey))) return false;
-    if (!monitorFomoCfg.connected) return false;
-    if (!monitorFomoCfg.watch.has(ev.handle)) return false;
-    if (monitorFomoCfg.muted.has(ev.handle)) return false;
-    const pref = monitorFomoCfg.prefs[ev.handle];
-    if (pref?.types && pref.types[ev.type] === false) return false;
-    const personal = Number(monitorFomoCfg.filters?.[ev.handle]?.minTradeUsd
-      ?? monitorFomoCfg.filters?.[ev.handle]);
-    const minUsd = Math.max(
-      monitorFomoCfg.globalTradeMinUsd,
-      Number.isFinite(personal) && personal > 0 ? personal : 0,
-    );
-    if (minUsd > 0 && Number(ev.usd) > 0 && Number(ev.usd) < minUsd) return false;
-    return true;
+    return ev?.source === 'j7-fomo' && j7TrackerFomoCfg.connected;
   }
 
   function pumpFeedEventAllowed(ev) {
-    if (!monitorPumpCfg.connected) return false;
-    const wallet = String(ev?.pumpWallet || '');
-    if (!wallet || monitorPumpCfg.muted.has(wallet)) return false;
-    if (monitorPumpCfg.prefs?.[wallet]?.types?.[ev.type] === false) return false;
+    if (ev?.source !== 'j7-pump' || !j7TrackerPumpCfg.connected) return false;
     if (ev.addr && isTokenBlocked(ev.addr)) return false;
-    const symbolKey = pumpFeedTokenKey(ev.symbol);
-    const addressKey = pumpFeedTokenKey(ev.addr);
-    if ((symbolKey && monitorPumpCfg.tokenFilters.has(symbolKey))
-      || (addressKey && monitorPumpCfg.tokenFilters.has(addressKey))) return false;
-    const personal = Number(monitorPumpCfg.filters?.[wallet]?.minTradeUsd
-      ?? monitorPumpCfg.filters?.[wallet]);
-    const minUsd = Math.max(
-      monitorPumpCfg.globalTradeMinUsd,
-      Number.isFinite(personal) && personal > 0 ? personal : 0,
-    );
-    if (minUsd > 0 && Number(ev.usd) > 0 && Number(ev.usd) < minUsd) return false;
-    if (monitorPumpCfg.onlyMine) {
-      return monitorPumpCfg.watch.has(wallet) || pumpDefaultWallets.has(wallet);
-    }
     return true;
   }
 
@@ -5920,7 +5667,7 @@ Select to open Flap tax details`;
     if (chain && row.chain && chain !== row.chain) return false;
     const ts = Number(ev?.ts) || 0;
     if (!ts || !row.ts || Math.abs(ts - row.ts) > 15000) return false;
-    if (ev?.source === 'pump') {
+    if (ev?.source === 'j7-pump') {
       const wallet = trackingFeedNormalizedAddress(ev?.pumpWallet);
       if (!wallet || !row.maker || wallet !== row.maker) return false;
     }
@@ -5967,7 +5714,8 @@ Select to open Flap tax details`;
       chrome.runtime.sendMessage({ type: 'fomo-feed' }, (resp) => {
         if (chrome.runtime.lastError) return;
         if (!resp?.ok) {
-          if (resp?.reason === 'not-connected') { fomoFeedEvents = []; scheduleScan(); }
+          fomoFeedEvents = resp?.stale && Array.isArray(resp.events) ? resp.events : [];
+          scheduleScan();
           return;
         }
         fomoFeedEvents = Array.isArray(resp.events) ? resp.events : [];
@@ -6042,8 +5790,15 @@ Select to open Flap tax details`;
   }
 
   function trackingFeedProfileMeta(ev) {
-    if (ev?.source === 'pump') {
-      return { source: 'Pump', title: 'Open Pump profile', url: String(ev.profileUrl || '') };
+    if (ev?.source === 'j7-pump') {
+      return { source: `J7 · Pump${ev?.stale ? ' · stale' : ''}`, title: 'Tracked on J7Tracker', url: ev?.profileUrl || 'https://j7tracker.io/' };
+    }
+    if (ev?.source === 'j7-fomo') {
+      return {
+        source: `J7 · FOMO${ev?.stale ? ' · stale' : ''}`,
+        title: `@${ev?.handle || ''} · Tracked on J7Tracker`,
+        url: ev?.profileUrl || 'https://j7tracker.io/',
+      };
     }
     if (ev?.source === 'fomo-followed') {
       return {
@@ -6146,7 +5901,7 @@ Select to open Flap tax details`;
     row.append(time, who, sym, amt, mc);
     card.appendChild(row);
 
-    if ((ev.type === 'thesis' || ev.type === 'refund') && ev.comment) {
+    if (['thesis', 'refund', 'callout', 'reply'].includes(ev.type) && ev.comment) {
       const text = document.createElement('div');
       text.className = 'gdh-fomofeed__thesis';
       text.textContent = ev.comment;
@@ -6159,9 +5914,10 @@ Select to open Flap tax details`;
     const tag = FOMO_FEED_TAGS[ev.type] || { label: 'fomo', cls: '' };
     const profile = trackingFeedProfileMeta(ev);
     const card = document.createElement('div');
-    card.className = `gdh-fomofeed ${tag.cls}${ev.source === 'pump' ? ' is-pump' : ''}${ev.source === 'fomo-followed' ? ' is-followed' : ''}`;
+    card.className = `gdh-fomofeed ${tag.cls}${ev.source === 'j7-pump' ? ' is-pump' : ''}${ev.source === 'fomo-followed' ? ' is-followed' : ''}`;
     card.dataset.gdhFomoKey = ev.key;
     card.dataset.gdhFeedSource = ev.source || 'fomo';
+    card.dataset.gdhFomoStale = ev.stale ? '1' : '0';
 
     if (ev.chain) {
       const stripe = document.createElement('span');
@@ -6260,7 +6016,7 @@ Select to open Flap tax details`;
     }
     card.appendChild(r2);
 
-    if ((ev.type === 'thesis' || ev.type === 'refund') && ev.comment) {
+    if (['thesis', 'refund', 'callout', 'reply'].includes(ev.type) && ev.comment) {
       const text = document.createElement('div');
       text.className = 'gdh-fomofeed__thesis';
       text.textContent = ev.comment;
@@ -6292,6 +6048,12 @@ Select to open Flap tax details`;
 
   function fomoFeedCardFor(ev) {
     let el = fomoFeedCards.get(ev.key);
+    if (el instanceof HTMLElement && el.dataset.gdhFomoStale !== (ev.stale ? '1' : '0')) {
+      const replacement = buildFomoFeedCard(ev);
+      if (el.isConnected) el.replaceWith(replacement);
+      el = replacement;
+      fomoFeedCards.set(ev.key, el);
+    }
     if (!el || !(el instanceof HTMLElement)) {
       el = buildFomoFeedCard(ev);
       fomoFeedCards.set(ev.key, el);
@@ -6343,14 +6105,11 @@ Select to open Flap tax details`;
       chrome.runtime.sendMessage({ type: 'pump-feed' }, (resp) => {
         if (chrome.runtime.lastError) return;
         if (!resp?.ok) {
-          if (resp?.reason === 'not-connected') { pumpFeedEvents = []; pumpDefaultWallets = new Set(); scheduleScan(); }
+          pumpFeedEvents = resp?.stale && Array.isArray(resp.events) ? resp.events : [];
+          scheduleScan();
           return;
         }
         pumpFeedEvents = Array.isArray(resp.events) ? resp.events : [];
-        pumpDefaultWallets = new Set(
-          (Array.isArray(resp.defaultWallets) ? resp.defaultWallets : [])
-            .map((item) => String(item || '')).filter(Boolean),
-        );
         scheduleScan();
       });
     } catch {
@@ -6910,9 +6669,9 @@ Select to open Flap tax details`;
     scheduleScan();
   });
 
-  chrome.storage.local.get({ monitorFomoConfig: null, monitorPumpConfig: null }, (stored) => {
-    if (stored?.monitorFomoConfig) loadMonitorFomoCfg(stored.monitorFomoConfig);
-    if (stored?.monitorPumpConfig) loadMonitorPumpCfg(stored.monitorPumpConfig);
+  chrome.storage.local.get({ j7TrackerFomoConfigV1: null, j7TrackerPumpConfigV1: null }, (stored) => {
+    if (stored?.j7TrackerFomoConfigV1) loadJ7TrackerFomoCfg(stored.j7TrackerFomoConfigV1);
+    if (stored?.j7TrackerPumpConfigV1) loadJ7TrackerPumpCfg(stored.j7TrackerPumpConfigV1);
   });
 
   chrome.storage.local.get({
@@ -6995,12 +6754,12 @@ Select to open Flap tax details`;
         renderFomoStats();
         continue;
       }
-      if (key === 'monitorFomoConfig') {
-        loadMonitorFomoCfg(change.newValue);
+      if (key === 'j7TrackerFomoConfigV1') {
+        loadJ7TrackerFomoCfg(change.newValue);
         continue;
       }
-      if (key === 'monitorPumpConfig') {
-        loadMonitorPumpCfg(change.newValue);
+      if (key === 'j7TrackerPumpConfigV1') {
+        loadJ7TrackerPumpCfg(change.newValue);
         continue;
       }
       if (key === 'markedListMigratedV2') continue;

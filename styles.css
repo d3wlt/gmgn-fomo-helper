@@ -2280,6 +2280,8 @@ a[data-sentry-component="TrackerListItem"] > .gdh-star-button,
 .gdh-fomofeed.is-sell .gdh-fomofeed__tag { color: #f87171; }
 .gdh-fomofeed.is-swap .gdh-fomofeed__tag { color: #eab308; }
 .gdh-fomofeed.is-thesis .gdh-fomofeed__tag { color: #c084fc; }
+.gdh-fomofeed.is-callout .gdh-fomofeed__tag { color: #22d3ee; }
+.gdh-fomofeed.is-reply .gdh-fomofeed__tag { color: #60a5fa; }
 
 .gdh-fomofeed.is-transfer .gdh-fomofeed__tag { color: #94a3b8; }
 .gdh-fomofeed.is-refund .gdh-fomofeed__tag { color: #fb923c; }
@@ -2341,7 +2343,9 @@ a[data-sentry-component="TrackerListItem"] > .gdh-star-button,
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .gdh-fomofeed.is-thesis,
-.gdh-fomofeed.is-refund { height: auto; min-height: 64.5px; }
+.gdh-fomofeed.is-refund,
+.gdh-fomofeed.is-callout,
+.gdh-fomofeed.is-reply { height: auto; min-height: 64.5px; }
 .gdh-fomofeed__thesis {
   color: color-mix(in srgb, currentColor 78%, transparent); font-size: 12px; line-height: 1.5;
   white-space: pre-wrap; word-break: break-word;

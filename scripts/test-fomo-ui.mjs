@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 // Execute production helpers, not reimplementations. DOM stubs below cover only
 // text rendering; full script/lifecycle/geometry tests live in test-fomo-browser.
 const root = new URL('../', import.meta.url);
+const manifestVersion = JSON.parse(fs.readFileSync(new URL('manifest.json', root), 'utf8')).version;
 let passed = 0;
 function check(label, fn) { fn(); passed++; console.log(`PASS ${label}`); }
 function section(source, start, end) {
@@ -18,7 +19,7 @@ for (const file of ['content.js', 'debot-content.js']) {
   const source = fs.readFileSync(new URL(file, root), 'utf8');
   const list = { children: [], replaceChildren(...children) { this.children = children; } };
   const context = vm.createContext({
-    Date, Number, chrome: { runtime: { getManifest: () => ({ version: '0.50.1' }) } },
+    Date, Number, chrome: { runtime: { getManifest: () => ({ version: manifestVersion }) } },
     document: { createElement: () => ({ textContent: '', className: '' }) },
     fomoUiRoute: () => ({ chain: 'eth', address: 'SECRET_ADDRESS' }),
     fomoUiTab: () => 'swaps', fomoUiPanel: () => ({ querySelector: () => list }),
@@ -43,7 +44,7 @@ for (const file of ['content.js', 'debot-content.js']) {
     run("fomoUi.meta = fomoUiMeta(response); fomoUi.error = fomoUiError({reason:'SECRET_ERROR',message:'SECRET_MESSAGE'});");
     const diagnostics = plain(run('fomoUiDiagnostics()'));
     assert.deepEqual(Object.keys(diagnostics).sort(), ['chain', 'coverage', 'source', 'status', 'tab', 'timestamps', 'version']);
-    assert.equal(diagnostics.version, '0.50.1'); assert.equal(diagnostics.status, 'unavailable');
+    assert.equal(diagnostics.version, manifestVersion); assert.equal(diagnostics.status, 'unavailable');
     assert.doesNotMatch(JSON.stringify(diagnostics), /SECRET/);
     context.fomoUiRoute = () => ({ chain: 'SECRET_CHAIN' });
     context.fomoUiTab = () => 'SECRET_TAB';
