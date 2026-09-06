@@ -18,8 +18,20 @@ def build(tag=None):
     if tag is not None and tag != f"v{version}":
         raise ValueError("Tag and manifest version differ")
     note = ROOT / "release-notes" / f"v{version}.md"
-    if not note.read_text().startswith(f"# better gmgn v{version}\n"):
+    note_content = note.read_text()
+    if not note_content.startswith(f"# better gmgn v{version}\n"):
         raise ValueError("Missing or mismatched release notes")
+    required_sections = (
+        "# better gmgn",
+        "## Highlights",
+        "## Installation",
+        "## Usage",
+        "## Updating",
+        "## Security and privacy",
+    )
+    missing_sections = [section for section in required_sections if section not in note_content]
+    if missing_sections:
+        raise ValueError(f"Release notes are missing section: {missing_sections[0]}")
     source = (ROOT / "scripts" / "build-release.ps1").read_text()
     block = re.search(r"\$files = @\((.*?)\n\)", source, re.S)
     if block is None:
