@@ -913,3 +913,87 @@ tr[data-gdh-debot-special-rainbow="1"] > td {
 @media (prefers-reduced-motion: reduce) {
   .gdh-debot-feed__row.is-new { animation: none; }
 }
+
+
+/* Trust/recovery UI is outside scrollable rows and virtual tracker layout. */
+.gdh-fomo-ui {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--fomo-ui-border);
+  color: var(--fomo-ui-text);
+  font: 400 12px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow-wrap: anywhere;
+}
+.gdh-fomo-ui:empty { display: none; }
+.gdh-fomo-ui__status { color: var(--fomo-ui-muted); }
+.gdh-fomo-ui__note { margin-top: 5px; color: var(--fomo-ui-warning); }
+.gdh-fomo-ui__activity { margin-top: 5px; }
+.gdh-fomo-ui__controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.gdh-fomo-ui__controls button {
+  box-sizing: border-box;
+  min-height: 28px;
+  max-width: 100%;
+  padding: 3px 8px;
+  border: 1px solid var(--fomo-ui-border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fomo-ui-text);
+  font: inherit;
+  line-height: 1.5;
+  white-space: normal;
+  cursor: pointer;
+}
+.gdh-fomo-ui__controls button:hover:not(:disabled),
+.gdh-fomo-ui__controls button[aria-pressed="true"] {
+  color: var(--fomo-ui-accent);
+  border-color: var(--fomo-ui-accent);
+  background: rgba(245, 184, 61, .08);
+}
+.gdh-fomo-ui__controls button:disabled { color: var(--fomo-ui-muted); cursor: not-allowed; }
+.gdh-fomo-ui__empty { padding: 22px 12px; color: var(--fomo-ui-muted); font-size: 12px; line-height: 1.5; text-align: center; }
+.gdh-fomo-feed-gap {
+  position: fixed;
+  z-index: 2147482940;
+  left: 12px;
+  bottom: 12px;
+  box-sizing: border-box;
+  max-width: calc(100vw - 24px);
+  padding: 6px 10px;
+  border: 1px solid rgba(245, 184, 61, .35);
+  border-radius: 6px;
+  background: #14171c;
+  color: #e5c483;
+  font: 400 12px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow-wrap: anywhere;
+}
+.gdh-fomo-feed-gap:focus-visible { outline: 2px solid #f5b83d; outline-offset: 2px; }
+
+.gdh-debot-fomo {
+  --fomo-ui-text: var(--text-primary, #e8ecf3);
+  --fomo-ui-muted: var(--text-secondary, #a2aab7);
+  --fomo-ui-warning: #e5c483;
+  --fomo-ui-accent: var(--text-brand, #f5b83d);
+  --fomo-ui-border: var(--border-default, rgba(139, 147, 161, .32));
+}
+.gdh-debot-fomo__bar { flex-wrap: wrap; padding-top: 6px; padding-bottom: 6px; }
+.gdh-debot-fomo__tabs { flex-wrap: wrap; min-width: 0; }
+.gdh-debot-fomo__bar button, .gdh-debot-fomo__bar a { min-height: 28px; }
+.gdh-debot-fomo__fold, .gdh-debot-fomo__close, .gdh-debot-fomo__external { min-width: 24px; padding-left: 4px; padding-right: 4px; box-sizing: border-box; }
+.gdh-debot-fomo__tabs button { padding: 0 5px; }
+.gdh-debot-fomo button:focus-visible, .gdh-debot-fomo a:focus-visible { outline: 2px solid var(--text-brand, #f5b83d); outline-offset: 2px; }
+.gdh-debot-fomo.is-folded .gdh-fomo-ui { display: none; }
+.gdh-debot-fomo__item-head { flex-wrap: wrap; }
+.gdh-debot-fomo__side, .gdh-debot-fomo__position {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  font-weight: 600;
+}
+.gdh-debot-fomo__side.is-buy { color: var(--success-10, #43c07a); background: rgba(67, 192, 122, .1); }
+.gdh-debot-fomo__side.is-sell { color: var(--error-10, #ef5350); background: rgba(239, 83, 80, .1); }
+.gdh-debot-fomo__position { color: var(--text-secondary, #c6cbd4); background: var(--bg-dialog-component, rgba(139, 147, 161, .12)); }
+.gdh-debot-fomo__size { font-variant-numeric: tabular-nums; white-space: nowrap; }

@@ -1,0 +1,12 @@
+{
+  "name": "better-gmgn-private",
+  "private": true,
+  "scripts": {
+    "test": "node scripts/verify-audit-fixes.mjs && node scripts/test-fomo-data.mjs && node scripts/test-fomo-ui.mjs",
+    "test:browser": "node scripts/test-fomo-browser.mjs && node scripts/test-extension.mjs",
+    "check": "node scripts/check-syntax.mjs",
+    "verify": "npm run check && npm test && npm run test:browser"
+  },
+  "engines": { "node": ">=22" },
+  "devDependencies": { "playwright": "1.63.0" }
+}

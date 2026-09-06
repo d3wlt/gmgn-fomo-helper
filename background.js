@@ -296,10 +296,47 @@ function slimFomoFollowedEvent(raw, followedIds) {
 
 const FOMO_FOLLOWED_FEED_MIN_INTERVAL_MS = 15000;
 const FOMO_FOLLOWING_IDS_CACHE_MS = 120000;
-let fomoFollowedFeedCache = { events: [], updatedAt: 0, fetchedAt: 0 };
+// Checkpoints are intentionally memory-only: a worker restart is NOT continuous coverage.
+const FOMO_FOLLOWED_FEED_PAGE_LIMIT = 100;
+const FOMO_FOLLOWED_FEED_MAX_PAGES = 5;
+function emptyFomoFollowedFeed() {
+  return { events: [], updatedAt: 0, fetchedAt: 0, coverageGap: true, gapReason: 'restart-baseline' };
+}
+let fomoFollowedFeedCache = emptyFomoFollowedFeed();
+let fomoFollowedFeedCheckpoint = null;
 let fomoFollowingIdsCache = { ids: new Set(), fetchedAt: 0 };
+let fomoFollowingIdsInflight = null;
 let fomoFollowedFeedInflight = null;
 let fomoAuthGeneration = 0;
+let fomoApiRetryAt = 0;
+let fomoApiFailures = 0;
+
+function fomoFailure(reason, status, retryAt) {
+  return Object.assign(new Error(reason), { reason, ...(status ? { status } : {}), ...(retryAt ? { retryAt } : {}) });
+}
+
+function fomoCheckResponse(res, body) {
+  if ([401, 403, 430, 431].includes(res.status) || fomoBodyUnauthed(body)) {
+    throw fomoFailure('not-connected', res.status);
+  }
+  if (!res.ok || fomoBodyFailed(body)) {
+    throw fomoFailure('fetch-failed', res.status, fomoApiRetryAt);
+  }
+}
+
+function fomoEventCheckpoint(raw) {
+  // Only an actual event ID is a checkpoint; trade IDs can cover multiple swaps.
+  const id = String(raw?.id || raw?.key || '').trim();
+  const ts = Date.parse(raw?.createdAt || raw?.timestamp || '') || Number(raw?.ts) || 0;
+  return id && ts ? { id, ts } : null;
+}
+
+function fomoAnnotateFollowing(items, ids) {
+  return items.map((item) => ({
+    ...item,
+    followed: ids ? ids.has(String(item?.user?.id || item?.userId || item?.authorId || item?.body?.userId || item?.body?.authorId || '').trim()) : null,
+  }));
+}
 
 function fomoAccountIdentity(record) {
   const token = String(record?.token || '');
@@ -316,64 +353,122 @@ function fomoAccountIdentity(record) {
 }
 
 async function fetchFomoFollowingIds(force = false) {
-  if (!force && Date.now() - fomoFollowingIdsCache.fetchedAt < FOMO_FOLLOWING_IDS_CACHE_MS) {
+  if (!force && fomoFollowingIdsCache.fetchedAt && Date.now() - fomoFollowingIdsCache.fetchedAt < FOMO_FOLLOWING_IDS_CACHE_MS) {
     return fomoFollowingIdsCache.ids;
   }
   const generation = fomoAuthGeneration;
-  const { res } = await fomoAuthedFetch('/v2/users/current/followingIds');
-  const body = await res.json().catch(() => null);
-  if (generation !== fomoAuthGeneration) throw new Error('not-connected');
-  if (!res.ok || fomoBodyUnauthed(body) || fomoBodyFailed(body)) {
-    const unauth = [401, 403, 430, 431].includes(res.status) || fomoBodyUnauthed(body);
-    throw new Error(unauth ? 'not-connected' : `HTTP ${res.status}`);
-  }
-  const values = body?.responseObject?.followingIds || body?.followingIds || [];
-  const ids = new Set((Array.isArray(values) ? values : []).map((value) => String(value || '').trim()).filter(Boolean));
-  fomoFollowingIdsCache = { ids, fetchedAt: Date.now() };
-  return ids;
+  if (fomoFollowingIdsInflight?.generation === generation) return fomoFollowingIdsInflight.promise;
+  const promise = (async () => {
+    try {
+      const { res } = await fomoAuthedFetch('/v2/users/current/followingIds');
+      const body = await res.json().catch(() => null);
+      if (generation !== fomoAuthGeneration) throw fomoFailure('not-connected');
+      fomoCheckResponse(res, body);
+      const values = body?.responseObject?.followingIds ?? body?.followingIds;
+      if (!Array.isArray(values)) throw fomoFailure('invalid-response');
+      const ids = new Set(values.map((value) => String(value || '').trim()).filter(Boolean));
+      fomoFollowingIdsCache = { ids, fetchedAt: Date.now() };
+      return ids;
+    } finally {
+      if (fomoFollowingIdsInflight?.promise === promise) fomoFollowingIdsInflight = null;
+    }
+  })();
+  fomoFollowingIdsInflight = { generation, promise };
+  return promise;
 }
 
 async function fetchFomoFollowedFeed() {
-  if (fomoFollowedFeedInflight?.generation === fomoAuthGeneration) {
-    return fomoFollowedFeedInflight.promise;
-  }
-  if (Date.now() - fomoFollowedFeedCache.fetchedAt < FOMO_FOLLOWED_FEED_MIN_INTERVAL_MS) {
-    return { ok: true, ...fomoFollowedFeedCache, stale: true };
+  if (fomoFollowedFeedInflight?.generation === fomoAuthGeneration) return fomoFollowedFeedInflight.promise;
+  if (fomoFollowedFeedCache.fetchedAt && Date.now() - fomoFollowedFeedCache.fetchedAt < FOMO_FOLLOWED_FEED_MIN_INTERVAL_MS) {
+    return { ok: !fomoFollowedFeedCache.reason, ...fomoFollowedFeedCache };
   }
   const generation = fomoAuthGeneration;
   const promise = (async () => {
+    let followedIds;
+    const collected = new Map();
+    let pages = 0;
+    let head = null;
+    let overlap = false;
+    let caughtUp = false;
+    let gapReason = '';
+    let failure = null;
+    const checkpoint = fomoFollowedFeedCheckpoint;
     try {
-      const followedIds = await fetchFomoFollowingIds();
-      if (!followedIds.size) {
-        fomoFollowedFeedCache = { events: [], updatedAt: Date.now(), fetchedAt: Date.now() };
-        return { ok: true, ...fomoFollowedFeedCache };
-      }
-      const { res } = await fomoAuthedFetch('/feed/tradingActivity?limit=100&page=0');
-      const body = await res.json().catch(() => null);
-      if (generation !== fomoAuthGeneration) throw new Error('not-connected');
-      if (!res.ok || fomoBodyUnauthed(body) || fomoBodyFailed(body)) {
-        const unauthorized = [401, 403, 430, 431].includes(res.status) || fomoBodyUnauthed(body);
-        return { ok: false, reason: unauthorized ? 'not-connected' : 'fetch-failed', events: [] };
-      }
-      const rawItems = body?.responseObject?.items || body?.items || firstObjectArray(body, 0) || [];
-      const events = rawItems.map((item) => slimFomoFollowedEvent(item, followedIds))
-        .filter(Boolean).sort((a, b) => b.ts - a.ts).slice(0, FOMO_FEED_KEEP);
-      fomoFollowedFeedCache = { events, updatedAt: Date.now(), fetchedAt: Date.now() };
-      return { ok: true, ...fomoFollowedFeedCache };
-    } catch (error) {
-      const message = String(error?.message || '').slice(0, 120);
-      if (message === 'not-connected') {
-        if (generation === fomoAuthGeneration) {
-          fomoFollowedFeedCache = { events: [], updatedAt: 0, fetchedAt: 0 };
+      followedIds = await fetchFomoFollowingIds();
+      if (generation !== fomoAuthGeneration) throw fomoFailure('not-connected');
+      // Checkpoints come from the GLOBAL feed, even with zero follows.
+      for (let page = 0; page < FOMO_FOLLOWED_FEED_MAX_PAGES; page += 1) {
+        const { res } = await fomoAuthedFetch(`/feed/tradingActivity?limit=${FOMO_FOLLOWED_FEED_PAGE_LIMIT}&page=${page}`);
+        const body = await res.json().catch(() => null);
+        if (generation !== fomoAuthGeneration) throw fomoFailure('not-connected');
+        fomoCheckResponse(res, body);
+        const box = body?.responseObject ?? body;
+        const rawItems = Array.isArray(box) ? box : box?.items;
+        if (!Array.isArray(rawItems)) throw fomoFailure('invalid-response');
+        pages += 1;
+        const anchors = rawItems.map(fomoEventCheckpoint).filter(Boolean);
+        if (page === 0) head = anchors.reduce((best, item) => !best || item.ts > best.ts ? item : best, null);
+        if (checkpoint && anchors.some((item) => item.id === checkpoint.id && item.ts === checkpoint.ts)) overlap = true;
+        for (const raw of rawItems) {
+          const event = slimFomoFollowedEvent(raw, followedIds);
+          if (event) collected.set(event.key, event);
         }
-        return { ok: false, reason: 'not-connected', message, events: [] };
+        const hasNext = typeof box?.hasNextPage === 'boolean' ? box.hasNextPage
+          : typeof body?.hasNextPage === 'boolean' ? body.hasNextPage : rawItems.length >= FOMO_FOLLOWED_FEED_PAGE_LIMIT;
+        // Read past the checkpoint's timestamp bucket so ties on a later page aren't lost.
+        caughtUp = !!checkpoint && overlap && (!hasNext || anchors.some((item) => item.ts < checkpoint.ts));
+        if (!checkpoint) { gapReason = 'restart-baseline'; break; }
+        if (caughtUp) break;
+        if (!hasNext) { gapReason = 'checkpoint-missing'; break; }
+        if (!rawItems.length) { gapReason = 'pagination-stalled'; break; }
+        if (page === FOMO_FOLLOWED_FEED_MAX_PAGES - 1) gapReason = 'page-cap';
       }
-      if (fomoFollowedFeedCache.events.length) return { ok: true, ...fomoFollowedFeedCache, stale: true };
-      return { ok: false, reason: 'fetch-failed', message, events: [] };
-    } finally {
-      if (fomoFollowedFeedInflight?.promise === promise) fomoFollowedFeedInflight = null;
+    } catch (error) {
+      // A rejected old request must not return or overwrite the NEW account's data.
+      if (generation !== fomoAuthGeneration) return { ok: false, reason: 'not-connected', events: [], ...emptyFomoFollowedFeed() };
+      failure = error;
+      gapReason = pages ? 'pagination-failed' : (error?.message === 'not-connected' ? 'not-connected' : 'fetch-failed');
     }
-  })();
+    if (generation !== fomoAuthGeneration) return { ok: false, reason: 'not-connected', ...emptyFomoFollowedFeed() };
+    if (failure?.reason === 'not-connected' || failure?.message === 'not-connected') {
+      fomoFollowedFeedCache = emptyFomoFollowedFeed();
+      fomoFollowedFeedCheckpoint = null;
+      fomoFollowingIdsCache = { ids: new Set(), fetchedAt: 0 };
+      return { ok: false, reason: 'not-connected', ...fomoFollowedFeedCache };
+    }
+    const previous = fomoFollowedFeedCache;
+    const retained = previous.events.filter((event) => !followedIds || followedIds.has(event.userId));
+    const merged = new Map(retained.map((event) => [event.key, event]));
+    for (const [key, event] of collected) merged.set(key, event);
+    const events = [...merged.values()].sort((a, b) => b.ts - a.ts || a.key.localeCompare(b.key)).slice(0, FOMO_FEED_KEEP);
+    // On a gap keep the last verified checkpoint so the next poll can repair it.
+    if (head && (!checkpoint || caughtUp)) fomoFollowedFeedCheckpoint = head;
+    fomoFollowedFeedCache = {
+      events,
+      fetchedAt: pages ? Date.now() : previous.fetchedAt,
+      updatedAt: pages ? Date.now() : previous.updatedAt,
+      coverageGap: !caughtUp || Boolean(failure),
+      // Coverage describes continuity since our baseline, never lifetime history.
+      gapReason: gapReason || (caughtUp ? '' : 'restart-baseline'),
+      historyLimited: true,
+      stale: Boolean(failure),
+      followingKnown: !!followedIds,
+      ...(failure ? { reason: failure.reason || 'fetch-failed' } : {}),
+      ...(failure?.status ? { status: failure.status } : {}),
+      ...(failure?.retryAt ? { retryAt: failure.retryAt } : {}),
+    };
+    if (failure) {
+      return {
+        ok: false, ...fomoFollowedFeedCache, stale: true,
+        reason: failure.reason || 'fetch-failed',
+        ...(failure.status ? { status: failure.status } : {}),
+        ...(failure.retryAt ? { retryAt: failure.retryAt } : {}),
+      };
+    }
+    return { ok: true, ...fomoFollowedFeedCache };
+  })().finally(() => {
+    if (fomoFollowedFeedInflight?.promise === promise) fomoFollowedFeedInflight = null;
+  });
   fomoFollowedFeedInflight = { generation, promise };
   return promise;
 }
@@ -381,20 +476,53 @@ async function fetchFomoFollowedFeed() {
 
 async function fomoAuthedFetch(path, options) {
   options = options || {};
+  const generation = fomoAuthGeneration;
+  if (Date.now() < fomoApiRetryAt) throw fomoFailure('backoff', undefined, fomoApiRetryAt);
   let stored = (await chrome.storage.local.get('fomoToken')).fomoToken || null;
   if (stored?.refresh && stored.exp && stored.exp - Date.now() < 10000) {
     stored = (await fomoRefreshSession())
       || (await chrome.storage.local.get('fomoToken')).fomoToken
       || null;
   }
-  const send = (token) => {
+  const send = async (token) => {
+    if (generation !== fomoAuthGeneration) throw fomoFailure('not-connected');
+    if (Date.now() < fomoApiRetryAt) throw fomoFailure('backoff', undefined, fomoApiRetryAt);
     const headers = {
       Accept: 'application/json',
       'X-Supported-Chains': FOMO_CHAINS,
       ...(options.headers || {}),
     };
     if (token) headers.Authorization = `Bearer ${token}`;
-    return fetch(`${FOMO_API}${path}`, { ...options, headers, credentials: 'include' });
+    const controller = new AbortController();
+    const abortFromCaller = () => controller.abort();
+    if (options.signal?.aborted) controller.abort();
+    else options.signal?.addEventListener('abort', abortFromCaller, { once: true });
+    const timer = setTimeout(() => controller.abort(), 15000);
+    try {
+      const response = await fetch(`${FOMO_API}${path}`, { ...options, headers, credentials: 'include', signal: controller.signal });
+      // Keep the deadline alive until the body is drained, not merely until
+      // headers arrive. Otherwise a stalled body strands every coalesced retry.
+      await response.clone().text();
+      if (generation !== fomoAuthGeneration) throw fomoFailure('not-connected');
+      if (response.status === 429 || response.status >= 500) {
+        fomoApiFailures += 1;
+        const retry = response.headers?.get('Retry-After');
+        const seconds = retry == null ? NaN : Number(retry);
+        const delay = Number.isFinite(seconds) ? seconds * 1000 : (Date.parse(retry || '') || 0) - Date.now();
+        fomoApiRetryAt = Date.now() + Math.min(300000, Math.max(15000, delay, 15000 * (2 ** Math.min(fomoApiFailures - 1, 4))));
+      } else if (response.ok && Date.now() >= fomoApiRetryAt) {
+        fomoApiFailures = 0;
+      }
+      return response;
+    } catch (error) {
+      if (generation !== fomoAuthGeneration) throw fomoFailure('not-connected');
+      fomoApiFailures += 1;
+      fomoApiRetryAt = Math.max(fomoApiRetryAt, Date.now() + Math.min(300000, 15000 * (2 ** Math.min(fomoApiFailures - 1, 4))));
+      throw fomoFailure('network', undefined, fomoApiRetryAt);
+    } finally {
+      clearTimeout(timer);
+      options.signal?.removeEventListener('abort', abortFromCaller);
+    }
   };
   let res = await send(stored?.token);
   let renewed = false;
@@ -537,7 +665,7 @@ async function fetchFomoTradeDetail(tradeId) {
       if (generation !== fomoAuthGeneration) return null;
       if (!res.ok || fomoBodyUnauthed(body) || fomoBodyFailed(body)) return null;
       const value = body?.responseObject;
-      const data = value && typeof value === 'object' ? value : null;
+      const data = value && typeof value === 'object' && !Array.isArray(value) && Array.isArray(value.swaps) ? value : null;
       if (data) setBoundedMap(fomoTradeDetailCache, id, { at: Date.now(), data }, FOMO_TRADE_DETAIL_CACHE_MAX);
       return data;
     } catch {
@@ -623,35 +751,35 @@ function fomoSwapsFromTrade(detail, tokenAddress) {
 
 async function fetchFomoTokenTradeFallback(tokenAddress, holders) {
   const generation = fomoAuthGeneration;
+  if (!Array.isArray(holders)) return { ok: false, reason: 'invalid-response' };
   const seen = new Set();
-  const trades = (Array.isArray(holders) ? holders : [])
-    .map((item) => ({
-      id: String(item?.tradeId || item?.authorTrade?.id || '').trim(),
-      user: item?.user && typeof item.user === 'object' ? item.user : {},
-    }))
-    .filter((item) => {
-      if (!item.id || seen.has(item.id)) return false;
-      seen.add(item.id);
-      return true;
-    })
-    .slice(0, FOMO_TOKEN_TRADE_HOLDER_LIMIT);
-  if (!trades.length) return [];
-  const cacheKey = `${String(tokenAddress || '').toLowerCase()}|${trades.map((item) => item.id).sort().join(',')}`;
+  let missingTrade = false;
+  const candidates = holders.map((item) => ({
+    id: String(item?.tradeId || item?.authorTrade?.id || '').trim(),
+    user: item?.user && typeof item.user === 'object' ? item.user : {},
+  })).filter((item) => {
+    if (!item.id) { missingTrade = true; return false; }
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
+  const trades = candidates.slice(0, FOMO_TOKEN_TRADE_HOLDER_LIMIT);
+  const cacheKey = `${String(tokenAddress || '')}|${trades.map((item) => item.id).sort().join(',')}|${candidates.length}|${missingTrade}`;
   const cached = fomoTokenTradeFallbackCache.get(cacheKey);
-  if (cached && Date.now() - cached.at < FOMO_TOKEN_TRADE_FALLBACK_TTL_MS) return cached.items;
+  if (cached && Date.now() - cached.at < FOMO_TOKEN_TRADE_FALLBACK_TTL_MS) return cached.data;
   const active = fomoTokenTradeFallbackInflight.get(cacheKey);
   if (active?.generation === generation) return active.promise;
   const promise = (async () => {
     try {
       const details = await fomoMapLimit(trades, 6, async (item) => {
+        if (generation !== fomoAuthGeneration) return null;
         const detail = await fetchFomoTradeDetail(item.id);
-        if (!detail) return null;
+        if (!detail || !Array.isArray(detail.swaps)) return null;
         const detailUser = detail.user && typeof detail.user === 'object' ? detail.user : {};
         return {
           ...detail,
           user: {
-            ...item.user,
-            ...detailUser,
+            ...item.user, ...detailUser,
             id: detailUser.id || item.user.id || '',
             userHandle: detailUser.userHandle || item.user.userHandle || '',
             displayName: detailUser.displayName || item.user.displayName || '',
@@ -659,126 +787,105 @@ async function fetchFomoTokenTradeFallback(tokenAddress, holders) {
           },
         };
       });
-      if (generation !== fomoAuthGeneration) return [];
-      const items = details.flatMap((detail) => fomoSwapsFromTrade(detail, tokenAddress))
-        .sort((a, b) => (Date.parse(b.createdAt || '') || 0) - (Date.parse(a.createdAt || '') || 0));
-      if (details.every(Boolean)) {
-        setBoundedMap(
-          fomoTokenTradeFallbackCache,
-          cacheKey,
-          { at: Date.now(), items },
-          FOMO_TOKEN_TRADE_FALLBACK_CACHE_MAX,
-        );
+      if (generation !== fomoAuthGeneration) return { ok: false, reason: 'not-connected' };
+      const succeeded = details.filter(Boolean).length;
+      if ((trades.length && !succeeded) || (!trades.length && missingTrade)) return { ok: false, reason: 'detail-failed', ...(fomoApiRetryAt > Date.now() ? { retryAt: fomoApiRetryAt } : {}) };
+      const items = [...new Map(details.flatMap((detail) => fomoSwapsFromTrade(detail, tokenAddress)).map((item) => [item.id, item])).values()]
+        .sort((a, b) => (Date.parse(b.createdAt || '') || 0) - (Date.parse(a.createdAt || '') || 0) || a.id.localeCompare(b.id));
+      const data = {
+        ok: true, items, count: items.length, source: 'holder-history', fetchedAt: Date.now(),
+        partial: missingTrade || succeeded !== trades.length,
+        coverage: { attempted: trades.length, succeeded, limit: FOMO_TOKEN_TRADE_HOLDER_LIMIT, truncated: candidates.length > trades.length },
+      };
+      // A successful subset must NEVER poison either this cache or the outer token cache.
+      if (details.every(Boolean) && !data.partial) {
+        setBoundedMap(fomoTokenTradeFallbackCache, cacheKey, { at: Date.now(), data }, FOMO_TOKEN_TRADE_FALLBACK_CACHE_MAX);
       }
-      return items;
+      return data;
     } finally {
-      if (fomoTokenTradeFallbackInflight.get(cacheKey)?.promise === promise) {
-        fomoTokenTradeFallbackInflight.delete(cacheKey);
-      }
+      if (fomoTokenTradeFallbackInflight.get(cacheKey)?.promise === promise) fomoTokenTradeFallbackInflight.delete(cacheKey);
     }
   })();
   fomoTokenTradeFallbackInflight.set(cacheKey, { generation, promise });
   return promise;
 }
 
+const fomoTokenInflight = new Map();
 async function fomoFetchToken({ tokenAddress, networkId, kind }) {
   const ref = normalizeFomoTokenRef({ address: tokenAddress, networkId });
-  if (!ref || !['holders', 'thesis', 'swaps'].includes(kind)) {
-    return { ok: false, reason: 'bad-request', items: [] };
-  }
+  if (!ref || !['holders', 'thesis', 'swaps'].includes(kind)) return { ok: false, reason: 'bad-request' };
   tokenAddress = ref.address;
   networkId = ref.networkId;
   const key = `${kind}|${networkId}|${tokenAddress}`;
   const hit = fomoCache.get(key);
   if (hit && Date.now() - hit.at < FOMO_CACHE_MS) return hit.data;
   const generation = fomoAuthGeneration;
-
-  let token;
-
-  let path;
-  if (kind === 'thesis') {
-    path = `/feed/token/thesis?tokenAddress=${tokenAddress}&networkId=${networkId}&threshold=0&limit=50`;
-  } else if (kind === 'holders') {
-    const tokens = encodeURIComponent(JSON.stringify([{ address: tokenAddress, networkId }]));
-    path = `/hodlers/top?tokens=${tokens}`;
-  } else {
-    path = `/feed/token?tokenAddress=${tokenAddress}&networkId=${networkId}&excludeThesis=true&limit=50`;
-  }
-  try {
-    const { res, stored, renewed } = await fomoAuthedFetch(path);
-    if (generation !== fomoAuthGeneration) {
-      return { ok: false, reason: 'not-connected', items: [] };
-    }
-    token = stored?.token;
-    if (!res.ok && [401, 403, 430, 431].includes(res.status) && !token) {
-      return { ok: false, reason: 'no-token', status: res.status, tokenAt: 0 };
-    }
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      const blocked = /cloudflare|cf-ray|<!DOCTYPE html/i.test(text);
-      return {
-        ok: false,
-        reason: blocked ? 'blocked' : ([401, 403, 430, 431].includes(res.status) ? 'expired' : `http-${res.status}`),
-        status: res.status,
-        tokenAt: stored?.at || 0,
-        renewed,
-      };
-    }
-    const body = await res.json().catch(() => null);
-    const inner = Number(body?.statusCode);
-    if (body?.success === false || (Number.isFinite(inner) && inner !== 200)) {
-      const unauth = fomoBodyUnauthed(body);
-      return {
-        ok: false,
-        reason: unauth ? (token ? 'expired' : 'no-token') : `api-${inner || 'error'}`,
-        status: inner || res.status,
-        message: String(body?.message || '').slice(0, 120),
-        tokenAt: stored?.at || 0,
-        renewed,
-      };
-    }
-    const ro = body?.responseObject;
-    //   /hodlers/top -> responseObject[0] = { totalHolders, topHolders: [...] }
-    //   /feed/token* -> responseObject   = { items: [...], hasNextPage, count }
-    let items;
-    let total;
-    if (kind === 'holders') {
-      const box = Array.isArray(ro) ? ro[0] : ro;
-      items = box?.topHolders;
-      total = Number(box?.totalHolders);
+  const active = fomoTokenInflight.get(key);
+  if (active?.generation === generation) return active.promise;
+  const promise = (async () => {
+    let path;
+    if (kind === 'thesis') {
+      path = `/feed/token/thesis?tokenAddress=${tokenAddress}&networkId=${networkId}&threshold=0&limit=50`;
+    } else if (kind === 'holders') {
+      const tokens = encodeURIComponent(JSON.stringify([{ address: tokenAddress, networkId }]));
+      path = `/hodlers/top?tokens=${tokens}`;
     } else {
-      items = Array.isArray(ro) ? ro : ro?.items;
+      path = `/feed/token?tokenAddress=${tokenAddress}&networkId=${networkId}&excludeThesis=true&limit=50`;
     }
-    if (!Array.isArray(items)) items = firstObjectArray(ro, 0) || [];
-    if (kind === 'holders' && items.length) {
-      const followedIds = await fetchFomoFollowingIds().catch(() => new Set());
-      items = items.map((item) => {
-        const user = item?.user && typeof item.user === 'object' ? item.user : {};
-        const userId = String(user.id || item?.userId || '').trim();
-        return followedIds.has(userId) ? { ...item, followed: true } : item;
-      });
+    try {
+      const { res, stored } = await fomoAuthedFetch(path);
+      const body = await res.json().catch(() => null);
+      if (generation !== fomoAuthGeneration) throw fomoFailure('not-connected');
+      if ([401, 403, 430, 431].includes(res.status) || fomoBodyUnauthed(body)) {
+        throw fomoFailure(stored?.token ? 'expired' : 'no-token', res.status);
+      }
+      fomoCheckResponse(res, body);
+      const ro = body?.responseObject;
+      // Only known arrays qualify as empty. A missing/malformed payload is failure.
+      const box = kind === 'holders' && Array.isArray(ro) ? ro[0] : ro;
+      let items = kind === 'holders' ? box?.topHolders : (Array.isArray(ro) ? ro : ro?.items);
+      if (!Array.isArray(items)) throw fomoFailure('invalid-response');
+      const total = kind === 'holders' && box?.totalHolders != null ? Number(box.totalHolders) : undefined;
+      let data = {
+        ok: true, items, count: items.length,
+        source: kind === 'swaps' ? 'token-feed' : kind,
+        fetchedAt: Date.now(), partial: false,
+        coverage: {
+          attempted: 1, succeeded: 1, limit: kind === 'holders' ? items.length : 50,
+          truncated: kind === 'holders' ? Number.isFinite(total) && total > items.length
+            : (typeof ro?.hasNextPage === 'boolean' ? ro.hasNextPage : items.length >= 50),
+        },
+      };
+      if (Number.isFinite(total) && total >= 0) data.total = total;
+      if (kind === 'swaps' && !items.length) {
+        const holders = await fomoFetchToken({ tokenAddress, networkId, kind: 'holders' });
+        if (generation !== fomoAuthGeneration) throw fomoFailure('not-connected');
+        if (!holders.ok) return holders;
+        const fallback = await fetchFomoTokenTradeFallback(tokenAddress, holders.items);
+        if (!fallback.ok) return fallback;
+        data = { ...fallback, coverage: { ...fallback.coverage, truncated: fallback.coverage.truncated || holders.coverage.truncated } };
+      }
+      const followedIds = await fetchFomoFollowingIds().catch(() => null);
+      if (generation !== fomoAuthGeneration) throw fomoFailure('not-connected');
+      data = { ...data, items: fomoAnnotateFollowing(data.items, followedIds), followingKnown: followedIds !== null };
+      // Unknown follows and partial detail successes must be retried, not authoritative hits.
+      if (!data.partial && data.followingKnown) setBoundedMap(fomoCache, key, { at: Date.now(), data }, FOMO_CACHE_MAX);
+      return data;
+    } catch (error) {
+      if (generation !== fomoAuthGeneration) return { ok: false, reason: 'not-connected' };
+      return {
+        ok: false, reason: error.reason || 'network',
+        ...(error.status ? { status: error.status } : {}),
+        ...(error.retryAt ? { retryAt: error.retryAt } : {}),
+      };
     }
-    let cacheable = true;
-    if (kind === 'swaps' && !items.length) {
-      const holders = await fomoFetchToken({ tokenAddress, networkId, kind: 'holders' });
-      if (holders?.ok) items = await fetchFomoTokenTradeFallback(tokenAddress, holders.items);
-      if (!items.length) cacheable = false;
-    }
-    if (generation !== fomoAuthGeneration) {
-      return { ok: false, reason: 'not-connected', items: [] };
-    }
-    const data = { ok: true, items, count: items.length };
-    if (Number.isFinite(total)) data.total = total;
-    if (cacheable) setBoundedMap(fomoCache, key, { at: Date.now(), data }, FOMO_CACHE_MAX);
-    return data;
-  } catch (error) {
-    return {
-      ok: false,
-      reason: 'network',
-      message: String(error?.message || '').slice(0, 80),
-    };
-  }
+  })().finally(() => {
+    if (fomoTokenInflight.get(key)?.promise === promise) fomoTokenInflight.delete(key);
+  });
+  fomoTokenInflight.set(key, { generation, promise });
+  return promise;
 }
+
 
 const FOMO_PNL_TTL = 10 * 60 * 1000;
 const FOMO_PNL_CACHE_MAX = 500;
@@ -1516,8 +1623,11 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     const sameAccount = oldIdentity && newIdentity && oldIdentity === newIdentity;
     if (!sameAccount) {
       fomoAuthGeneration += 1;
-      fomoFollowedFeedCache = { events: [], updatedAt: 0, fetchedAt: 0 };
+      fomoFollowedFeedCache = { ...emptyFomoFollowedFeed(), gapReason: 'account-baseline' };
+      fomoFollowedFeedCheckpoint = null;
       fomoFollowingIdsCache = { ids: new Set(), fetchedAt: 0 };
+      fomoApiRetryAt = 0;
+      fomoApiFailures = 0;
       fomoFollowedHoldersCache.clear();
       fomoTradeDetailCache.clear();
       fomoTokenTradeFallbackCache.clear();

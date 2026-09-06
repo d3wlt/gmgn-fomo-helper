@@ -1,4 +1,6 @@
 dist/
+node_modules/
+test-results/
 .uv-cache/
 __pycache__/
 *.pyc

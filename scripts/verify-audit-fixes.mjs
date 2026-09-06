@@ -15,7 +15,7 @@ const debotStyles = read('debot-styles.css');
 const manifest = JSON.parse(read('manifest.json'));
 const releaseBuild = read('scripts/build-release.ps1');
 const releaseWorkflow = read('.github/workflows/release.yml');
-const releaseNote = read('release-notes/v0.49.0.md');
+const releaseNote = read(`release-notes/v${manifest.version}.md`);
 const readme = read('README.md');
 const popup = read('popup.js');
 const popupHtml = read('popup.html');
@@ -66,6 +66,30 @@ function extractFunction(source, name) {
 function evaluate(functions, expression, extras = {}) {
   const context = vm.createContext({ ...extras });
   return vm.runInContext(`${functions.join('\n')}\n(${expression})`, context);
+}
+
+// Stateful backend regressions run the complete production worker. Only the
+// browser/network boundaries are fixtures, so new helpers, caches, and backoff
+// state cannot silently disappear from an extracted-function VM.
+function backgroundHarness(route) {
+  const calls = [];
+  const ignore = { addListener() {} };
+  const context = vm.createContext({
+    console, Date, URL, URLSearchParams, atob, btoa, AbortController, TextDecoder,
+    setTimeout, clearTimeout, setInterval, clearInterval,
+    fetch: async (url, options) => {
+      const requestPath = new URL(url).pathname + new URL(url).search;
+      calls.push(requestPath);
+      return route(requestPath, options);
+    },
+    chrome: {
+      runtime: { onInstalled: ignore, onStartup: ignore, onMessage: ignore },
+      alarms: { get: async () => ({}), create() {}, onAlarm: ignore },
+      storage: { local: { get: async () => ({}), set: async () => {} }, onChanged: ignore },
+    },
+  });
+  vm.runInContext(background, context, { filename: 'background.js' });
+  return { calls, run: (code) => vm.runInContext(code, context) };
 }
 
 let passed = 0;
@@ -183,20 +207,23 @@ await test('FOMO refund and failure events survive unknown-type filtering', () =
 await test('FOMO popup keeps sell activity and labels position changes', () => {
   const functions = [
     extractFunction(content, 'fomoActivitySide'),
-    extractFunction(content, 'fomoActivityPosition'),
+    extractFunction(content, 'fomoUiPosition'),
     extractFunction(content, 'normalizeFomoPopupTrade'),
   ];
+  // Position labels now require explicit evidence, not an inferred ordinary sell.
   const samples = evaluate(functions, `[
-    normalizeFomoPopupTrade({ id: 'buy-1', type: 'swap_buy', createdAt: '2026-09-03T12:00:00Z', usdAmount: 125, authorTrade: { openedAt: '2026-09-03T12:00:00Z' } }),
-    normalizeFomoPopupTrade({ id: 'sell-1', type: 'swap_sell', createdAt: '2026-09-03T12:01:00Z', usdAmount: 50, authorTrade: { openedAt: '2026-09-03T11:00:00Z' } }),
-    normalizeFomoPopupTrade({ id: 'sell-2', type: 'swap_sell', action: 'All', createdAt: '2026-09-03T12:02:00Z', usdAmount: 75, authorTrade: { closedAt: '2026-09-03T12:02:00Z' } }),
-    normalizeFomoPopupTrade({ id: 'sell-3', isBuy: false, action: 'Partial' }),
+    normalizeFomoPopupTrade({ id: 'buy-1', type: 'swap_buy', positionAction: 'First', createdAt: '2026-09-03T12:00:00Z', usdAmount: 125, authorTrade: { openedAt: '2026-09-03T12:00:00Z' } }),
+    normalizeFomoPopupTrade({ id: 'sell-1', type: 'swap_sell', positionAction: 'Partial', createdAt: '2026-09-03T12:01:00Z', usdAmount: 50, authorTrade: { openedAt: '2026-09-03T11:00:00Z' } }),
+    normalizeFomoPopupTrade({ id: 'sell-2', type: 'swap_sell', positionAction: 'All', createdAt: '2026-09-03T12:02:00Z', usdAmount: 75, authorTrade: { closedAt: '2026-09-03T12:02:00Z' } }),
+    normalizeFomoPopupTrade({ id: 'sell-3', isBuy: false, positionAction: 'Partial' }),
+    normalizeFomoPopupTrade({ id: 'sell-unknown', type: 'swap_sell' }),
   ]`);
   assert.deepEqual(JSON.parse(JSON.stringify(samples.map((item) => ({ side: item.side, position: item.position })))), [
     { side: 'buy', position: 'First' },
     { side: 'sell', position: 'Partial' },
     { side: 'sell', position: 'All' },
     { side: 'sell', position: 'Partial' },
+    { side: 'sell', position: '' },
   ]);
   const render = extractFunction(content, 'renderFomoItems');
   assert.ok(render.includes('normalizeFomoPopupTrade(item)'));
@@ -242,7 +269,7 @@ await test('Followed FOMO trades and theses are normalized for the GMGN tracker'
     null,
   ]);
   assert.ok(background.includes("'/v2/users/current/followingIds'"));
-  assert.ok(background.includes("'/feed/tradingActivity?limit=100&page=0'"));
+  assert.ok(extractFunction(background, 'fetchFomoFollowedFeed').includes('`/feed/tradingActivity?limit=${FOMO_FOLLOWED_FEED_PAGE_LIMIT}&page=${page}`'));
   assert.ok(background.includes("message?.type === 'fomo-followed-feed'"));
   assert.ok(content.includes("chrome.runtime.sendMessage({ type: 'fomo-followed-feed' }"));
   assert.ok(content.includes("source: 'fomo-followed'"));
@@ -252,43 +279,19 @@ await test('Followed FOMO trades and theses are normalized for the GMGN tracker'
 });
 
 await test('Followed FOMO polling filters the live activity response against current follows', async () => {
-  const functions = [
-    extractFunction(background, 'firstObjectArray'),
-    extractFunction(background, 'fomoBodyUnauthed'),
-    extractFunction(background, 'fomoBodyFailed'),
-    extractFunction(background, 'fomoActivitySide'),
-    extractFunction(background, 'fomoActivityPosition'),
-    extractFunction(background, 'fomoNetworkSlug'),
-    extractFunction(background, 'fomoHttpsUrl'),
-    extractFunction(background, 'slimFomoFollowedEvent'),
-    extractFunction(background, 'fetchFomoFollowingIds'),
-    extractFunction(background, 'fetchFomoFollowedFeed'),
-  ];
-  const calls = [];
   const now = Date.now();
-  const response = await evaluate(functions, 'fetchFomoFollowedFeed()', {
-    calls,
-    Date,
-    FOMO_NETWORK_SLUG: { 56: 'bsc' },
-    FOMO_FOLLOWED_FEED_MIN_INTERVAL_MS: 15000,
-    FOMO_FOLLOWING_IDS_CACHE_MS: 120000,
-    FOMO_FEED_KEEP: 150,
-    fomoFollowedFeedCache: { events: [], updatedAt: 0, fetchedAt: 0 },
-    fomoFollowingIdsCache: { ids: new Set(), fetchedAt: 0 },
-    fomoFollowedFeedInflight: null,
-    fomoAuthGeneration: 0,
-    fomoAuthedFetch: async (path) => {
-      calls.push(path);
-      const body = path.includes('followingIds')
-        ? { statusCode: 200, responseObject: { followingIds: ['followed-user'] } }
-        : { statusCode: 200, responseObject: { items: [
-          { id: 'visible', type: 'swap_sell', userId: 'followed-user', userHandle: 'alice', createdAt: new Date(now).toISOString(), networkId: 56, tokenAddress: '0x1234567890123456789012345678901234567890' },
-          { id: 'hidden', type: 'swap_buy', userId: 'other-user', createdAt: new Date(now).toISOString(), networkId: 56, tokenAddress: '0x1234567890123456789012345678901234567890' },
-        ] } };
-      return { res: { ok: true, status: 200, json: async () => body } };
-    },
+  const worker = backgroundHarness((requestPath) => {
+    assert.ok(['/v2/users/current/followingIds', '/feed/tradingActivity?limit=100&page=0'].includes(requestPath), `unexpected request ${requestPath}`);
+    const responseObject = requestPath.includes('followingIds')
+      ? { followingIds: ['followed-user'] }
+      : { items: [
+        { id: 'visible', type: 'swap_sell', userId: 'followed-user', userHandle: 'alice', createdAt: new Date(now).toISOString(), networkId: 56, tokenAddress: '0x1234567890123456789012345678901234567890' },
+        { id: 'hidden', type: 'swap_buy', userId: 'other-user', createdAt: new Date(now).toISOString(), networkId: 56, tokenAddress: '0x1234567890123456789012345678901234567890' },
+      ], hasNextPage: false };
+    return new Response(JSON.stringify({ statusCode: 200, responseObject }));
   });
-  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+  const response = await worker.run('fetchFomoFollowedFeed()');
+  assert.deepEqual(worker.calls, [
     '/v2/users/current/followingIds',
     '/feed/tradingActivity?limit=100&page=0',
   ]);
@@ -297,27 +300,15 @@ await test('Followed FOMO polling filters the live activity response against cur
   assert.equal(response.events[0].type, 'sell');
   assert.equal(response.events[0].usd, 0);
   assert.equal(response.events[0].followed, true);
-  const fetchFn = extractFunction(background, 'fetchFomoFollowedFeed');
-  assert.ok(fetchFn.indexOf("message === 'not-connected'") < fetchFn.indexOf('fomoFollowedFeedCache.events.length'));
+  assert.equal(response.followingKnown, true);
+  assert.equal(response.coverageGap, true, 'initial poll must not claim pre-restart coverage');
 
-  const disconnected = await evaluate(functions, 'fetchFomoFollowedFeed()', {
-    Date,
-    encodeURIComponent,
-    console,
-    FOMO_FOLLOWING_IDS_CACHE_MS: 120000,
-    FOMO_FOLLOWED_FEED_MIN_INTERVAL_MS: 15000,
-    FOMO_FEED_KEEP: 160,
-    fomoFollowedFeedCache: { events: [{ key: 'old-account-event' }], updatedAt: 1, fetchedAt: 0 },
-    fomoFollowingIdsCache: { ids: new Set(), fetchedAt: 0 },
-    fomoFollowedFeedInflight: null,
-    fomoAuthGeneration: 0,
-    fomoAuthedFetch: async () => ({
-      res: { ok: false, status: 430, json: async () => ({ error: 'unauthorized' }) },
-    }),
-  });
-  assert.deepEqual(JSON.parse(JSON.stringify(disconnected)), {
-    ok: false, reason: 'not-connected', message: 'not-connected', events: [],
-  });
+  const unauthenticated = backgroundHarness(() => new Response(JSON.stringify({ error: 'unauthorized' }), { status: 430 }));
+  unauthenticated.run("fomoFollowedFeedCache = { ...emptyFomoFollowedFeed(), events: [{ key: 'old-account-event' }], updatedAt: 1 }");
+  const disconnected = await unauthenticated.run('fetchFomoFollowedFeed()');
+  assert.equal(disconnected.ok, false);
+  assert.equal(disconnected.reason, 'not-connected');
+  assert.deepEqual(JSON.parse(JSON.stringify(disconnected.events)), [], 'authentication failure must not expose cached account events');
 });
 
 await test('Notification history is sanitized, deduplicated, and capped', () => {
@@ -1164,6 +1155,7 @@ await test('FOMO share obtains cross-chain supply from same-origin GMGN', async 
   let renders = 0;
   await evaluate([fn], `loadFomoSupply({ chain: 'robinhood', address: '${address}' })`, {
     fomoStats: stats,
+    fomoLoadGeneration: 0,
     fomoSupplyLoadingKey: '',
     gmgnApiQuery: () => 'device_id=live-page',
     settings: {},
@@ -1489,47 +1481,49 @@ await test('FOMO token-trade fallback reconstructs buys, sells, and position act
   assert.ok(background.includes('`/trades/${encodeURIComponent(id)}`'));
   assert.ok(background.includes('FOMO_TOKEN_TRADE_FALLBACK_TTL_MS = 120000'));
   assert.ok(background.includes('fomoTokenTradeFallbackInflight'));
-  assert.ok(background.includes('if (details.every(Boolean))'));
-
-  const detailCalls = { count: 0 };
-  const fallback = await evaluate([
-    extractFunction(background, 'setBoundedMap'),
-    extractFunction(background, 'fomoMapLimit'),
-    extractFunction(background, 'fetchFomoTokenTradeFallback'),
-  ], `Promise.all([
-    fetchFomoTokenTradeFallback('${target}', [{
-      tradeId: '11111111-1111-4111-8111-111111111111',
-      user: { id: 'u1', userHandle: 'alice_user', displayName: 'Alice Nick' }
-    }]),
-    fetchFomoTokenTradeFallback('${target}', [{
-      tradeId: '11111111-1111-4111-8111-111111111111',
-      user: { id: 'u1', userHandle: 'alice_user', displayName: 'Alice Nick' }
-    }])
-  ])`, {
-    Date,
-    FOMO_TOKEN_TRADE_HOLDER_LIMIT: 50,
-    FOMO_TOKEN_TRADE_FALLBACK_TTL_MS: 120000,
-    FOMO_TOKEN_TRADE_FALLBACK_CACHE_MAX: 100,
-    fomoTokenTradeFallbackCache: new Map(),
-    fomoTokenTradeFallbackInflight: new Map(),
-    fomoAuthGeneration: 0,
-    detailCalls,
-    fetchFomoTradeDetail: async () => {
-      detailCalls.count += 1;
-      await Promise.resolve();
-      return {
-        trade: { id: '11111111-1111-4111-8111-111111111111' },
-        user: { id: 'u1', userHandle: null, displayName: null },
-        swaps: [{}],
-      };
-    },
-    fomoSwapsFromTrade: (merged) => [{ handle: merged.user.userHandle, name: merged.user.displayName }],
+  const holder = { tradeId: detail.trade.id, user: detail.user };
+  const worker = backgroundHarness((requestPath) => {
+    assert.equal(requestPath, `/trades/${detail.trade.id}`);
+    return new Response(JSON.stringify({ statusCode: 200, responseObject: {
+      ...detail, user: { id: 'u1', userHandle: null, displayName: null },
+    } }));
   });
-  assert.deepEqual(JSON.parse(JSON.stringify(fallback)), [
-    [{ handle: 'alice_user', name: 'Alice Nick' }],
-    [{ handle: 'alice_user', name: 'Alice Nick' }],
-  ]);
-  assert.equal(detailCalls.count, 1);
+  const fallback = await worker.run(`Promise.all([
+    fetchFomoTokenTradeFallback('${target}', ${JSON.stringify([holder])}),
+    fetchFomoTokenTradeFallback('${target}', ${JSON.stringify([holder])})
+  ])`);
+  for (const response of fallback) {
+    assert.equal(response.ok, true);
+    assert.equal(response.source, 'holder-history');
+    assert.equal(response.partial, false);
+    assert.equal(response.count, 3);
+    assert.ok(response.fetchedAt > 0);
+    assert.deepEqual(JSON.parse(JSON.stringify(response.coverage)), { attempted: 1, succeeded: 1, limit: 50, truncated: false });
+    assert.deepEqual(JSON.parse(JSON.stringify(response.items.map((item) => ({
+      side: item.side, positionAction: item.positionAction, usdAmount: item.usdAmount,
+      handle: item.user.userHandle, displayName: item.user.displayName,
+    })))), JSON.parse(JSON.stringify(result.slice().reverse().map((item) => ({
+      side: item.side, positionAction: item.positionAction, usdAmount: item.usdAmount,
+      handle: item.user.userHandle, displayName: item.user.displayName,
+    })))));
+  }
+  assert.equal(worker.calls.length, 1, 'concurrent fallback requests share production detail fetches');
+  assert.equal(worker.run('fomoTokenTradeFallbackCache.size'), 1, 'complete history may enter the authoritative cache');
+  const cached = await worker.run(`fetchFomoTokenTradeFallback('${target}', ${JSON.stringify([holder])})`);
+  assert.equal(cached.fetchedAt, fallback[0].fetchedAt);
+  assert.equal(worker.calls.length, 1, 'cached history does not re-fetch trade details');
+  const partialWorker = backgroundHarness((requestPath) => requestPath === `/trades/${detail.trade.id}`
+    ? new Response(JSON.stringify({ statusCode: 200, responseObject: detail }))
+    : new Response(JSON.stringify({ error: 'temporary failure' }), { status: 500 }));
+  const partial = await partialWorker.run(`fetchFomoTokenTradeFallback('${target}', ${JSON.stringify([
+    holder, { tradeId: '22222222-2222-4222-8222-222222222222', user: detail.user },
+  ])})`);
+  assert.equal(partial.ok, true);
+  assert.equal(partial.partial, true);
+  assert.equal(partial.count, 3, 'successful detail swaps survive a sibling detail failure');
+  assert.equal(partial.coverage.attempted, 2);
+  assert.equal(partial.coverage.succeeded, 1);
+  assert.equal(partialWorker.run('fomoTokenTradeFallbackCache.size'), 0, 'incomplete history must not enter the authoritative cache');
 });
 
 await test('FOMO followed-holder lookup batches tokens and prefers usernames', async () => {
@@ -1778,7 +1772,7 @@ await test('Developer tooltip dismissal covers clicks, card changes, and lifecyc
 });
 
 await test('Maintained sources are English-only and the release surface is ZIP-only', () => {
-  const ignored = new Set(['.git', 'dist']);
+  const ignored = new Set(['.git', 'dist', 'node_modules', 'test-results']);
   const files = [];
   const walk = (directory) => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -1796,18 +1790,19 @@ await test('Maintained sources are English-only and the release surface is ZIP-o
   assert.ok(!manifest.permissions.includes('native' + 'Messaging'));
   assert.ok(!maintained.includes('send' + 'NativeMessage'));
   assert.ok(!maintained.toLowerCase().includes(['native', 'updater'].join('-')));
-  assert.ok(!maintained.toLowerCase().includes(['.', 'exe'].join('')));
+  // Match executable assets, not JavaScript APIs such as process.execPath.
+  assert.doesNotMatch(maintained, /\.exe\b/i);
   assert.ok(!background.includes('install' + '-update'));
   assert.ok(!background.includes('985gmgn-' + 'update-check'));
   assert.ok(!popupHtml.includes('id="check-' + 'update"'));
   assert.ok(!popup.includes('get-' + 'update-state'));
   assert.equal(fs.existsSync(path.join(root, 'native' + '-updater')), false);
   assert.equal(fs.existsSync(path.join(root, 'scripts', 'build-native-' + 'installer.ps1')), false);
-  assert.equal(manifest.version, '0.49.0');
+  assert.match(manifest.version, /^\d+\.\d+\.\d+(?:\.\d+)?$/);
   assert.ok(popupHtml.startsWith('<!doctype html>\n<html lang="en">\n'));
-  assert.ok(readme.includes('Version 0.49.0'));
-  assert.ok(releaseNote.startsWith('# better gmgn v0.49.0\n'));
-  assert.deepEqual(fs.readdirSync(path.join(root, 'release-notes')).filter((name) => /^v.*\.md$/.test(name)), ['v0.49.0.md']);
+  assert.ok(readme.includes(`Version ${manifest.version}`));
+  assert.ok(releaseNote.startsWith(`# better gmgn v${manifest.version}\n`));
+  assert.ok(fs.existsSync(path.join(root, 'release-notes', `v${manifest.version}.md`)), 'current release note exists alongside historical notes');
   assert.ok(releaseBuild.includes('985gmgn-helper-v$version.zip'));
   assert.ok(releaseBuild.includes('"$zipPath.sha256"'));
   assert.ok(releaseBuild.includes('Get-ChildItem -LiteralPath $dist -File | Remove-Item -Force'));

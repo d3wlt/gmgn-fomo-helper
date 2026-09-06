@@ -2915,6 +2915,246 @@ Select to open Flap tax details`;
   let fomoLoadGeneration = 0;
   let fomoLoadInflight = null;
 
+  // Panel trust metadata is deliberately separate from trade/holder payloads.
+  let fomoUi = { scope: '', meta: null, error: null, retryAt: 0, followingOnly: false };
+  let fomoUiRetryTimer = 0;
+  let fomoUiAuthGeneration = 0;
+
+  function fomoUiTimestamp(value) {
+    const number = Number(value);
+    const time = Number.isFinite(number) && number > 0
+      ? (number < 1e12 ? number * 1000 : number) : Date.parse(value || '');
+    return Number.isFinite(time) && time > 0 && time < 8640000000000000 ? time : 0;
+  }
+
+  function fomoUiMeta(response) {
+    const count = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+    const sources = ['holder-history', 'token-feed', 'holders', 'thesis'];
+    return {
+      source: sources.includes(response?.source) ? response.source : 'unknown',
+      fetchedAt: fomoUiTimestamp(response?.fetchedAt),
+      updatedAt: fomoUiTimestamp(response?.updatedAt),
+      partial: response?.partial === true,
+      stale: response?.stale === true,
+      followingKnown: response?.followingKnown === true,
+      coverage: {
+        attempted: count(response?.coverage?.attempted), succeeded: count(response?.coverage?.succeeded),
+        limit: count(response?.coverage?.limit), truncated: response?.coverage?.truncated === true,
+      },
+    };
+  }
+
+  function fomoUiError(response) {
+    const known = ['no-token', 'expired', 'blocked', 'network', 'runtime', 'rate-limited', 'auth-changed'];
+    const status = typeof response?.status === 'number' && response.status >= 100 && response.status <= 599 ? Math.floor(response.status) : null;
+    const reason = status === 429 ? 'rate-limited' : status === 401 ? 'expired'
+      : known.includes(response?.reason) ? response.reason : 'unavailable';
+    return { reason, status, retryAt: fomoUiTimestamp(response?.retryAt) || (reason === 'rate-limited' ? Date.now() + 30000 : 0) };
+  }
+
+  function fomoUiErrorText(error) {
+    if (error.reason === 'no-token' || error.reason === 'expired' || error.reason === 'auth-changed') return 'Reconnect your FOMO session.';
+    if (error.reason === 'rate-limited') return `Rate limited (429). Retry after ${new Date(error.retryAt).toLocaleTimeString()}.`;
+    if (error.reason === 'runtime') return 'Extension connection unavailable. Retry, or reload this page if the extension was updated.';
+    if (error.reason === 'blocked') return 'Request blocked. Wait briefly, then retry.';
+    if (error.reason === 'network') return 'Network unavailable. Check your connection, then retry.';
+    return 'Refresh failed. Please retry.';
+  }
+
+  function fomoUiTradeTime(item) {
+    return fomoUiTimestamp(item?.createdAt || item?.timestamp || item?.createdTime || item?.time || item?.ts);
+  }
+
+  function fomoUiVisibleItems(items, tab, followingOnly = fomoUi.followingOnly, followingKnown = fomoUi.meta?.followingKnown) {
+    let visible = Array.isArray(items) ? items.slice() : [];
+    if (followingOnly && tab !== 'thesis') visible = followingKnown ? visible.filter((item) => item?.followed === true) : [];
+    if (tab === 'swaps') visible.sort((a, b) => fomoUiTradeTime(b) - fomoUiTradeTime(a));
+    return visible;
+  }
+
+  function fomoUiActivity(item) {
+    const side = String(item?.side || item?.tradeSide || item?.tradeType || item?.type || item?.body?.type || item?.action || '').toLowerCase();
+    const action = String(item?.positionAction || item?.positionType || item?.tradeAction || item?.activityLabel || '').toLowerCase();
+    if (/(^|[ _-])(buy|bought)($|[ _-])/.test(side) || item?.isBuy === true) return 'Buy';
+    if (/(^|[ _-])(sell|sold)($|[ _-])/.test(side) || item?.isSell === true || item?.isBuy === false) {
+      if (/^(all|close|closed|exit|exited|full)$/.test(action) || item?.isFullExit === true) return 'Exit';
+      if (/^(partial|trim|trimmed|reduce|reduced)$/.test(action)) return 'Trim';
+      return 'Sell'; // An ordinary sell is not evidence of a trim or full exit.
+    }
+    return '';
+  }
+
+  function fomoUiPosition(item) {
+    const action = String(item?.positionAction || item?.positionType || item?.tradeAction || item?.activityLabel || '').toLowerCase();
+    if (/^(first|open|opened|new)$/.test(action) || item?.isFirstTrade === true) return 'First';
+    if (/^(more|add|added|increase|increased)$/.test(action)) return 'More';
+    if (/^(partial|trim|trimmed|reduce|reduced)$/.test(action)) return 'Partial';
+    if (/^(all|close|closed|exit|exited|full)$/.test(action) || item?.isFullExit === true) return 'All';
+    return '';
+  }
+
+  function fomoUiDiagnostics() {
+    let version = 'unknown';
+    try {
+      const value = chrome.runtime.getManifest().version;
+      if (/^\d+(\.\d+){1,3}$/.test(value)) version = value;
+    } catch { /* Invalidated extension: diagnostics still work. */ }
+    const meta = fomoUi.meta;
+    const chain = fomoUiRoute()?.chain;
+    return {
+      version, source: meta?.source || 'unknown',
+      timestamps: { fetchedAt: meta?.fetchedAt || null, updatedAt: meta?.updatedAt || null, retryAt: fomoUi.retryAt || null },
+      status: fomoUi.error?.reason || (meta?.stale ? 'stale' : meta ? 'ok' : 'loading'),
+      coverage: meta ? { ...meta.coverage, partial: meta.partial, holderHistoryLimited: meta.source === 'holder-history', followingKnown: meta.followingKnown } : null,
+      tab: ['holders', 'swaps', 'thesis'].includes(fomoUiTab()) ? fomoUiTab() : 'unknown',
+      chain: ['bsc', 'eth', 'base', 'sol', 'robinhood', 'monad'].includes(chain) ? chain : 'unknown',
+    };
+  }
+
+  function resetFomoUi(resetFollowing = false) {
+    fomoUi = { scope: '', meta: null, error: null, retryAt: 0, followingOnly: resetFollowing ? false : fomoUi.followingOnly };
+    clearTimeout(fomoUiRetryTimer);
+    fomoUiClearData();
+    fomoUiPanel()?.querySelector('.gdh-fomo-ui')?.replaceChildren();
+    fomoUiPanel()?.querySelector('[data-fomo-list]')?.replaceChildren();
+  }
+
+  function renderFomoUiItems() {
+    const list = fomoUiPanel()?.querySelector('[data-fomo-list]');
+    if (!list || !fomoUi.meta) return;
+    const tab = fomoUiTab();
+    const items = fomoUiVisibleItems(fomoUiItems(), tab);
+    if (!items.length && fomoUi.followingOnly && tab !== 'thesis') {
+      const empty = document.createElement('div');
+      empty.className = 'gdh-fomo-ui__empty';
+      empty.textContent = fomoUi.meta.followingKnown
+        ? (tab === 'holders' ? 'No followed current holders in this coverage.' : 'No followed trades in this coverage.')
+        : 'Following lookup unavailable. Retry or turn off Following only to view all loaded items.';
+      list.replaceChildren(empty);
+    } else fomoUiRenderItems(list, items, tab);
+  }
+
+  function buildFomoUi() {
+    const box = document.createElement('div');
+    box.className = 'gdh-fomo-ui';
+    box.setAttribute('aria-label', 'FOMO source, coverage and recovery');
+    return box;
+  }
+
+  function renderFomoUi() {
+    const box = fomoUiPanel()?.querySelector('.gdh-fomo-ui');
+    if (!box) return;
+    box.replaceChildren();
+    clearTimeout(fomoUiRetryTimer);
+    const meta = fomoUi.meta;
+    const tab = fomoUiTab();
+    const status = document.createElement('div');
+    status.className = 'gdh-fomo-ui__status';
+    status.setAttribute('role', 'status');
+    const source = { 'holder-history': 'Reconstructed from holder histories', 'token-feed': 'Token feed', holders: 'Current holdings', thesis: 'Narratives' };
+    const time = meta?.fetchedAt ? new Date(meta.fetchedAt).toLocaleTimeString() : 'unknown';
+    status.textContent = meta ? `${source[meta.source] || 'Source unavailable'} · Last successful refresh: ${time}${meta.stale || fomoUi.error ? ' · Stale' : ''}` : 'No successful refresh yet';
+    box.appendChild(status);
+    const notes = [];
+    if (meta?.source === 'holder-history') notes.push('Limited history from current holders, not all token trades. Fully exited users may be absent.');
+    if (meta?.partial || meta?.coverage.truncated) notes.push('Partial / incomplete coverage.');
+    if (meta?.coverage.attempted !== null && meta?.coverage.attempted > 0) notes.push(`${meta.coverage.succeeded ?? '?'} / ${meta.coverage.attempted} sources loaded${meta.coverage.limit !== null ? ` (limit ${meta.coverage.limit})` : ''}.`);
+    if (meta && tab !== 'thesis' && !meta.followingKnown) notes.push('Following lookup unavailable; follow status is unknown.');
+    if (tab === 'swaps' && meta?.source !== 'holder-history') notes.push('Trade history, not current holdings.');
+    if (fomoUi.error) notes.push(fomoUiErrorText(fomoUi.error));
+    if (notes.length) {
+      const note = document.createElement('div');
+      note.className = 'gdh-fomo-ui__note';
+      note.textContent = notes.join(' ');
+      box.appendChild(note);
+    }
+    if (meta?.followingKnown && tab === 'swaps') {
+      const latest = fomoUiVisibleItems(fomoUiItems(), 'swaps', true, true).find((item) => fomoUiActivity(item));
+      const activity = document.createElement('div');
+      activity.className = 'gdh-fomo-ui__activity';
+      const at = latest && fomoUiTradeTime(latest);
+      activity.textContent = latest ? `Latest followed activity in coverage: ${fomoUiName(latest)} · ${fomoUiActivity(latest)}${at ? ` · ${new Date(at).toLocaleString()}` : ''}` : 'No followed trade activity in this coverage.';
+      box.appendChild(activity);
+    }
+    const controls = document.createElement('div');
+    controls.className = 'gdh-fomo-ui__controls';
+    if (tab !== 'thesis') {
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.textContent = '★ Following only';
+      toggle.setAttribute('aria-pressed', String(fomoUi.followingOnly));
+      toggle.addEventListener('click', () => {
+        fomoUi.followingOnly = !fomoUi.followingOnly;
+        toggle.setAttribute('aria-pressed', String(fomoUi.followingOnly));
+        renderFomoUiItems();
+      });
+      controls.appendChild(toggle);
+    }
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.setAttribute('aria-label', 'Retry FOMO refresh');
+    const updateRetry = () => {
+      if (!retry.isConnected) return;
+      const wait = Math.max(0, Math.ceil((fomoUi.retryAt - Date.now()) / 1000));
+      retry.disabled = wait > 0;
+      retry.textContent = wait ? `Retry in ${wait}s` : 'Retry';
+      if (wait) fomoUiRetryTimer = setTimeout(updateRetry, 1000);
+    };
+    retry.textContent = 'Retry';
+    retry.disabled = fomoUi.retryAt > Date.now();
+    retry.addEventListener('click', () => { if (Date.now() >= fomoUi.retryAt) fomoUiLoad(true); });
+    controls.appendChild(retry);
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.textContent = 'Copy diagnostics';
+    copy.title = 'Copy version, source, timestamps, status, coverage, tab and chain only';
+    copy.addEventListener('click', async () => {
+      const generation = fomoUiAuthGeneration;
+      try {
+        await navigator.clipboard.writeText(JSON.stringify(fomoUiDiagnostics(), null, 2));
+        if (generation === fomoUiAuthGeneration && copy.isConnected) copy.textContent = 'Copied';
+      } catch {
+        if (generation === fomoUiAuthGeneration && copy.isConnected) copy.textContent = 'Copy unavailable';
+      }
+    });
+    controls.appendChild(copy);
+    box.appendChild(controls);
+    queueMicrotask(updateRetry);
+  }
+
+  // A single notice outside the virtual rows never changes their offsets.
+  function renderFomoFollowedGap(response) {
+    let notice = document.querySelector('.gdh-fomo-feed-gap');
+    const gap = response?.coverageGap === true || response?.stale === true;
+    if (!gap) { notice?.remove(); return; }
+    if (!notice) {
+      notice = document.createElement('div');
+      notice.className = 'gdh-fomo-feed-gap';
+      notice.setAttribute('role', 'status');
+      notice.tabIndex = 0;
+      document.body.appendChild(notice);
+    }
+    const text = response?.coverageGap === true ? 'Following feed: coverage gap' : 'Following feed: stale';
+    if (notice.textContent !== text) notice.textContent = text;
+    notice.title = 'Bounded polling may omit activity. This feed is not a complete trade history.';
+  }
+
+  function fomoUiPanel() { return fomoPanelEl; }
+  function fomoUiRoute() { return currentTokenRoute(); }
+  function fomoUiTab() { return fomoTab; }
+  function fomoUiItems() { return fomoLastItems; }
+  function fomoUiName(item) { return holderName(item); }
+  function fomoUiRenderItems(list, items, tab) { renderFomoItems(list, items, tab); }
+  function fomoUiLoad(force) { return loadFomoData(force); }
+  function fomoUiClearData() {
+    fomoLoadGeneration += 1;
+    fomoLoadInflight = null;
+    fomoLoadedKey = ''; fomoErrKey = ''; fomoLastItems = [];
+    fomoStats = { key: '', holders: null, thesisCount: null, supply: 0 };
+    fomoPnlObserver?.disconnect(); fomoPnlQueue = [];
+    renderFomoStats();
+  }
+
   function currentTokenRoute() {
     const m = location.pathname.match(/^\/([a-z0-9]+)\/token\/([A-Za-z0-9]+)/);
     if (!m) return null;
@@ -3191,7 +3431,7 @@ Select to open Flap tax details`;
   function normalizeFomoPopupTrade(raw) {
     if (!raw || typeof raw !== 'object') return { side: '', position: '' };
     const side = fomoActivitySide(raw);
-    return { ...raw, side, position: fomoActivityPosition(raw, side) };
+    return { ...raw, side, position: fomoUiPosition(raw) };
   }
 
   function holderName(item) {
@@ -3620,8 +3860,10 @@ Select to open Flap tax details`;
       const job = fomoPnlQueue.shift();
       if (!job.el.isConnected) continue;
       fomoPnlActive += 1;
+      const generation = fomoUiAuthGeneration;
       chrome.runtime.sendMessage({ type: 'fomo-user-pnl', payload: { userId: job.userId } })
         .then((res) => {
+          if (generation !== fomoUiAuthGeneration) return;
           setBoundedMap(fomoPnlCache, job.userId, { at: Date.now(), data: res }, FOMO_PNL_CACHE_MAX);
           if (job.el.isConnected) paintFomoTag(job.el, res);
         })
@@ -3793,6 +4035,13 @@ Select to open Flap tax details`;
       name.textContent = holderName(item);
       head.appendChild(name);
       attachFomoBoard(head, fomoUser(item)?.userHandle);
+      row.classList.toggle('is-followed', item?.followed === true);
+      if (item?.followed === true) {
+        const badge = document.createElement('span');
+        badge.className = 'gdh-fomo__following';
+        badge.textContent = '★ Following';
+        head.appendChild(badge);
+      }
 
       if (kind === 'swaps' && (trade.side === 'buy' || trade.side === 'sell')) {
         const side = document.createElement('span');
@@ -3863,7 +4112,7 @@ Select to open Flap tax details`;
   }
 
 
-  async function buildFomoErrorBox(res) {
+  async function buildFomoErrorBox(res, isCurrentRequest = () => true) {
     const box = document.createElement('div');
     box.className = 'gdh-fomo__guide';
     let stored = null;
@@ -3872,14 +4121,15 @@ Select to open Flap tax details`;
       stored = got?.fomoToken || null;
     } catch {
     }
+    if (!isCurrentRequest()) return box;
     const reason = res?.reason || 'unknown';
     if (reason === 'expired' && !fomoSelfHealTried) {
       fomoSelfHealTried = true;
       chrome.runtime.sendMessage({ type: 'fomo-force-refresh' })
-        .then((r) => { if (r?.ok) { fomoLoadedKey = ''; fomoErrKey = ''; loadFomoData(true); } })
+        .then((r) => { if (r?.ok && isCurrentRequest()) { fomoLoadedKey = ''; fomoErrKey = ''; fomoLoadInflight = null; loadFomoData(true); } })
         .catch(() => {});
     }
-    const needLogin = reason === 'no-token' || reason === 'expired';
+    const needLogin = reason === 'no-token' || reason === 'expired' || reason === 'auth-changed';
 
     const title = document.createElement('div');
     title.className = 'gdh-fomo__gtitle';
@@ -3899,10 +4149,10 @@ Select to open Flap tax details`;
       why.textContent = `Request returned ${res?.status || 403} (Cloudflare). Wait briefly, then retry.`;
     } else if (reason === 'network') {
       title.textContent = 'Network unavailable';
-      why.textContent = `${String(res?.message || 'Request failed').slice(0, 60)}. Check your network or proxy, then retry.`;
+      why.textContent = fomoUiErrorText(res);
     } else {
-      title.textContent = `Load failed (${reason}${res?.status ? ' / ' + res.status : ''})`;
-      why.textContent = String(res?.message || 'Use this message to diagnose the failure.').slice(0, 90);
+      title.textContent = 'FOMO refresh unavailable';
+      why.textContent = fomoUiErrorText(res);
     }
     box.append(title, why);
 
@@ -3956,8 +4206,7 @@ Select to open Flap tax details`;
     retry.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      fomoLoadedKey = '';
-      fomoErrKey = '';
+      if (!isCurrentRequest() || Date.now() < fomoUi.retryAt) return;
       loadFomoData(true);
     });
     actions.appendChild(retry);
@@ -4028,6 +4277,7 @@ Select to open Flap tax details`;
 
   async function loadFomoSupply(route) {
     const statKey = `${route.chain}|${route.address}`;
+    const generation = fomoLoadGeneration;
     if (fomoStats.supply > 0 || fomoSupplyLoadingKey === statKey) return;
     fomoSupplyLoadingKey = statKey;
     try {
@@ -4058,7 +4308,7 @@ Select to open Flap tax details`;
         if (fallback?.ok && fallback.supply > 0) supply = Number(fallback.supply);
       }
 
-      if (supply > 0 && fomoStats.key === statKey) {
+      if (generation === fomoLoadGeneration && supply > 0 && fomoStats.key === statKey) {
         fomoStats.supply = supply;
         renderFomoStats();
       }
@@ -4069,57 +4319,75 @@ Select to open Flap tax details`;
 
   async function loadFomoData(force) {
     const route = currentTokenRoute();
-    if (!route || !fomoPanelEl) return;
+    if (!route || !fomoPanelEl || settings.fomoPanelOpen !== true) return;
     const key = `${fomoTab}|${route.chain}|${route.address}`;
+    if (fomoUi.scope !== key) { resetFomoUi(); fomoUi.scope = key; }
+    if (Date.now() < fomoUi.retryAt) return;
     if (!force && key === fomoLoadedKey) return;
     if (!force && key === fomoErrKey && Date.now() - fomoErrAt < FOMO_ERR_COOLDOWN) return;
-    if (!force && fomoLoadInflight?.key === key) return;
+    if (fomoLoadInflight?.key === key) return;
     const requestGeneration = ++fomoLoadGeneration;
+    const requestPanel = fomoPanelEl;
+    const authGeneration = fomoUiAuthGeneration;
     fomoLoadInflight = { key, generation: requestGeneration };
     const isCurrentRequest = () => {
-      if (requestGeneration !== fomoLoadGeneration || !fomoPanelEl) return false;
+      if (requestGeneration !== fomoLoadGeneration || authGeneration !== fomoUiAuthGeneration
+        || fomoPanelEl !== requestPanel || settings.fomoPanelOpen !== true) return false;
       const current = currentTokenRoute();
       return Boolean(current && `${fomoTab}|${current.chain}|${current.address}` === key);
     };
-    const list = fomoPanelEl.querySelector('.gdh-fomo__list');
-    const keepingGuide = key === fomoErrKey && list.querySelector('.gdh-fomo__guide');
-    if (key !== fomoLoadedKey && !keepingGuide) {
-      list.replaceChildren();
+    const list = requestPanel.querySelector('.gdh-fomo__list');
+    if (!fomoUi.meta && !list.querySelector('.gdh-fomo__guide')) {
       const loading = document.createElement('div');
       loading.className = 'gdh-fomo__empty';
       loading.textContent = 'Loading…';
-      list.appendChild(loading);
+      list.replaceChildren(loading);
     }
+    renderFomoUi();
+    const showError = async (response) => {
+      if (!isCurrentRequest()) return;
+      const error = fomoUiError(response);
+      const needsLogin = ['no-token', 'expired', 'auth-changed'].includes(error.reason);
+      if (needsLogin) {
+        fomoLastItems = []; fomoUi.meta = null; fomoLoadedKey = '';
+        fomoStats = { key: '', holders: null, thesisCount: null, supply: 0 };
+        renderFomoStats(); list.replaceChildren();
+      }
+      fomoUi.error = error; fomoUi.retryAt = error.retryAt;
+      fomoErrKey = key; fomoErrAt = Date.now();
+      // Async session-guide reads must not paint after auth/route/panel changes.
+      if (!fomoUi.meta) {
+        const box = await buildFomoErrorBox(error, isCurrentRequest);
+        if (!isCurrentRequest()) return;
+        list.replaceChildren(box);
+      }
+      if (!isCurrentRequest()) return;
+      renderFomoUi();
+      requestPanel.classList.toggle('has-error', !fomoUi.meta);
+    };
     try {
       const res = await chrome.runtime.sendMessage({
         type: 'fomo-token-feed',
         payload: { tokenAddress: route.address, networkId: route.networkId, kind: fomoTab },
       });
       if (!isCurrentRequest()) return;
-      if (res?.ok) {
-        fomoLoadedKey = key;
-        fomoErrKey = '';
-        fomoLastItems = res.items || [];
+      if (res?.ok && Array.isArray(res.items)) {
+        fomoLoadedKey = key; fomoErrKey = '';
+        fomoLastItems = res.items;
+        fomoUi.meta = fomoUiMeta(res); fomoUi.error = null; fomoUi.retryAt = 0;
         const statKey = `${route.chain}|${route.address}`;
         if (fomoStats.key !== statKey) {
           fomoStats = { key: statKey, holders: null, thesisCount: null, supply: 0 };
           fomoSelfHealTried = false;
         }
-        if (fomoTab === 'holders') fomoStats.holders = { items: res.items || [], total: Number(res.total) };
-        if (fomoTab === 'thesis') fomoStats.thesisCount = (res.items || []).length;
+        if (fomoTab === 'holders') fomoStats.holders = { items: res.items, total: Number(res.total) };
+        if (fomoTab === 'thesis') fomoStats.thesisCount = res.items.length;
         loadFomoSupply(route);
-        renderFomoStats();
-        renderFomoItems(list, fomoLastItems, fomoTab);
-        fomoPanelEl.classList.remove('has-error');
-      } else {
-        const box = await buildFomoErrorBox(res);
-        if (!isCurrentRequest()) return;
-        fomoErrKey = key;
-        fomoErrAt = Date.now();
-        list.replaceChildren(box);
-        fomoPanelEl.classList.add('has-error');
-      }
+        renderFomoStats(); renderFomoUiItems(); renderFomoUi();
+        requestPanel.classList.remove('has-error');
+      } else await showError(res);
     } catch {
+      await showError({ reason: 'runtime' });
     } finally {
       if (fomoLoadInflight?.generation === requestGeneration) fomoLoadInflight = null;
     }
@@ -4171,6 +4439,7 @@ Select to open Flap tax details`;
 
   function setFomoOpen(open) {
     settings.fomoPanelOpen = open;
+    if (!open) resetFomoUi();
     try {
       chrome.storage.local.set({ fomoPanelOpen: open });
     } catch {
@@ -4213,29 +4482,6 @@ Select to open Flap tax details`;
     open.rel = 'noreferrer';
     open.textContent = '↗';
     open.title = 'Open on fomo.family';
-    const dbg = document.createElement('button');
-    dbg.type = 'button';
-    dbg.className = 'gdh-fomo__dbg';
-    dbg.textContent = '{}';
-    dbg.title = 'Show raw data for diagnostics';
-    dbg.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      const list = panel.querySelector('.gdh-fomo__list');
-      const existing = list.querySelector('.gdh-fomo__raw');
-      if (existing) {
-        existing.remove();
-        return;
-      }
-      const pre = document.createElement('pre');
-      pre.className = 'gdh-fomo__raw';
-      const first = fomoLastItems[0];
-      pre.textContent = first
-        ? `${fomoLastItems.length} items · First item fields:\n${JSON.stringify(first, null, 1).slice(0, 1500)}`
-        : 'No data (items is empty)';
-      list.prepend(pre);
-    });
-
     const tr = document.createElement('button');
     tr.type = 'button';
     tr.className = 'gdh-fomo__tr';
@@ -4291,14 +4537,16 @@ Select to open Flap tax details`;
       setFomoOpen(false);
       scheduleScan();
     });
-    head.append(title, tabs, tr, dbg, open, fold, close);
+    head.append(title, tabs, tr, open, fold, close);
 
     const stats = document.createElement('div');
     stats.className = 'gdh-fomo__stats';
 
     const list = document.createElement('div');
     list.className = 'gdh-fomo__list';
-    panel.append(head, stats, list);
+    list.setAttribute('data-fomo-list', '');
+    panel.setAttribute('aria-label', 'FOMO token panel');
+    panel.append(head, stats, buildFomoUi(), list);
     makeFomoDraggable(panel, head);
     applyFomoFold(panel);
     return panel;
@@ -4348,6 +4596,7 @@ Select to open Flap tax details`;
     const route = currentTokenRoute();
     if (settings.enableFomoPanel === false || !route || settings.fomoPanelOpen !== true) {
       if (fomoPanelEl) {
+        resetFomoUi();
         fomoPanelEl.remove();
         fomoPanelEl = null;
         fomoLoadedKey = '';
@@ -5729,24 +5978,33 @@ Select to open Flap tax details`;
   }
 
   function pollFomoFollowedFeed() {
-    if (!settings.enabled || settings.enableFomoFeed === false) return;
-    if (!document.querySelector(TRACK_TAB_CELL) && !trackerCards().length) return;
+    const canDisplay = () => settings.enabled && settings.enableFomoFeed !== false
+      && (document.querySelector(TRACK_TAB_CELL) || trackerCards().length);
+    if (!canDisplay()) { renderFomoFollowedGap(null); return; }
+    const generation = fomoUiAuthGeneration;
     fomoFollowedLastPollAt = Date.now();
     try {
       chrome.runtime.sendMessage({ type: 'fomo-followed-feed' }, (resp) => {
-        if (chrome.runtime.lastError) return;
-        if (!resp?.ok) {
-          if (resp?.reason === 'not-connected') { fomoFollowedEvents = []; scheduleScan(); }
+        if (generation !== fomoUiAuthGeneration || !canDisplay()) return;
+        if (chrome.runtime.lastError || !resp) {
+          renderFomoFollowedGap({ stale: true });
           return;
         }
-        fomoFollowedEvents = (Array.isArray(resp.events) ? resp.events : []).map((event) => ({
-          ...event,
-          source: 'fomo-followed',
-          followed: true,
-        }));
-        scheduleScan();
+        if (resp.reason === 'not-connected') {
+          fomoFollowedEvents = [];
+          renderFomoFollowedGap({ stale: true });
+          scheduleScan();
+          return;
+        }
+        renderFomoFollowedGap(resp);
+        // A failed later page can still carry useful same-account partial data.
+        if (Array.isArray(resp.events)) {
+          fomoFollowedEvents = resp.events.map((event) => ({ ...event, source: 'fomo-followed', followed: true }));
+          scheduleScan();
+        }
       });
     } catch {
+      if (generation === fomoUiAuthGeneration && canDisplay()) renderFomoFollowedGap({ stale: true });
     }
   }
 
@@ -6600,7 +6858,7 @@ Select to open Flap tax details`;
   document.addEventListener('scroll', handleTooltipScroll, true);
   window.addEventListener('blur', dismissTooltipForLifecycle);
 
-  const GDH_SELF_SELECTOR = '[data-gdh-fomo-key], .gdh-flap-row, .gdh-flap, .gdh-marked, .gdh-remind-card, .gdh-notification-launcher, .gdh-notification-panel, .gdh-fomo, .gdh-tooltip, .gdh-tokenblock';
+  const GDH_SELF_SELECTOR = '[data-gdh-fomo-key], .gdh-flap-row, .gdh-flap, .gdh-marked, .gdh-remind-card, .gdh-notification-launcher, .gdh-notification-panel, .gdh-fomo, .gdh-fomo-panel, .gdh-fomo-ui, .gdh-fomo-feed-gap, .gdh-tooltip, .gdh-tokenblock';
   const observer = new MutationObserver((records) => {
     if (activeCard && !activeCard.isConnected) hideTooltip();
     for (const record of records) {
@@ -6704,7 +6962,11 @@ Select to open Flap tax details`;
       if (key === 'fomoToken') {
         const oldIdentity = fomoStoredAccountIdentity(change.oldValue);
         const newIdentity = fomoStoredAccountIdentity(change.newValue);
-        if (oldIdentity && newIdentity && oldIdentity === newIdentity) continue;
+        const sameAccount = oldIdentity && newIdentity && oldIdentity === newIdentity;
+        fomoUiAuthGeneration += 1;
+        resetFomoUi(!sameAccount);
+        fomoPnlCache.clear();
+        renderFomoFollowedGap(null);
         fomoTokenChanged = true;
         fomoLoadGeneration += 1;
         fomoLoadInflight = null;

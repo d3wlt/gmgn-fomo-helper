@@ -9,7 +9,24 @@ permissions:
   contents: write
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install test dependencies
+        run: npm ci
+      - name: Install browser
+        run: npx playwright install --with-deps chromium
+      - name: Verify source and browser behavior
+        run: npm run verify
+      - name: Check tag matches manifest
+        run: python3 scripts/build-release.py --tag "$GITHUB_REF_NAME"
+
   release:
+    needs: verify
     runs-on: windows-latest
     steps:
       - name: Checkout

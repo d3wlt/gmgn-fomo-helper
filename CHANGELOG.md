@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.50.0 - 2026-09-05
+
+- Added explicit FOMO source, freshness, partial coverage, and unknown-following status.
+- Carried fallback completeness through both cache layers.
+- Added bounded followed-feed catch-up with stable event deduplication and coverage-gap reporting.
+- Added Following-only Holders/Trades views, recoverable errors, and allowlisted diagnostics on GMGN and DeBot.
+- Added browser fixture regressions, behavioral data tests, a portable ZIP builder, and version-derived release validation.
+
 ## 0.49.0 - 2026-09-03
 
 - Restricted the watched-developer tooltip to the compact `M` / `L` / rate / `ATH` badge instead of the entire GMGN card.

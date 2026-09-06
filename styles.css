@@ -2469,3 +2469,76 @@ a[data-sentry-component="TrackerListItem"] > .gdh-star-button,
   cursor: pointer;
 }
 .gdh-addw-cross__go:hover { background: rgba(245, 184, 61, 0.2); }
+
+
+/* Trust/recovery UI is outside scrollable rows and virtual tracker layout. */
+.gdh-fomo-ui {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--fomo-ui-border);
+  color: var(--fomo-ui-text);
+  font: 400 12px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow-wrap: anywhere;
+}
+.gdh-fomo-ui:empty { display: none; }
+.gdh-fomo-ui__status { color: var(--fomo-ui-muted); }
+.gdh-fomo-ui__note { margin-top: 5px; color: var(--fomo-ui-warning); }
+.gdh-fomo-ui__activity { margin-top: 5px; }
+.gdh-fomo-ui__controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.gdh-fomo-ui__controls button {
+  box-sizing: border-box;
+  min-height: 28px;
+  max-width: 100%;
+  padding: 3px 8px;
+  border: 1px solid var(--fomo-ui-border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fomo-ui-text);
+  font: inherit;
+  line-height: 1.5;
+  white-space: normal;
+  cursor: pointer;
+}
+.gdh-fomo-ui__controls button:hover:not(:disabled),
+.gdh-fomo-ui__controls button[aria-pressed="true"] {
+  color: var(--fomo-ui-accent);
+  border-color: var(--fomo-ui-accent);
+  background: rgba(245, 184, 61, .08);
+}
+.gdh-fomo-ui__controls button:disabled { color: var(--fomo-ui-muted); cursor: not-allowed; }
+.gdh-fomo-ui__empty { padding: 22px 12px; color: var(--fomo-ui-muted); font-size: 12px; line-height: 1.5; text-align: center; }
+.gdh-fomo-feed-gap {
+  position: fixed;
+  z-index: 2147482940;
+  left: 12px;
+  bottom: 12px;
+  box-sizing: border-box;
+  max-width: calc(100vw - 24px);
+  padding: 6px 10px;
+  border: 1px solid rgba(245, 184, 61, .35);
+  border-radius: 6px;
+  background: #14171c;
+  color: #e5c483;
+  font: 400 12px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow-wrap: anywhere;
+}
+.gdh-fomo-feed-gap:focus-visible { outline: 2px solid #f5b83d; outline-offset: 2px; }
+
+.gdh-fomo-panel {
+  --fomo-ui-text: #d6d9df;
+  --fomo-ui-muted: #a2aab7;
+  --fomo-ui-warning: #e5c483;
+  --fomo-ui-accent: #f5b83d;
+  --fomo-ui-border: rgba(139, 147, 161, .32);
+}
+.gdh-fomo__bar { flex: none; flex-wrap: wrap; gap: 4px; }
+.gdh-fomo__bar .gdh-fomo__tab { padding: 2px 5px; }
+.gdh-fomo__tabs { flex-wrap: wrap; min-width: 0; }
+.gdh-fomo__bar button, .gdh-fomo__bar a { min-height: 28px; }
+.gdh-fomo__close, .gdh-fomo__fold { min-width: 24px; }
+.gdh-fomo__ext { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; margin-left: 0; }
+.gdh-fomo__list { min-height: 0; }
+.gdh-fomo-panel button:focus-visible, .gdh-fomo-panel a:focus-visible { outline: 2px solid #f5b83d; outline-offset: 2px; }
+.gdh-fomo-panel.is-folded .gdh-fomo-ui { display: none; }
