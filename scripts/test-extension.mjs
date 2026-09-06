@@ -76,9 +76,7 @@ try {
   }));
   const j7SubdomainPage = await context.newPage();
   await j7SubdomainPage.goto('https://docs.j7tracker.io/');
-  await new Promise(resolve => setTimeout(resolve, 100));
-  const afterSubdomain = await worker.evaluate(async () => (await chrome.storage.local.get('j7TrackerSessionV1')).j7TrackerSessionV1 || null);
-  assert.equal(afterSubdomain?.token, 'fixture-j7-session', 'a J7 subdomain cannot clear the apex session');
+  assert.equal(await j7SubdomainPage.evaluate(() => typeof window.__gdhJ7SessionBridgeStarted), 'undefined', 'the apex session bridge is not injected on J7 subdomains');
   await j7SubdomainPage.close();
   await j7Page.close();
 
