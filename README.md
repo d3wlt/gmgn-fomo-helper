@@ -1,6 +1,6 @@
 # better gmgn
 
-An independent private copy of the Chrome MV3 extension “better gmgn.” Version 0.50.0 is based on upstream version 0.46.27 and adds trading-oriented interface enhancements to GMGN.ai and DeBot without executing trades.
+An independent private copy of the Chrome MV3 extension “better gmgn.” Version 0.50.1 is based on upstream version 0.46.27 and adds trading-oriented interface enhancements to GMGN.ai and DeBot without executing trades.
 
 This repository is not affiliated with GMGN, DeBot, FOMO, Pump, 985monitor, or the original upstream author.
 
@@ -51,7 +51,7 @@ The script creates only `dist/985gmgn-helper-vX.Y.Z.zip` and its `.sha256` check
 On macOS or Linux, the portable builder reads the same release-file allowlist and verifies every ZIP entry:
 
 ```bash
-python3 scripts/build-release.py --tag v0.50.0
+python3 scripts/build-release.py --tag v0.50.1
 ```
 
 Run the repository gates (Node.js 22+):

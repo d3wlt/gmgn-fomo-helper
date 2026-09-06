@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.50.1 - 2026-09-06
+
+- Fixed FOMO-injected GMGN wallet-tracker timestamps so table rows advance every second and continue through minute, hour, and day labels instead of freezing at their initial age.
+- Added a real-browser regression covering the live timestamp update.
+
 ## 0.50.0 - 2026-09-05
 
 - Added explicit FOMO source, freshness, partial coverage, and unknown-following status.

@@ -567,7 +567,9 @@ await test('Tracking-feed mutation layout is frame-coalesced', () => {
   assert.ok(!content.includes('refreshFomoFeedFixedRowShifts();\n      }\n      scheduleScan();'));
   assert.ok(content.includes("if (document.visibilityState === 'hidden') return;"));
   assert.ok(bridge.includes("if (document.visibilityState === 'hidden') return;"));
-  assert.ok(content.includes("if (document.visibilityState !== 'hidden') scanVisibleCards();"));
+  assert.match(content, /if \(document\.visibilityState !== 'hidden'\) \{\s*refreshFomoFeedTimes\(\);\s*scanVisibleCards\(\);\s*\}/);
+  assert.ok(content.includes("root.querySelectorAll('[data-gdh-fomo-ts]')"));
+  assert.ok(content.includes("time.className = 'gdh-fomofeed__tcell gdh-fomofeed__ttime';\n    time.dataset.gdhFomoTs = String(ev.ts);"));
 });
 
 await test('FOMO and Pump cards inherit the GMGN theme', () => {

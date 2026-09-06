@@ -6009,11 +6009,20 @@ Select to open Flap tax details`;
   }
 
   function fomoFeedRelTime(ts) {
-    const diff = Math.max(0, Date.now() - ts);
-    if (diff < 60000) return `${Math.max(5, Math.ceil(diff / 5000) * 5)}s`;
+    const diff = Math.max(0, Date.now() - Number(ts));
+    if (diff < 60000) return `${Math.max(1, Math.floor(diff / 1000))}s`;
     if (diff < 3600000) return `${Math.floor(diff / 60000)}m`;
     if (diff < 86400000) return `${Math.floor(diff / 3600000)}h`;
     return `${Math.floor(diff / 86400000)}d`;
+  }
+
+  function refreshFomoFeedTimes(root = document) {
+    root.querySelectorAll('[data-gdh-fomo-ts]').forEach((timeEl) => {
+      const ts = Number(timeEl.dataset.gdhFomoTs);
+      if (!Number.isFinite(ts) || ts <= 0) return;
+      const next = fomoFeedRelTime(ts);
+      if (timeEl.textContent !== next) timeEl.textContent = next;
+    });
   }
 
 
@@ -6075,6 +6084,7 @@ Select to open Flap tax details`;
 
     const time = document.createElement('span');
     time.className = 'gdh-fomofeed__tcell gdh-fomofeed__ttime';
+    time.dataset.gdhFomoTs = String(ev.ts);
     time.textContent = fomoFeedRelTime(ev.ts);
 
     const who = document.createElement('span');
@@ -6205,6 +6215,7 @@ Select to open Flap tax details`;
 
     const time = document.createElement('span');
     time.className = 'gdh-fomofeed__time';
+    time.dataset.gdhFomoTs = String(ev.ts);
     time.textContent = fomoFeedRelTime(ev.ts);
 
     r1.append(av, name, tagEl);
@@ -6285,9 +6296,10 @@ Select to open Flap tax details`;
       el = buildFomoFeedCard(ev);
       fomoFeedCards.set(ev.key, el);
     }
-    const timeEl = el.querySelector('.gdh-fomofeed__time');
-    const next = fomoFeedRelTime(ev.ts);
-    if (timeEl && timeEl.textContent !== next) timeEl.textContent = next;
+    el.querySelectorAll('.gdh-fomofeed__time, .gdh-fomofeed__ttime').forEach((timeEl) => {
+      timeEl.dataset.gdhFomoTs = String(ev.ts);
+    });
+    refreshFomoFeedTimes(el);
     return el;
   }
 
@@ -7036,7 +7048,10 @@ Select to open Flap tax details`;
   }
 
   window.setInterval(() => {
-    if (document.visibilityState !== 'hidden') scanVisibleCards();
+    if (document.visibilityState !== 'hidden') {
+      refreshFomoFeedTimes();
+      scanVisibleCards();
+    }
   }, 1000);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') dismissTooltipForLifecycle();

@@ -81,7 +81,7 @@ async function boot(site, width = 1280) {
   }, { version: manifest.version, address });
   const file = site === 'gmgn' ? 'content.js' : 'debot-content.js';
   const hooks = site === 'gmgn'
-    ? 'window.__test = { shift: setFomoFeedRowShift, insertionShift: fomoFeedInsertionShift, gap: renderFomoFollowedGap, load: () => loadFomoData(true), sync: () => scanVisibleCards(), tab: value => {fomoTab=value;return loadFomoData(true);}, close: () => {setFomoOpen(false);scanVisibleCards();}, open: () => {setFomoOpen(true);scanVisibleCards();} };'
+    ? 'window.__test = { shift: setFomoFeedRowShift, insertionShift: fomoFeedInsertionShift, gap: renderFomoFollowedGap, relativeTime: fomoFeedRelTime, feedCard: event => fomoFeedCardFor(event), load: () => loadFomoData(true), sync: () => scanVisibleCards(), tab: value => {fomoTab=value;return loadFomoData(true);}, close: () => {setFomoOpen(false);scanVisibleCards();}, open: () => {setFomoOpen(true);scanVisibleCards();} };'
     : 'window.__test = { gap: renderFomoFollowedGap, load: () => loadPanel(true), sync: () => syncRoute(), tab: value => {panelTab=value;return loadPanel(true);}, close: () => {settings.debotFomoPanelOpen=false;syncPanel();}, open: () => {settings.debotFomoPanelOpen=true;syncPanel();} };';
   const source = fs.readFileSync(path.join(root, file), 'utf8').replace(/\}\)\(\);\s*$/, `${hooks}\n})();`);
   await page.addStyleTag({ path: path.join(root, site === 'gmgn' ? 'styles.css' : 'debot-styles.css') });
@@ -184,6 +184,36 @@ try {
       assert.equal(await page.locator('.gdh-fomo-feed-gap').count(), 0);
       reports.push({ site, scenario:'single coverage notice clears after proven catch-up', passed:true });
       if (site === 'gmgn') {
+        const ageScale = await page.evaluate(() => {
+          const now = Date.now();
+          return [1200, 59000, 60000, 120000, 3600000, 86400000]
+            .map(age => window.__test.relativeTime(now-age));
+        });
+        assert.deepEqual(ageScale, ['1s','59s','1m','2m','1h','1d']);
+        const liveTableTime = await page.evaluate(async () => {
+          const header = document.createElement('div');
+          header.dataset.testid = 'follow-tracking-table-header';
+          document.body.appendChild(header);
+          const event = { key:'time-fixture', source:'fomo', type:'buy', ts:Date.now()-1200, name:'Timer', handle:'timer' };
+          const built = window.__test.feedCard(event);
+          const card = built.cloneNode(true);
+          card.dataset.gdhFomoKey = 'time-fixture';
+          built.remove();
+          document.body.appendChild(card);
+          const selector = '.gdh-fomofeed__ttime';
+          const first = card.querySelector(selector)?.textContent;
+          await new Promise(resolve => setTimeout(resolve, 1100));
+          const second = card.querySelector(selector)?.textContent;
+          return { first, second };
+        });
+        assert.equal(liveTableTime.first, '1s');
+        assert.equal(liveTableTime.second, '2s');
+        await page.locator('[data-gdh-fomo-key="time-fixture"]').screenshot({ path:path.join(output,'gmgn-live-table-time.png') });
+        await page.evaluate(() => {
+          document.querySelector('[data-gdh-fomo-key="time-fixture"]')?.remove();
+          document.querySelector('[data-testid="follow-tracking-table-header"]')?.remove();
+        });
+        reports.push({site,scenario:'FOMO table-row age advances every second through the full age scale',passed:true,liveTableTime,ageScale});
         const geometry = await page.evaluate(() => {
           const wrap = document.createElement('div');
           wrap.style.cssText='position:absolute;top:200px;left:40px;height:400px;width:300px';
