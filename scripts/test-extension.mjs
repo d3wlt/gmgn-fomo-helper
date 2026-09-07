@@ -16,7 +16,9 @@ let context;
 try {
   context = await chromium.launchPersistentContext(profile, {
     channel:'chromium', headless:true, offline:true,
-    args:[`--disable-extensions-except=${root}`, `--load-extension=${root}`],
+    // Context offline emulation does not reliably cover service-worker sockets.
+    // Fail DNS for all real hosts; routed synthetic pages still load without DNS.
+    args:[`--disable-extensions-except=${root}`, `--load-extension=${root}`, '--host-resolver-rules=MAP * ~NOTFOUND'],
   });
   let worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker', { timeout:15000 });
   const id = new URL(worker.url()).host;
