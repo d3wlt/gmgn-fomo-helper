@@ -63,13 +63,16 @@ function pumpRecord(id, account = 'bob') {
   };
 }
 
-function harness({ fetchRoute, historyRoute, token = 'fixture-token-a', accountId = 'account-a' } = {}) {
+function harness({ fetchRoute, historyRoute, token = 'fixture-token-a', accountId = 'account-a', sessionStore, delayTabs = false } = {}) {
   let now = 1800000000000;
   const fetchCalls = [];
   const socketCalls = [];
   const sockets = [];
   const storageListeners = [];
   const messages = [];
+  const tabMessages = [];
+  const tabCallbacks = [];
+  const intervals = [];
   const store = {
     j7TrackerSessionV1: { token, accountId, displayName: accountId, at: now },
   };
@@ -97,6 +100,8 @@ function harness({ fetchRoute, historyRoute, token = 'fixture-token-a', accountI
         Promise.resolve(routed)
           .then(result => callback(result?.rawAck === true ? result.value : { events: result }), error => handlers.connect_error?.(error));
       },
+      connected: true,
+      timeout() { return socket; },
       disconnect() {},
     };
     sockets.push({ origin, options, handlers, socket });
@@ -104,8 +109,8 @@ function harness({ fetchRoute, historyRoute, token = 'fixture-token-a', accountI
   };
 
   const context = vm.createContext({
-    console, Date: Clock, URL, URLSearchParams, atob, btoa, AbortController, TextDecoder,
-    Response, ReadableStream, DOMException, crypto, clearTimeout, clearInterval, setInterval,
+    console, Date: Clock, URL, URLSearchParams, atob, btoa, AbortController, TextDecoder, TextEncoder,
+    Response, ReadableStream, DOMException, crypto, clearTimeout, clearInterval, setInterval: (fn, ms) => { intervals.push({ fn, ms }); return { unref() {} }; },
     setTimeout: timer, importScripts() {}, io,
     fetch: async (url, options) => {
       fetchCalls.push({ url: String(url), options });
@@ -121,8 +126,13 @@ function harness({ fetchRoute, historyRoute, token = 'fixture-token-a', accountI
         onMessage: { addListener(fn) { messages.push(fn); } },
       },
       alarms: { get: async () => ({}), create() {}, onAlarm: ignore },
-      tabs: { query(_query, callback) { callback([]); }, sendMessage() {} },
+      tabs: { query(_query, callback) { if (delayTabs) tabCallbacks.push(callback); else callback([{ id: 1 }]); }, sendMessage(id, msg, callback) { tabMessages.push(msg); callback(); } },
       storage: {
+        ...(sessionStore ? { session: {
+          get: async key => ({ [key]: sessionStore[key] }),
+          set: async value => Object.assign(sessionStore, plain(value)),
+          remove: async key => { delete sessionStore[key]; },
+        } } : {}),
         local: {
           get: async (keys) => {
             const requested = typeof keys === 'string' ? [keys] : (Array.isArray(keys) ? keys : Object.keys(keys || {}));
@@ -139,7 +149,7 @@ function harness({ fetchRoute, historyRoute, token = 'fixture-token-a', accountI
   });
   vm.runInContext(source, context, { filename: 'background.js' });
   return {
-    context, store, fetchCalls, socketCalls, sockets,
+    context, store, fetchCalls, socketCalls, sockets, tabMessages, tabCallbacks, intervals,
     run: code => vm.runInContext(code, context),
     fomo: () => vm.runInContext('fetchJ7TrackerFomoFeed()', context),
     pump: () => vm.runInContext('fetchJ7TrackerPumpFeed()', context),
@@ -326,4 +336,84 @@ await test('session-update messages are accepted only from J7Tracker pages', asy
   assert.equal(deniedSubdomain.ok, false);
   const allowed = await h.message({ type: 'j7tracker-session-updated' }, { url: 'https://j7tracker.io/' });
   assert.equal(typeof allowed.ok, 'boolean');
+});
+
+await test('live arrival survives history in flight and push is normalized without credentials', async () => {
+  const pending = deferred();
+  const h = harness({ historyRoute: () => pending.promise });
+  const work = h.run('refreshJ7TrackerHistory(true)');
+  await new Promise(resolve => setImmediate(resolve));
+  const event = fomoRecord('in-flight');
+  h.context.payload = event.payload;
+  await h.run("acceptJ7TrackerLiveEvent('fomo_event', payload, 0, 'fixture-token-a')");
+  pending.resolve([fomoRecord('older')]);
+  assert.equal(await work, true);
+  assert.deepEqual(plain(h.run('j7TrackerFomoCache.map(e => e.id)')).sort(), ['in-flight', 'older']);
+  const push = h.tabMessages.find(m => m.event);
+  assert.equal(push.event.source, 'j7-fomo');
+  assert.ok(!JSON.stringify(push).includes('fixture-token'));
+});
+
+await test('delayed tab delivery is dropped after logout and saves/clears serialize', async () => {
+  const sessionStore = {};
+  const h = harness({ sessionStore, delayTabs: true });
+  await h.run('wakeJ7Tracker()');
+  h.context.payload = fomoRecord('secret-old').payload;
+  await h.run("acceptJ7TrackerLiveEvent('fomo_event', payload, j7TrackerSessionGeneration, 'fixture-token-a')");
+  h.switchSession(null, '');
+  for (const callback of h.tabCallbacks) callback([{ id: 1 }]);
+  await h.run('j7TrackerPersistQueue');
+  assert.ok(!h.tabMessages.some(m => m.event));
+  assert.equal(sessionStore.j7TrackerCacheV1, undefined);
+});
+
+await test('session cache restores on evaluation, is capped, and cannot cross account/token boundary', async () => {
+  const sessionStore = {};
+  const h = harness({ sessionStore });
+  await h.run('wakeJ7Tracker()');
+  h.context.payload = fomoRecord('persisted').payload;
+  await h.run("acceptJ7TrackerLiveEvent('fomo_event', payload, j7TrackerSessionGeneration, 'fixture-token-a')");
+  await h.run('j7TrackerPersistQueue');
+  assert.equal(sessionStore.j7TrackerCacheV1.fomo[0].id, 'persisted');
+  assert.ok(!JSON.stringify(sessionStore).includes('fixture-token-a'));
+  const restored = harness({ sessionStore, historyRoute: () => new Promise(() => {}) });
+  await restored.run('wakeJ7Tracker()');
+  assert.equal(restored.run('j7TrackerFomoCache[0].id'), 'persisted');
+  const other = harness({ sessionStore, token: 'fixture-token-b', accountId: 'account-b', historyRoute: () => new Promise(() => {}) });
+  await other.run('wakeJ7Tracker()');
+  assert.equal(other.run('j7TrackerFomoCache.length'), 0);
+  assert.equal(h.run('mergeJ7TrackerEvents(Array.from({length:800}, (_,i) => ({key:String(i),ts:i})), []).length'), 500);
+});
+
+await test('runtime snapshot bypasses stalled config/history; supported heartbeat is below30s and bounded', async () => {
+  const h = harness({ fetchRoute: () => new Promise(() => {}), historyRoute: () => new Promise(() => {}) });
+  await h.run('wakeJ7Tracker()');
+  h.context.payload = fomoRecord('instant').payload;
+  await h.run("acceptJ7TrackerLiveEvent('fomo_event', payload, 0, 'fixture-token-a')");
+  const snapshot = await Promise.race([h.run("snapshotJ7TrackerFeed('fomo')"), new Promise((_, reject) => setTimeout(() => reject(new Error('snapshot blocked')), 100))]);
+  assert.equal(snapshot.events[0].id, 'instant');
+  const heartbeat = h.intervals.find(i => i.ms === 25000);
+  assert.ok(heartbeat);
+  const before = h.socketCalls.length;
+  heartbeat.fn(); heartbeat.fn();
+  assert.equal(h.socketCalls.length, before + 1, 'no overlapping unacknowledged heartbeat');
+  assert.equal(h.socketCalls.at(-1).name, 'social_history');
+  assert.equal(h.socketCalls.at(-1).payload.limit, 1);
+});
+
+await test('a transient session-storage hydration failure can retry without a session switch', async () => {
+  const h = harness();
+  let reads = 0;
+  h.context.chrome.storage.session = {
+    get: async () => {
+      if (++reads === 1) throw new Error('synthetic transient storage failure');
+      return {};
+    },
+    set: async () => {},
+    remove: async () => {},
+  };
+  await assert.rejects(h.run('wakeJ7Tracker()'), /synthetic transient storage failure/);
+  await assert.doesNotReject(h.run('wakeJ7Tracker()'));
+  assert.equal(reads, 2);
+  assert.ok(h.run('j7TrackerLiveSocket !== null'));
 });

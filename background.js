@@ -1171,12 +1171,12 @@ async function tokenSupply({ chain, address, rpc, apiQuery }) {
 }
 
 
-function notifyTrackerTabs(messageType) {
+function notifyTrackerTabs(messageType, detail = null, generation = j7TrackerSessionGeneration) {
   try {
     chrome.tabs.query({ url: ['https://gmgn.ai/*', 'https://debot.ai/*'] }, (tabs) => {
-      if (chrome.runtime.lastError || !Array.isArray(tabs)) return;
+      if (chrome.runtime.lastError || !Array.isArray(tabs) || generation !== j7TrackerSessionGeneration) return;
       for (const tab of tabs) {
-        chrome.tabs.sendMessage(tab.id, { type: messageType }, () => void chrome.runtime.lastError);
+        chrome.tabs.sendMessage(tab.id, { type: messageType, ...detail }, () => void chrome.runtime.lastError);
       }
     });
   } catch {
@@ -1208,6 +1208,67 @@ let j7TrackerLiveSocket = null;
 let j7TrackerLiveToken = '';
 let j7TrackerLiveGeneration = -1;
 
+// Session storage is extension-only (default TRUSTED_CONTEXTS). No raw token is persisted here.
+let j7TrackerEpoch = '';
+let j7TrackerPersistQueue = Promise.resolve();
+let j7TrackerWakePromise = null;
+let j7TrackerHeartbeat = null;
+async function j7TrackerFingerprint(session) {
+  const bytes = new TextEncoder().encode(`${session.accountId}\n${session.token}`);
+  return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), n => n.toString(16).padStart(2, '0')).join('');
+}
+function mergeJ7TrackerEvents(history, live) {
+  return Array.from(new Map([...history, ...live].map(e => [e.key, e])).values())
+    .sort((a, b) => b.ts - a.ts).slice(0, J7TRACKER_HISTORY_LIMIT);
+}
+function persistJ7TrackerCache(session, generation) {
+  if (!chrome.storage.session) return Promise.resolve();
+  j7TrackerPersistQueue = j7TrackerPersistQueue.catch(() => {}).then(async () => {
+    const fingerprint = await j7TrackerFingerprint(session);
+    if (generation !== j7TrackerSessionGeneration) return;
+    await chrome.storage.session.set({ j7TrackerCacheV1: {
+      fingerprint, epoch: j7TrackerEpoch, at: Date.now(), historyAt: j7TrackerHistoryAt,
+      fomo: j7TrackerFomoCache, pump: j7TrackerPumpCache,
+    } });
+  });
+  return j7TrackerPersistQueue.catch(() => {});
+}
+async function wakeJ7Tracker() {
+  if (j7TrackerWakePromise) return j7TrackerWakePromise;
+  const generation = j7TrackerSessionGeneration;
+  const work = (async () => {
+    const session = await readJ7TrackerSession();
+    if (!session || generation !== j7TrackerSessionGeneration) return;
+    const fingerprint = await j7TrackerFingerprint(session);
+    const saved = chrome.storage.session ? (await chrome.storage.session.get('j7TrackerCacheV1')).j7TrackerCacheV1 : null;
+    if (generation !== j7TrackerSessionGeneration) return;
+    j7TrackerEpoch = fingerprint;
+    if (saved?.fingerprint === fingerprint && Date.now() - saved.at < 3600000) {
+      j7TrackerFomoCache = mergeJ7TrackerEvents(saved.fomo || [], j7TrackerFomoCache);
+      j7TrackerPumpCache = mergeJ7TrackerEvents(saved.pump || [], j7TrackerPumpCache);
+      j7TrackerHistoryAt = Number(saved.historyAt) || 0;
+    }
+    await ensureJ7TrackerLiveSocket(session, generation);
+  })();
+  j7TrackerWakePromise = work;
+  try { return await work; }
+  catch (error) {
+    if (j7TrackerWakePromise === work) j7TrackerWakePromise = null;
+    throw error;
+  }
+}
+async function snapshotJ7TrackerFeed(kind) {
+  await wakeJ7Tracker(); // storage only; never config/history network
+  const generation = j7TrackerSessionGeneration;
+  const session = await readJ7TrackerSession();
+  if (!session || generation !== j7TrackerSessionGeneration) return { ok: false, reason: 'not-connected', events: [], epoch: j7TrackerEpoch };
+  void refreshJ7TrackerState(false).catch(() => {});
+  void refreshJ7TrackerHistory(false).catch(() => {});
+  return { ok: true, events: (kind === 'pump' ? j7TrackerPumpCache : j7TrackerFomoCache).slice(),
+    epoch: j7TrackerEpoch, source: 'j7tracker', fetchedAt: j7TrackerHistoryAt,
+    liveConnected: j7TrackerLiveSocket?.connected === true, stale: !!j7TrackerHistoryError };
+}
+
 async function readJ7TrackerSession() {
   const stored = await chrome.storage.local.get(['j7TrackerSessionV1']);
   const session = stored.j7TrackerSessionV1;
@@ -1222,6 +1283,11 @@ async function readJ7TrackerSession() {
 
 function resetJ7TrackerCaches() {
   j7TrackerSessionGeneration += 1;
+  j7TrackerEpoch = '';
+  j7TrackerWakePromise = null;
+  clearInterval(j7TrackerHeartbeat);
+  j7TrackerHeartbeat = null;
+  if (chrome.storage.session) j7TrackerPersistQueue = j7TrackerPersistQueue.catch(() => {}).then(() => chrome.storage.session.remove('j7TrackerCacheV1')).catch(() => {});
   try { j7TrackerLiveSocket?.disconnect(); } catch {}
   j7TrackerLiveSocket = null;
   j7TrackerLiveToken = '';
@@ -1314,7 +1380,7 @@ async function refreshJ7TrackerState(force = false) {
         j7TrackerPumpConfigV1: { connected: true, trackedCount: pumpTrackedCount, at },
       });
       j7TrackerConfigAt = at;
-      ensureJ7TrackerLiveSocket(session, generation);
+      await ensureJ7TrackerLiveSocket(session, generation);
       return true;
     } catch (error) {
       const current = await readJ7TrackerSession();
@@ -1517,6 +1583,7 @@ function normalizeJ7TrackerHistory(records) {
 }
 
 async function acceptJ7TrackerLiveEvent(channel, payload, generation, token) {
+  const receivedAt = Date.now();
   const current = await readJ7TrackerSession();
   if (generation !== j7TrackerSessionGeneration || current?.token !== token) return false;
   const record = { channel, payload };
@@ -1528,15 +1595,19 @@ async function acceptJ7TrackerLiveEvent(channel, payload, generation, token) {
     .slice(0, J7TRACKER_HISTORY_LIMIT);
   if (event.source === 'j7-fomo') {
     j7TrackerFomoCache = merged;
-    notifyTrackerTabs('gdh-fomo-push');
+    notifyTrackerTabs('gdh-fomo-push', { event, epoch: j7TrackerEpoch, receivedAt }, generation);
   } else {
     j7TrackerPumpCache = merged;
-    notifyTrackerTabs('gdh-pump-push');
+    notifyTrackerTabs('gdh-pump-push', { event, epoch: j7TrackerEpoch, receivedAt }, generation);
   }
+  void persistJ7TrackerCache(current, generation);
   return true;
 }
 
-function ensureJ7TrackerLiveSocket(session, generation) {
+async function ensureJ7TrackerLiveSocket(session, generation) {
+  const fingerprint = await j7TrackerFingerprint(session);
+  if (generation !== j7TrackerSessionGeneration) return;
+  j7TrackerEpoch = fingerprint;
   if (typeof io !== 'function' || !session?.token) return;
   if (j7TrackerLiveSocket && j7TrackerLiveToken === session.token && j7TrackerLiveGeneration === generation) return;
   try { j7TrackerLiveSocket?.disconnect(); } catch {}
@@ -1553,6 +1624,22 @@ function ensureJ7TrackerLiveSocket(session, generation) {
   j7TrackerLiveSocket = socket;
   j7TrackerLiveToken = session.token;
   j7TrackerLiveGeneration = generation;
+  // Engine.IO server advertises 30s pingInterval: not safely below MV3's 30s idle.
+  // Reuse the documented/implemented social_history request, NOT an invented ping event.
+  clearInterval(j7TrackerHeartbeat);
+  let heartbeatPending = false;
+  j7TrackerHeartbeat = setInterval(() => {
+    if (generation === j7TrackerSessionGeneration && socket.connected && !heartbeatPending) {
+      heartbeatPending = true;
+      socket.timeout(8000).emit('social_history', { limit: 1 }, () => { heartbeatPending = false; });
+    }
+  }, 25000);
+  j7TrackerHeartbeat?.unref?.();
+  socket.on('connect', () => {
+    notifyTrackerTabs('gdh-j7-status', { connected: true, epoch: j7TrackerEpoch }, generation);
+    void refreshJ7TrackerHistory(true).catch(() => {});
+  });
+  socket.on('disconnect', () => notifyTrackerTabs('gdh-j7-status', { connected: false, epoch: j7TrackerEpoch }, generation));
   socket.on('fomo_event', (payload) => { void acceptJ7TrackerLiveEvent('fomo_event', payload, generation, session.token); });
   socket.on('pump_event', (payload) => { void acceptJ7TrackerLiveEvent('pump_event', payload, generation, session.token); });
   socket.on('connect_error', async (cause) => {
@@ -1586,8 +1673,8 @@ async function refreshJ7TrackerHistory(force = false) {
       const oldPump = new Set(j7TrackerPumpCache.map((event) => event.key));
       const fomoChanged = normalized.fomo.some((event) => !oldFomo.has(event.key));
       const pumpChanged = normalized.pump.some((event) => !oldPump.has(event.key));
-      j7TrackerFomoCache = normalized.fomo;
-      j7TrackerPumpCache = normalized.pump;
+      j7TrackerFomoCache = mergeJ7TrackerEvents(normalized.fomo, j7TrackerFomoCache);
+      j7TrackerPumpCache = mergeJ7TrackerEvents(normalized.pump, j7TrackerPumpCache);
       j7TrackerHistoryAt = Date.now();
       j7TrackerHistoryError = '';
       j7TrackerRetryAt = 0;
@@ -1601,6 +1688,8 @@ async function refreshJ7TrackerHistory(force = false) {
           verifiedAt: j7TrackerHistoryAt,
         },
       });
+      if (generation !== j7TrackerSessionGeneration) return false;
+      void persistJ7TrackerCache(session, generation);
       if (fomoChanged) notifyTrackerTabs('gdh-fomo-push');
       if (pumpChanged) notifyTrackerTabs('gdh-pump-push');
       return true;
@@ -1864,7 +1953,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
     const nextAccount = fomoAccountIdentity(changes.fomoToken.newValue);
     if (previousAccount !== nextAccount) resetFomoAccountCaches();
   }
-  if (changes.j7TrackerSessionV1) resetJ7TrackerCaches();
+  if (changes.j7TrackerSessionV1) {
+    resetJ7TrackerCaches();
+    if (chrome.storage.session) void wakeJ7Tracker().catch(() => {});
+  }
 });
 
 function isJ7TrackerSender(sender) {
@@ -1937,7 +2029,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === 'fomo-feed') {
-    fetchJ7TrackerFomoFeed()
+    snapshotJ7TrackerFeed('fomo')
       .then(sendResponse)
       .catch((error) => sendResponse({ ok: false, reason: 'error', message: String(error?.message || '') }));
     return true;
@@ -1958,7 +2050,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === 'pump-feed') {
-    fetchJ7TrackerPumpFeed()
+    snapshotJ7TrackerFeed('pump')
       .then(sendResponse)
       .catch((error) => sendResponse({ ok: false, reason: 'error', message: String(error?.message || '') }));
     return true;
@@ -1994,3 +2086,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   return false;
 });
+
+// Executed on every MV3 evaluation, including alarm/message wake (not only browser startup).
+if (chrome.storage.session) void wakeJ7Tracker().catch(() => {});

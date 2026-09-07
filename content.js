@@ -5706,20 +5706,47 @@ Select to open Flap tax details`;
     }).slice(0, FOMO_FEED_RENDER_CAP);
   }
 
+  let j7UiGeneration = 0;
+  let j7UiEpoch = '';
+  let j7FeedRaf = 0;
+  let j7RecoveryMs = 2000;
+  const j7PendingLatency = new Map();
+  const j7LatencyMetrics = []; // local, bounded numeric allowlist; no identifiers or payloads
+  function scheduleJ7FeedRender() {
+    if (j7FeedRaf || document.visibilityState === 'hidden') return;
+    j7FeedRaf = requestAnimationFrame(() => {
+      j7FeedRaf = 0;
+      scanFomoFeed(); // deliberately bypass scanVisibleCards and its adaptive throttle
+      for (const [key, receivedAt] of j7PendingLatency) {
+        if (!fomoFeedCards.get(key)?.isConnected) continue;
+        j7LatencyMetrics.push({ receiveToInsertionMs: Math.max(0, Date.now() - receivedAt) });
+        if (j7LatencyMetrics.length > 100) j7LatencyMetrics.shift();
+        j7PendingLatency.delete(key);
+      }
+    });
+  }
+  function mergeJ7UiEvents(events, current) {
+    return Array.from(new Map([...events, ...current].map(e => [e.key, e])).values())
+      .sort((a, b) => b.ts - a.ts).slice(0, 500);
+  }
   function pollFomoFeed() {
     if (!settings.enabled || settings.enableFomoFeed === false) return;
     if (!document.querySelector(TRACK_TAB_CELL) && !trackerCards().length) return;
     fomoFeedLastPollAt = Date.now();
+    const generation = j7UiGeneration;
     try {
       chrome.runtime.sendMessage({ type: 'fomo-feed' }, (resp) => {
-        if (chrome.runtime.lastError) return;
+        if (generation !== j7UiGeneration || chrome.runtime.lastError) return;
+        if (resp?.epoch && j7UiEpoch && resp.epoch !== j7UiEpoch) return;
+        if (resp?.epoch) j7UiEpoch = resp.epoch;
+        j7RecoveryMs = resp?.liveConnected ? 60000 : Math.min(18000, (j7RecoveryMs > 18000 ? 2000 : j7RecoveryMs) * 1.5);
         if (!resp?.ok) {
           fomoFeedEvents = resp?.stale && Array.isArray(resp.events) ? resp.events : [];
-          scheduleScan();
+          scheduleJ7FeedRender();
           return;
         }
-        fomoFeedEvents = Array.isArray(resp.events) ? resp.events : [];
-        scheduleScan();
+        fomoFeedEvents = mergeJ7UiEvents(Array.isArray(resp.events) ? resp.events : [], fomoFeedEvents);
+        scheduleJ7FeedRender();
       });
     } catch {
     }
@@ -6101,16 +6128,20 @@ Select to open Flap tax details`;
     if (!settings.enabled || settings.enablePumpFeed === false) return;
     if (!document.querySelector(TRACK_TAB_CELL) && !trackerCards().length) return;
     pumpFeedLastPollAt = Date.now();
+    const generation = j7UiGeneration;
     try {
       chrome.runtime.sendMessage({ type: 'pump-feed' }, (resp) => {
-        if (chrome.runtime.lastError) return;
+        if (generation !== j7UiGeneration || chrome.runtime.lastError) return;
+        if (resp?.epoch && j7UiEpoch && resp.epoch !== j7UiEpoch) return;
+        if (resp?.epoch) j7UiEpoch = resp.epoch;
+        j7RecoveryMs = resp?.liveConnected ? 60000 : Math.min(18000, (j7RecoveryMs > 18000 ? 2000 : j7RecoveryMs) * 1.5);
         if (!resp?.ok) {
           pumpFeedEvents = resp?.stale && Array.isArray(resp.events) ? resp.events : [];
-          scheduleScan();
+          scheduleJ7FeedRender();
           return;
         }
-        pumpFeedEvents = Array.isArray(resp.events) ? resp.events : [];
-        scheduleScan();
+        pumpFeedEvents = mergeJ7UiEvents(Array.isArray(resp.events) ? resp.events : [], pumpFeedEvents);
+        scheduleJ7FeedRender();
       });
     } catch {
     }
@@ -6213,9 +6244,9 @@ Select to open Flap tax details`;
     const mode = isTrackerTableMode() ? 'table' : 'card';
     if (fomoFeedLastMode !== null && fomoFeedLastMode !== mode) teardownFomoFeed();
     fomoFeedLastMode = mode;
-    if (settings.enableFomoFeed !== false && Date.now() - fomoFeedLastPollAt > FOMO_FEED_POLL_MS) pollFomoFeed();
+    if (settings.enableFomoFeed !== false && Date.now() - fomoFeedLastPollAt > j7RecoveryMs) pollFomoFeed();
     if (settings.enableFomoFeed !== false && Date.now() - fomoFollowedLastPollAt > FOMO_FEED_POLL_MS) pollFomoFollowedFeed();
-    if (settings.enablePumpFeed !== false && Date.now() - pumpFeedLastPollAt > FOMO_FEED_POLL_MS) pollPumpFeed();
+    if (settings.enablePumpFeed !== false && Date.now() - pumpFeedLastPollAt > j7RecoveryMs) pollPumpFeed();
 
     const cards = trackerCards().filter((c) => c.isConnected);
     const events = visibleTrackingFeedEvents(nativeTrackingFeedRows(cards));
@@ -6792,8 +6823,44 @@ Select to open Flap tax details`;
     scheduleScan();
   });
 
+  async function updateJ7UiSession(session) {
+    const generation = ++j7UiGeneration;
+    j7UiEpoch = '';
+    j7PendingLatency.clear();
+    fomoFeedEvents = []; pumpFeedEvents = [];
+    teardownFomoFeed();
+    if (!session?.token) return;
+    const bytes = new TextEncoder().encode(`${String(session.accountId || '').trim().slice(0, 160)}\n${String(session.token).trim()}`);
+    const hash = await crypto.subtle.digest('SHA-256', bytes);
+    if (generation !== j7UiGeneration) return;
+    j7UiEpoch = Array.from(new Uint8Array(hash), n => n.toString(16).padStart(2, '0')).join('');
+    fomoFeedLastPollAt = 0; pumpFeedLastPollAt = 0; j7RecoveryMs = 2000;
+    pollFomoFeed(); pollPumpFeed();
+  }
+  const initialJ7Generation = j7UiGeneration;
+  chrome.storage.local.get('j7TrackerSessionV1', stored => {
+    if (initialJ7Generation === j7UiGeneration) void updateJ7UiSession(stored?.j7TrackerSessionV1);
+  });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes.j7TrackerSessionV1) void updateJ7UiSession(changes.j7TrackerSessionV1.newValue);
+  });
+
   try {
     chrome.runtime.onMessage.addListener((msg) => {
+      if (msg?.type === 'gdh-j7-status' && msg.epoch === j7UiEpoch) {
+        j7RecoveryMs = msg.connected ? 60000 : 2000;
+        if (!msg.connected) { fomoFeedLastPollAt = 0; pumpFeedLastPollAt = 0; }
+      }
+      if (msg?.event && ['gdh-fomo-push', 'gdh-pump-push'].includes(msg.type)) {
+        if (!j7UiEpoch || msg.epoch !== j7UiEpoch) return;
+        const pump = msg.type === 'gdh-pump-push';
+        if (msg.event.source !== (pump ? 'j7-pump' : 'j7-fomo')) return;
+        if (pump) pumpFeedEvents = mergeJ7UiEvents([msg.event], pumpFeedEvents);
+        else fomoFeedEvents = mergeJ7UiEvents([msg.event], fomoFeedEvents);
+        if (!fomoFeedCards.get(msg.event.key)?.isConnected) setBoundedMap(j7PendingLatency, msg.event.key, Number(msg.receivedAt) || Date.now(), 100);
+        scheduleJ7FeedRender();
+        return;
+      }
       if (msg?.type === 'gdh-fomo-push') {
         fomoFeedLastPollAt = 0;
         pollFomoFeed();
@@ -6808,12 +6875,14 @@ Select to open Flap tax details`;
 
   window.setInterval(() => {
     if (document.visibilityState !== 'hidden') {
+      if (Date.now() - fomoFeedLastPollAt > j7RecoveryMs) pollFomoFeed();
+      if (Date.now() - pumpFeedLastPollAt > j7RecoveryMs) pollPumpFeed();
       refreshFomoFeedTimes();
       scanVisibleCards();
     }
   }, 1000);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') dismissTooltipForLifecycle();
-    else scheduleScan();
+    else { scheduleJ7FeedRender(); scheduleScan(); }
   });
 })();

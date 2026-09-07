@@ -80,6 +80,15 @@ try {
   await j7SubdomainPage.close();
   await j7Page.close();
 
+  await worker.evaluate(async () => {
+    await wakeJ7Tracker();
+    await acceptJ7TrackerLiveEvent('fomo_event', {kind:'trade', data:{id:'mv3-persisted', timestamp:Date.now(), userHandle:'fixture', token:{symbol:'TEST',networkId:1}}}, j7TrackerSessionGeneration, 'fixture-j7-session');
+    await j7TrackerPersistQueue;
+  });
+  const savedJ7 = await page.evaluate(async () => (await chrome.storage.session.get('j7TrackerCacheV1')).j7TrackerCacheV1);
+  assert.equal(savedJ7.fomo[0].id, 'mv3-persisted');
+  assert.ok(!JSON.stringify(savedJ7).includes('fixture-j7-session'));
+  assert.equal(await worker.evaluate(() => chrome.runtime.getManifest().minimum_chrome_version), '116');
   const cdp = await context.newCDPSession(page);
   const targets = await cdp.send('Target.getTargets');
   const target = targets.targetInfos.find(t => t.type === 'service_worker' && t.url === worker.url());
@@ -115,6 +124,9 @@ try {
   assert.ok(worker);
   assert.equal(await worker.evaluate(() => typeof globalThis.__mv3RestartSentinel), 'undefined', 'worker memory was reset');
   assert.equal(await page.evaluate(() => chrome.runtime.getManifest().version), manifest.version);
+  const restoredJ7 = await page.evaluate(() => chrome.runtime.sendMessage({ type:'fomo-feed' }));
+  assert.ok(restoredJ7.events.some(e => e.id === 'mv3-persisted'), 'real worker restored session cache before offline network completion');
+  assert.equal(await worker.evaluate(() => !!j7TrackerLiveSocket && j7TrackerLiveToken === 'fixture-j7-session'), true, 'wake recreated authenticated socket');
   assert.equal(response.ok, false, 'offline request is failure, never successful empty data');
   assert.deepEqual(errors, []);
   console.log(`MV3 ${manifest.version}: loaded, apex-only J7 session bridged, popup states rendered at 380x600, worker stopped/reawakened, offline failure preserved.`);

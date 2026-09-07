@@ -131,12 +131,15 @@ try {
       await page.screenshot({ path: path.join(output, `${site}-trust-desktop.png`) });
       reports.push({ site, scenario: 'source and partial coverage rendered', passed:true });
       const callout = await page.evaluate(() => {
-        const card = window.__test.feedCard({
+        const built = window.__test.feedCard({
           key: 'j7-callout-fixture', source: 'j7-pump', type: 'callout',
           ts: Date.now() - 2000, name: 'J7 Fixture', handle: 'j7_fixture',
           addr: '0x3333333333333333333333333333333333333333', chain: 'bsc',
           ticker: 'J7T', mc: 750000, comment: 'Synthetic J7Tracker callout text',
         });
+        // This isolated renderer fixture must not be removed by feed-map maintenance.
+        const card = built.cloneNode(true);
+        built.remove();
         card.dataset.j7Fixture = '1';
         if (card.classList.contains('gdh-debot-feed__row')) {
           card.style.gridTemplateColumns = '220px 160px 100px 100px 100px 80px';
@@ -276,12 +279,16 @@ try {
           document.body.appendChild(card);
           const selector = '.gdh-fomofeed__ttime';
           const first = card.querySelector(selector)?.textContent;
-          await new Promise(resolve => setTimeout(resolve, 1100));
+          // Maintenance runs on its own phase; 1100ms does not guarantee an age-2s tick.
+          const deadline = performance.now() + 3000;
+          while (card.querySelector(selector)?.textContent === first && performance.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 50));
+          }
           const second = card.querySelector(selector)?.textContent;
           return { first, second };
         });
         assert.equal(liveTableTime.first, '1s');
-        assert.equal(liveTableTime.second, '2s');
+        assert.match(liveTableTime.second, /^[2-4]s$/, 'real maintenance tick advances the age without assuming its timer phase');
         await page.locator('[data-gdh-fomo-key="time-fixture"]').screenshot({ path:path.join(output,'gmgn-live-table-time.png') });
         await page.evaluate(() => {
           document.querySelector('[data-gdh-fomo-key="time-fixture"]')?.remove();

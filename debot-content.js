@@ -1543,17 +1543,20 @@
     feedRenderRaf = window.requestAnimationFrame(layoutFeeds);
   }
 
+  let j7UiAuthGeneration = 0;
   async function pollFomo(force = false) {
     if (!isTrackShellPage() || settings.enabled === false || settings.enableFomoFeed === false) return;
     if (!force && Date.now() - feedLastFomoAt < FEED_POLL_MS) return;
     feedLastFomoAt = Date.now();
     const generation = fomoUiAuthGeneration;
+    const j7Generation = j7UiAuthGeneration;
     const path = location.pathname;
     const [response, followed] = await Promise.all([
       runtimeMessage({ type: 'fomo-feed' }), runtimeMessage({ type: 'fomo-followed-feed' }),
     ]);
     if (generation !== fomoUiAuthGeneration || path !== location.pathname || !isTrackShellPage()
       || settings.enabled === false || settings.enableFomoFeed === false) return;
+    if (j7Generation !== j7UiAuthGeneration) return;
     fomoEvents = (response?.ok || response?.stale) && Array.isArray(response.events) ? response.events : [];
     if (followed?.ok) {
       debotFollowedEvents = (Array.isArray(followed.events) ? followed.events : []).map((event) => ({ ...event, source: 'fomo-followed', followed: true }));
@@ -1568,7 +1571,9 @@
     if (!isTrackShellPage() || settings.enabled === false || settings.enablePumpFeed === false) return;
     if (!force && Date.now() - feedLastPumpAt < FEED_POLL_MS) return;
     feedLastPumpAt = Date.now();
+    const generation = j7UiAuthGeneration;
     const response = await runtimeMessage({ type: 'pump-feed' });
+    if (generation !== j7UiAuthGeneration || !isTrackShellPage() || settings.enabled === false || settings.enablePumpFeed === false) return;
     if (!response?.ok) {
       pumpEvents = response?.stale && Array.isArray(response.events) ? response.events : [];
       scheduleFeedLayout();
@@ -2420,7 +2425,13 @@
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (areaName !== 'local') return;
       for (const [key, change] of Object.entries(changes)) {
-        if (key === 'j7TrackerFomoConfigV1') loadJ7TrackerFomo(change.newValue);
+        if (key === 'j7TrackerSessionV1') {
+          j7UiAuthGeneration += 1;
+          fomoEvents = []; pumpEvents = [];
+          feedLastFomoAt = 0; feedLastPumpAt = 0;
+          clearFeedLayout(); clearSidebarFeedLayout();
+        }
+        else if (key === 'j7TrackerFomoConfigV1') loadJ7TrackerFomo(change.newValue);
         else if (key === 'j7TrackerPumpConfigV1') loadJ7TrackerPump(change.newValue);
         else if (key === 'fomoToken') {
           fomoUiAuthGeneration += 1;

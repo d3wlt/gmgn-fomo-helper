@@ -568,7 +568,7 @@ await test('Tracking-feed mutation layout is frame-coalesced', () => {
   assert.ok(!content.includes('refreshFomoFeedFixedRowShifts();\n      }\n      scheduleScan();'));
   assert.ok(content.includes("if (document.visibilityState === 'hidden') return;"));
   assert.ok(bridge.includes("if (document.visibilityState === 'hidden') return;"));
-  assert.match(content, /if \(document\.visibilityState !== 'hidden'\) \{\s*refreshFomoFeedTimes\(\);\s*scanVisibleCards\(\);\s*\}/);
+  assert.match(content, /if \(document\.visibilityState !== 'hidden'\) \{\s*if \(Date.now\(\) - fomoFeedLastPollAt > j7RecoveryMs\) pollFomoFeed\(\);\s*if \(Date.now\(\) - pumpFeedLastPollAt > j7RecoveryMs\) pollPumpFeed\(\);\s*refreshFomoFeedTimes\(\);\s*scanVisibleCards\(\);\s*\}/);
   assert.ok(content.includes("root.querySelectorAll('[data-gdh-fomo-ts]')"));
   assert.ok(content.includes("time.className = 'gdh-fomofeed__tcell gdh-fomofeed__ttime';\n    time.dataset.gdhFomoTs = String(ev.ts);"));
 });
@@ -635,6 +635,7 @@ await test('J7 history refresh notifications target both supported tracking site
     notifyTrackerTabs('gdh-pump-push');
   })()`, {
     state,
+    j7TrackerSessionGeneration: 0,
     chrome: {
       runtime: { lastError: null },
       tabs: {
