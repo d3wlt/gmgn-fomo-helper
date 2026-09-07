@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Offline behavioral tests: execute the complete production worker in an isolated VM.
-// Synthetic API fixtures only; no authenticated requests, browser, or third-party packages.
+// Offline provider-schema fixtures only; no authenticated requests, browser, or third-party packages.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
@@ -78,6 +78,18 @@ async function seedFeed(h, rows = [event('checkpoint', 100, 'not-followed'), eve
   h.tick();
   return result;
 }
+
+await test('bot body metadata preserves display name, image and USD without inventing empty ticker', () => {
+  // Same shape as fomo-telegram-bot/test/fixtures/fomo-feed-empty-ticker.json,
+  // with bot TokenMetadataClient's optional enrichment fields added.
+  const h = harness(() => response([]));
+  h.ctx.fixture = { id:'fixture', type:'thesis_created', createdAt:'2030-01-02T03:04:05.678Z', networkId:1399811149,
+    tokenAddress:'GQ5PbKtQexgfoh5zEPdA7crHsgr8xLxbdkZc5wsmjQMS', body:{userId:'followed',ticker:'',displayName:'Real display',
+      tokenName:'Full token name', tokenImageUrl:'https://example.test/token.png',usdAmount:12,commentId:'comment'} };
+  const row=h.run("slimFomoFollowedEvent(fixture,new Set(['followed']))");
+  assert.equal(row.name,'Real display'); assert.equal(row.symbol,''); assert.equal(row.tokenName,'Full token name');
+  assert.equal(row.img,'https://example.test/token.png'); assert.equal(row.usd,12);
+});
 
 await test('partial detail success propagates metadata and never enters either authoritative cache', async () => {
   let fail = true;
@@ -175,6 +187,87 @@ function collectorRoute(custom = () => undefined, roster = ['followed']) {
     : path.startsWith('/feed?') ? response({feed:[],hasNextPage:false})
     : response([]));
 }
+await test('missing profiles recover from exact trade owner and hydrate retained and late thesis rows',async()=> {
+  let round=0;
+  const h=harness(collectorRoute(path=>path.includes('/swaps')?response({swaps:round?[]:[{...swap('buy'),outTradeId:tradeId(1)}],hasNextPage:false})
+    :path.startsWith('/trades/')?response({...detail(1),user:{id:'followed',userHandle:'recovered',profilePictureLink:'https://example.test/avatar.png'}})
+    :path==='/proxy/filterTokens'?response(round?[{token:{networkId:56,address,symbol:'REC',name:'Recovered token',info:{imageLargeUrl:'https://example.test/token.png'}}}]:[])
+    :path.startsWith('/feed/token')?response({items:round?[{...thesis('late'),userHandle:'',body:{userId:'followed',commentId:'late'}}]:[],hasNextPage:false}):undefined));
+  const first=await h.feed(); assert.equal(first.events[0].handle,'recovered'); assert.equal(first.events[0].symbol,'');
+  round=1;h.tick(31000);const next=await h.feed();
+  assert.equal(next.events.length,2); assert.ok(next.events.every(e=>e.symbol==='REC'&&e.handle==='recovered'));
+  assert.ok(next.events.every(e=>e.img==='https://example.test/token.png'));
+  h.tick(); await h.feed(); assert.equal(h.calls.filter(c=>c.path.startsWith('/trades/')).length,1);
+  assert.equal(h.calls.filter(c=>c.path==='/proxy/filterTokens').length,2,'positive token cache prevents repeated lookups');
+});
+await test('blank metadata never erases an existing symbol and mismatched trade profiles are rejected',async()=> {
+  const h=harness(collectorRoute(path=>path.includes('/swaps')?response({swaps:[{...swap('buy'),ticker:'KNOWN',outTradeId:tradeId(1)}],hasNextPage:false})
+    :path.startsWith('/trades/')?response({...detail(1),user:{id:'other',userHandle:'wrong'}})
+    :path==='/proxy/filterTokens'?response([{token:{networkId:56,address,symbol:''}}]):undefined));
+  const result=await h.feed();assert.equal(result.events[0].symbol,'KNOWN');assert.equal(result.events[0].handle,'');
+});
+
+await test('metadata identity, request caps, sparse replay and auth isolation',async()=> {
+  for (const rows of [[{token:{networkId:8453,address,symbol:'WRONG'}}],
+    [{token:{networkId:56,address,symbol:'GOOD'}},{token:{networkId:56,address,symbol:'DUP'}}],
+    [{token:{networkId:56,address,symbol:{bad:true}}}]]) {
+    const h=harness(collectorRoute(path=>path.includes('/swaps')?response({swaps:[swap('one')],hasNextPage:false})
+      :path==='/proxy/filterTokens'?response(rows):undefined));
+    assert.equal((await h.feed()).events[0].symbol,'');
+  }
+  let round=0;
+  const replay=harness(collectorRoute(path=>path.includes('/swaps')?response({swaps:[{...swap('one'),...(round?{}:{ticker:'KEEP',tokenImageUrl:'https://example.test/keep.png'})}],hasNextPage:false}):undefined));
+  await replay.feed();round=1;replay.tick();const repeated=await replay.feed();
+  assert.equal(repeated.events[0].symbol,'KEEP');assert.equal(repeated.events[0].img,'https://example.test/keep.png');
+  const pending=deferred(),started=deferred();let first=true;
+  const isolated=harness(collectorRoute(path=>path.includes('/swaps')?response({swaps:[{...swap('one'),outTradeId:tradeId(1)}],hasNextPage:false})
+    :path.startsWith('/trades/')&&first?(first=false,started.resolve(),pending.promise):undefined));
+  const old=isolated.feed();await started.promise;isolated.switchAccount('account-b');await isolated.feed();
+  pending.resolve(response({...detail(1),user:{id:'followed',userHandle:'old-account'}}));
+  assert.equal((await old).reason,'not-connected');assert.equal(isolated.run('fomoCollector.profiles.followed'),undefined);
+  assert.ok((await isolated.feed()).events.every(e=>e.handle!=='old-account'));
+  const roster=Array.from({length:12},(_,i)=>`u${i}`);
+  const capped=harness(collectorRoute(path=>path.includes('/swaps')?response({swaps:Array.from({length:4},(_,i)=>({...swap(`${path.split('/')[3]}-s${i}`),outTradeId:tradeId(i+1),outTokenAddress:`0x${String(Number(path.split('/')[3].slice(1))*4+i+1).padStart(40,'0')}`})),hasNextPage:false}):undefined,roster));
+  await capped.feed();
+  assert.equal(capped.calls.filter(c=>c.path.startsWith('/trades/')).length,4);
+  assert.equal(JSON.parse(capped.calls.find(c=>c.path==='/proxy/filterTokens').options.body).length,30);
+  capped.tick();await capped.feed();
+  assert.equal(capped.calls.filter(c=>c.path.startsWith('/trades/')).length,8,'untouched users progress before negative retries');
+});
+await test('balances recover validated tokenFilterResult metadata without a lookup',async()=> {
+  for (const networkId of [56,8453]) {
+    const h=harness(collectorRoute(path=>path.includes('/swaps')?response({swaps:[swap('one')],hasNextPage:false})
+      :path.includes('/balances')?response({balances:[{activeTrade:{id:'position',closedAt:null,userId:'followed',networkId:56,tokenAddress:address},userToken:{networkId:56,tokenAddress:address,humanAmountRemaining:1},tokenFilterResult:{token:{networkId,address,symbol:'BAL'}}}]}):undefined));
+    const result=await h.feed();assert.equal(result.events[0].symbol,networkId===56?'BAL':'');
+    assert.equal(h.calls.some(c=>c.path==='/proxy/filterTokens'),networkId!==56);
+  }
+});
+
+await test('closed sell profile recovery is exact-owner-only and does not require current holdings',async()=> {
+  for (const wrong of [false,true]) {
+    const h=harness(collectorRoute(path=>path.includes('/swaps')?response({swaps:[{...swap('exit',1800000000000,true),inTradeId:tradeId(9)}],hasNextPage:false})
+      :path.startsWith('/trades/')?response({...detail(9),trade:{...detail(9).trade,userId:wrong?'other':'followed'},user:{id:'followed',userHandle:'seller'}}):undefined));
+    const result=await h.feed();assert.equal(result.events[0].type,'sell');assert.equal(result.events[0].handle,wrong?'':'seller');
+    assert.equal(h.calls.filter(c=>c.path.startsWith('/trades/')).length,1);
+  }
+});
+await test('V1 restart tolerates missing metadata caches and invalid retry clocks',async()=> {
+  const data={};const session={get:async()=>structuredClone(data),set:async value=>Object.assign(data,structuredClone(value)),remove:async key=>delete data[key]};
+  const route=collectorRoute(path=>path.includes('/swaps')?response({swaps:[swap('one')],hasNextPage:false}):undefined);
+  const first=harness(route,session);await first.feed();await first.run('fomoCollectorSave');
+  const snapshot=structuredClone(data.fomoFollowingCollectorV1);
+  for (const corrupt of [false,true]) {
+    data.fomoFollowingCollectorV1=structuredClone(snapshot);
+    const state=data.fomoFollowingCollectorV1.state;
+    if(corrupt){state.tokens={[`56:${address}`]:{symbol:'',retryAt:'forever'}};state.profileRetry={followed:1e20};}
+    else {delete state.tokens;delete state.profileRetry;}
+    const restored=harness(route,session);const result=await restored.feed();assert.equal(result.ok,true);
+    assert.ok(restored.calls.some(c=>c.path==='/proxy/filterTokens'));
+    assert.equal(restored.run('fomoCollector.profileRetry.followed'),undefined);
+    await restored.run('fomoCollectorSave');
+  }
+});
+
 await test('repeated buys, sells and comments on one position keep separate canonical identities', async () => {
   const h = harness(collectorRoute(path => path.includes('/swaps') ? response({swaps:[swap('buy1'),swap('buy2'),swap('sell1',1800000000000,true)],hasNextPage:false})
     : path.startsWith('/feed?') ? response({feed:[{...thesis('global','thesis_created'),body:{...thesis('c1').body,commentId:'c1'}}],hasNextPage:false})

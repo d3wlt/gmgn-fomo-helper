@@ -240,6 +240,7 @@ await test('Followed FOMO trades and theses are normalized for the GMGN tracker'
     extractFunction(background, 'fomoActivityPosition'),
     extractFunction(background, 'fomoNetworkSlug'),
     extractFunction(background, 'fomoHttpsUrl'),
+    extractFunction(background, 'fomoMetadataText'),
     extractFunction(background, 'slimFomoFollowedEvent'),
   ];
   const events = evaluate(functions, `[

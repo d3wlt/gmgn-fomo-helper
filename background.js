@@ -288,15 +288,16 @@ function slimFomoFollowedEvent(raw, followedIds) {
     followed: true,
     userId: userId.slice(0, 100),
     handle: handle.toLowerCase().slice(0, 64),
-    name: String(handle || raw.displayName || raw.userName || user.displayName || 'Followed user').slice(0, 48),
-    avatar: fomoHttpsUrl(raw.profilePictureLink || raw.avatar || user.profilePictureLink),
-    usd: Math.abs(Number(raw.usdAmount ?? raw.usdValue ?? body.totalVolume ?? trade.usdValue)) || 0,
+    name: String(handle || raw.displayName || raw.userName || user.displayName || body.displayName || 'Followed user').slice(0, 48),
+    avatar: fomoHttpsUrl(raw.profilePictureLink || raw.avatar || user.profilePictureLink || body.profilePictureLink),
+    usd: Math.abs(Number(raw.usdAmount ?? raw.usdValue ?? body.usdAmount ?? body.totalVolume ?? trade.usdValue)) || 0,
     comment,
     addr: addr.slice(0, 80),
     chain: fomoNetworkSlug({ ...raw, networkId }),
     chainName: String(raw.networkName || raw.chainName || '').slice(0, 32),
-    symbol: String(raw.ticker || raw.symbol || body.ticker || token.ticker || token.symbol || '').slice(0, 24),
-    img: fomoHttpsUrl(raw.tokenImageUrl || raw.tokenImage || token.imageUrl || token.image),
+    symbol: fomoMetadataText(raw.ticker, 32) || fomoMetadataText(raw.symbol, 32) || fomoMetadataText(body.ticker, 32) || fomoMetadataText(token.ticker, 32) || fomoMetadataText(token.symbol, 32),
+    tokenName: fomoMetadataText(raw.tokenName || body.tokenName || token.name, 80),
+    img: fomoHttpsUrl(raw.tokenImageUrl || raw.tokenImage || body.tokenImageUrl || token.imageUrl || token.image),
     mc: Number(raw.fdv ?? raw.marketCap ?? body.fdv ?? body.marketCap) || 0,
     ts,
     providerEventId, swapId, commentId,
@@ -400,7 +401,12 @@ const FOMO_QUOTE_TOKENS = {
   143: '0x754704bc059f8c67012fed69bc8a327a5aafb603',
   1: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
 };
-function emptyFomoCollector() { return { lanes: {}, positions: {}, watches: {}, profiles: {}, offset: 0, watchOffset: 0 }; }
+function fomoMetadataText(value, max) {
+  if (typeof value !== 'string') return '';
+  const text = value.trim();
+  return text && Array.from(text).length <= max && !/[\u0000-\u001f\u007f]/u.test(text) ? text : '';
+}
+function emptyFomoCollector() { return { lanes: {}, positions: {}, watches: {}, profiles: {}, tokens: {}, profileRetry: {}, offset: 0, watchOffset: 0 }; }
 let fomoCollector = emptyFomoCollector();
 let fomoCollectorHydration = null;
 let fomoCollectorSave = Promise.resolve();
@@ -421,7 +427,15 @@ async function hydrateFomoCollector() {
     const saved = (await chrome.storage.session.get(FOMO_COLLECTOR_SESSION))[FOMO_COLLECTOR_SESSION];
     if (generation !== fomoAuthGeneration || !binding || saved?.binding !== binding || saved?.version !== 1) return;
     if (!Array.isArray(saved.cache?.events) || !saved.state?.lanes || !saved.state?.watches) return;
-    fomoCollector = saved.state;
+    fomoCollector = { ...emptyFomoCollector(), ...saved.state };
+    for (const key of ['positions','profiles','tokens','profileRetry']) {
+      if (!fomoCollector[key] || typeof fomoCollector[key] !== 'object' || Array.isArray(fomoCollector[key])) fomoCollector[key] = {};
+    }
+    // V1 snapshots predate metadata caches. Ignore corrupt/future retry clocks.
+    fomoCollector.tokens = Object.fromEntries(Object.entries(fomoCollector.tokens).filter(([,row]) => row && typeof row === 'object').slice(-FOMO_FEED_KEEP)
+      .map(([key,row]) => [key,{ symbol:fomoMetadataText(row.symbol,32), tokenName:fomoMetadataText(row.tokenName,80), img:fomoHttpsUrl(row.img),
+        retryAt:Number.isFinite(row.retryAt) && row.retryAt <= Date.now()+300000 ? row.retryAt : 0 }]));
+    for (const [id,at] of Object.entries(fomoCollector.profileRetry)) if (!Number.isFinite(at) || at > Date.now()+60000) delete fomoCollector.profileRetry[id];
     fomoFollowedFeedCache = { ...saved.cache, events: saved.cache.events.slice(0, FOMO_FEED_KEEP), fetchedAt: 0 };
     // Always refresh the roster on wake before making restored events visible.
   })();
@@ -447,6 +461,7 @@ function reconcileFomoRoster(ids) {
   fomoFollowedFeedCache = { ...fomoFollowedFeedCache, fetchedAt: 0, events: fomoFollowedFeedCache.events.filter(e => ids.has(e.userId)) };
   for (const id of Object.keys(fomoCollector.positions)) if (!ids.has(id)) delete fomoCollector.positions[id];
   for (const id of Object.keys(fomoCollector.profiles)) if (!ids.has(id)) delete fomoCollector.profiles[id];
+  for (const id of Object.keys(fomoCollector.profileRetry)) if (!ids.has(id)) delete fomoCollector.profileRetry[id];
   for (const key of Object.keys(fomoCollector.lanes)) if (key.startsWith('swap:') && !ids.has(key.slice(5))) delete fomoCollector.lanes[key];
   for (const [key, watch] of Object.entries(fomoCollector.watches)) {
     watch.users = watch.users.filter(id => ids.has(id));
@@ -545,9 +560,14 @@ async function fetchFomoFollowedFeed() {
     };
     const ingest = event => {
       if (!event || !valid()) return;
+      const previous = collected.get(event.key) || fomoFollowedFeedCache.events.find(e => e.key === event.key);
+      if (previous?.userId === event.userId && previous.chain === event.chain && previous.addr === event.addr) {
+        for (const field of ['handle','avatar','symbol','tokenName','img']) if (!event[field] && previous[field]) event[field] = previous[field];
+        if (event.name === 'Followed user' && previous.name) event.name = previous.name;
+      }
       publish();
       collected.set(event.key, event);
-      if (event.handle) state.profiles[event.userId] = { userHandle: event.handle, profilePictureLink: event.avatar };
+      if (event.handle) state.profiles[event.userId] = { userHandle: event.handle, profilePictureLink: event.avatar || state.profiles[event.userId]?.profilePictureLink };
       if (event.type === 'buy' || event.type === 'thesis') watch({ networkId: Number(Object.keys(FOMO_NETWORK_SLUG).find(k => FOMO_NETWORK_SLUG[k] === event.chain)), address: event.addr }, event.userId);
     };
     const safely = fn => async () => { try { await fn(); } catch (error) { failures.push(error); if (error.reason === 'not-connected' && valid()) resetFomoAccountCaches(); } };
@@ -609,7 +629,7 @@ async function fetchFomoFollowedFeed() {
       jobs.push(safely(() => scan(`swap:${userId}`, async cursor => {
         const box = await request(`/v2/users/${encodeURIComponent(userId)}/swaps${cursor ? `?lastSwapId=${encodeURIComponent(cursor)}` : ''}`);
         if (typeof box.hasNextPage !== 'boolean') throw fomoFailure('invalid-response');
-        if (box.user?.userHandle) state.profiles[userId] = { userHandle: box.user.userHandle, profilePictureLink: box.user.profilePictureLink };
+        if ((!box.user?.id || box.user.id === userId) && box.user?.userHandle) state.profiles[userId] = { userHandle: box.user.userHandle, profilePictureLink: box.user.profilePictureLink };
         return { rows: box.swaps, more: box.hasNextPage };
       }, row => fomoSwapEvent(row, userId, ids, state.profiles[userId]))));
       recoveryJobs.push(safely(async () => {
@@ -624,6 +644,18 @@ async function fetchFomoFollowedFeed() {
             || trade.networkId !== token.networkId || !fomoSameToken(trade.tokenAddress, token.tokenAddress, trade.networkId)
             || !normalizeFomoTokenRef({ networkId: trade.networkId, tokenAddress: trade.tokenAddress }) || !trade.id) throw fomoFailure('invalid-response');
           const old = previous?.[trade.id];
+          // The bot's balances schema carries metadata in tokenFilterResult,
+          // not userToken. Require its own chain/address to match the position.
+          const metadata = row.tokenFilterResult?.token;
+          if (metadata && metadata.networkId === trade.networkId && fomoSameToken(metadata.address,trade.tokenAddress,trade.networkId)) {
+            const ref = normalizeFomoTokenRef(metadata), symbol = fomoMetadataText(metadata.symbol,32);
+            if (ref && symbol) {
+              const key = `${ref.networkId}:${ref.address}`;
+              state.tokens[key] = { ...state.tokens[key], symbol,
+                tokenName:fomoMetadataText(metadata.name,80) || state.tokens[key]?.tokenName || '',
+                img:fomoHttpsUrl(metadata.info?.imageSmallUrl) || fomoHttpsUrl(metadata.info?.imageThumbUrl) || fomoHttpsUrl(metadata.info?.imageLargeUrl) || state.tokens[key]?.img || '', retryAt:Date.now()+300000 };
+            }
+          }
           positions[trade.id] = { networkId: trade.networkId, tokenAddress: trade.tokenAddress, commentId: trade.commentId || '', pending: old?.pending || '', observedAt: old?.observedAt || Date.now() };
           if (previous && trade.commentId && old?.commentId !== trade.commentId) {
             positions[trade.id].pending = trade.commentId; positions[trade.id].observedAt = Date.now();
@@ -636,40 +668,8 @@ async function fetchFomoFollowedFeed() {
       }));
     }
     await fomoCollectorPool(jobs);
-    // Optional metadata never precedes fresh swaps; verified read-only endpoints.
-    recoveryJobs.unshift(safely(async () => {
-      const refs = [...new Map([...collected.values()].map(e => {
-        const networkId = Number(Object.keys(FOMO_NETWORK_SLUG).find(k => FOMO_NETWORK_SLUG[k] === e.chain));
-        return [`${networkId}:${e.addr}`, { networkId, address: e.addr }];
-      })).values()].slice(0, 30);
-      if (!refs.length) return;
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 750);
-      try {
-        const options = { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal };
-        const results = await Promise.allSettled([
-          request('/hodlers/friends', { ...options, body: JSON.stringify({ tokens: refs }) }),
-          request('/proxy/filterTokens', { ...options, body: JSON.stringify(refs.map(r => `${r.address}:${r.networkId}`)) }),
-        ]);
-        if (!valid()) return;
-        for (const result of results) if (result.status === 'rejected' && result.reason?.reason === 'not-connected') throw result.reason;
-        const holders = results[0].status === 'fulfilled' && Array.isArray(results[0].value) ? results[0].value : [];
-        for (const box of holders) for (const raw of box.topHolders || []) {
-          const user = slimFomoFollowedHolder(raw);
-          if (ids.has(user.userId) && user.handle) state.profiles[user.userId] = { userHandle: user.handle, profilePictureLink: user.avatar };
-        }
-        const tokens = results[1].status === 'fulfilled' && Array.isArray(results[1].value) ? results[1].value : [];
-        for (const event of collected.values()) {
-          const profile = state.profiles[event.userId];
-          if (profile?.userHandle) { event.handle = String(profile.userHandle).toLowerCase().slice(0,64); event.name = event.handle.slice(0,48); event.avatar = fomoHttpsUrl(profile.profilePictureLink); }
-          const row = tokens.find(row => FOMO_NETWORK_SLUG[row.token?.networkId] === event.chain && fomoSameToken(row.token?.address, event.addr, row.token?.networkId));
-          if (row) { event.symbol = String(row.token.symbol || '').slice(0,24); event.img = fomoHttpsUrl(row.token.info?.imageSmallUrl || row.token.info?.imageThumbUrl); }
-        }
-        publish();
-      } finally { clearTimeout(timer); }
-    }));
-    // Three recovery jobs plus at most two metadata requests = four sockets.
-    for (let i = 0; i < recoveryJobs.length; i += 3) await fomoCollectorPool(recoveryJobs.slice(i, i + 3));
+    // Recover positions/theses before enrichment so late rows are included too.
+    await fomoCollectorPool(recoveryJobs);
     const watches = Object.entries(state.watches).filter(([, w]) => w.until > Date.now() && w.users.some(id => ids.has(id))).slice(-200);
     state.watches = Object.fromEntries(watches);
     const selected = Array.from({ length: Math.min(6, watches.length) }, (_, i) => watches[(state.watchOffset + i) % watches.length]);
@@ -711,6 +711,78 @@ async function fetchFomoFollowedFeed() {
         state.watches[key].cursor = next;
       }
     })));
+    // Optional, bounded metadata. Swaps/social/late thesis ingestion is already published.
+    // Include retained rows: a transient miss must recover even if its swap leaves page one.
+    const metadataRows = new Map(fomoFollowedFeedCache.events.filter(e => ids.has(e.userId)).map(e => [e.key, { ...e }]));
+    for (const [key, event] of collected) metadataRows.set(key, event);
+    const tokenRef = event => normalizeFomoTokenRef({ address: event.addr,
+      networkId: Number(Object.keys(FOMO_NETWORK_SLUG).find(k => FOMO_NETWORK_SLUG[k] === event.chain)) });
+    const tokenKey = ref => `${ref.networkId}:${ref.address}`;
+    const refs = [...new Map([...metadataRows.values()].map(tokenRef).filter(Boolean).map(ref => [tokenKey(ref), ref])).values()]
+      .filter(ref => !(state.tokens[tokenKey(ref)]?.retryAt > Date.now()))
+      .sort((a,b) => (state.tokens[tokenKey(a)]?.retryAt || 0) - (state.tokens[tokenKey(b)]?.retryAt || 0)).slice(0,30);
+    const optional = async fn => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 750);
+      try { await fn(controller.signal); }
+      catch (error) { if (error.reason === 'not-connected') { failures.push(error); if (valid()) resetFomoAccountCaches(); } }
+      finally { clearTimeout(timer); }
+    };
+    await fomoCollectorPool([
+      ...(refs.length ? [() => optional(async signal => {
+        // Mark misses as well as successes to bound retries; older misses get priority.
+        for (const ref of refs) state.tokens[tokenKey(ref)] = { ...state.tokens[tokenKey(ref)], retryAt: Date.now() + 30000 };
+        const rows = await request('/proxy/filterTokens', { method:'POST', headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(refs.map(ref => `${ref.address}:${ref.networkId}`)), signal });
+        if (!Array.isArray(rows) || rows.length > 30) return;
+        const requested = new Set(refs.map(tokenKey)), seen = new Set(), accepted = [];
+        for (const row of rows) {
+          const ref = normalizeFomoTokenRef(row?.token);
+          if (!ref || !requested.has(tokenKey(ref)) || seen.has(tokenKey(ref))) return;
+          seen.add(tokenKey(ref));
+          const token = row.token;
+          accepted.push([tokenKey(ref), { symbol:fomoMetadataText(token.symbol,32), tokenName:fomoMetadataText(token.name,80),
+            img:fomoHttpsUrl(token.info?.imageSmallUrl) || fomoHttpsUrl(token.info?.imageThumbUrl) || fomoHttpsUrl(token.info?.imageLargeUrl) }]);
+        }
+        for (const [key, data] of accepted) {
+          const old = state.tokens[key] || {};
+          state.tokens[key] = { ...old, ...Object.fromEntries(Object.entries(data).filter(([,value]) => value)),
+            retryAt:Date.now() + (data.symbol ? 300000 : 30000) };
+        }
+      }), () => optional(async signal => {
+        const boxes = await request('/hodlers/friends', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({tokens:refs}), signal });
+        if (!Array.isArray(boxes)) return;
+        for (const box of boxes.slice(0,30)) for (const raw of (Array.isArray(box.topHolders) ? box.topHolders.slice(0,100) : [])) {
+          const user = slimFomoFollowedHolder(raw);
+          if (ids.has(user.userId) && user.handle) state.profiles[user.userId] = { userHandle:user.handle, profilePictureLink:user.avatar };
+        }
+      })] : []),
+    ]);
+    // Friends only contains current holders. Sells/closed positions still have a
+    // trade detail with its exact owner; never infer a handle from an ID/address.
+    const missingProfiles = [...new Map([...metadataRows.values()]
+      .filter(e => !state.profiles[e.userId]?.userHandle && !e.handle && !(state.profileRetry[e.userId] > Date.now())
+        && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(e.tradeId))
+      .map(e => [e.userId,e])).values()]
+      .sort((a,b) => (state.profileRetry[a.userId] || 0) - (state.profileRetry[b.userId] || 0)).slice(0,4);
+    await fomoCollectorPool(missingProfiles.map(event => () => optional(async signal => {
+      state.profileRetry[event.userId] = Date.now() + 60000;
+      const box = await request(`/trades/${encodeURIComponent(event.tradeId)}`, { signal });
+      if (box?.trade?.id !== event.tradeId || box.trade.userId !== event.userId || box.user?.id !== event.userId) return;
+      const user = slimFomoFollowedHolder(box.user);
+      if (user.handle) state.profiles[event.userId] = { userHandle:user.handle, profilePictureLink:user.avatar };
+    })));
+    for (const event of metadataRows.values()) {
+      const profile = state.profiles[event.userId];
+      if (!event.handle && profile?.userHandle) { event.handle = String(profile.userHandle).trim().replace(/^@/,'').toLowerCase().slice(0,64); event.name = event.handle.slice(0,48); }
+      if (!event.avatar) event.avatar = fomoHttpsUrl(profile?.profilePictureLink);
+      const ref = tokenRef(event), data = ref && state.tokens[tokenKey(ref)];
+      for (const field of ['symbol','tokenName','img']) if (!event[field] && data?.[field]) event[field] = data[field];
+      collected.set(event.key,event);
+    }
+    state.tokens = Object.fromEntries(Object.entries(state.tokens).sort((a,b) => b[1].retryAt-a[1].retryAt).slice(0,FOMO_FEED_KEEP));
+    publish();
+    await Promise.resolve(); // Flush incremental publication before authoritative coverage.
     if (!valid()) return { ok: false, reason: generation !== fomoAuthGeneration ? 'not-connected' : 'roster-changed', ...emptyFomoFollowedFeed() };
     if (failures.some(error => error.reason === 'not-connected')) {
       resetFomoAccountCaches();

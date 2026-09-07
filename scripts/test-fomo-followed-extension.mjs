@@ -34,8 +34,10 @@ try {
         inNetworkId:1,outNetworkId:1,inTokenAddress:'0x0000000000000000000000000000000000000000',
         outTokenAddress:'0x1111111111111111111111111111111111111111',
         humanUsdAmountIn:100+i,humanUsdAmountOut:100+i,inHumanAmount:1,outHumanAmount:2,
-        outTradeId:'same-position',inTradeId:null,
+        outTradeId:'11111111-1111-4111-8111-111111111111',inTradeId:null,
       })),hasNextPage:false};
+      else if (u.pathname==='/proxy/filterTokens') data=[{token:{networkId:1,address:'0x1111111111111111111111111111111111111111',symbol:'RECOVERED',name:'Recovered token'}}];
+      else if (u.pathname==='/trades/11111111-1111-4111-8111-111111111111') data={trade:{id:'11111111-1111-4111-8111-111111111111',userId:'fixture-user'},user:{id:'fixture-user',userHandle:'recovered-user'}};
       else if (u.pathname.endsWith('/balances')) data={balances:[]};
       else if (u.pathname==='/feed') data={feed:[]};
       else if (u.pathname.includes('/feed/')) data={items:[],hasNextPage:false,count:0};
@@ -55,7 +57,8 @@ try {
     throw new Error(`FOMO swap collection absent: ${JSON.stringify(response)}`);
   });
   assert.equal(new Set(response.events.map(e=>e.key)).size,2,'same-position swaps remain distinct');
-  assert.ok(response.events.every(e=>e.tx!=='same-position'));
+  assert.ok(response.events.every(e=>e.tx!=='11111111-1111-4111-8111-111111111111'));
+  assert.ok(response.events.every(e=>e.symbol==='RECOVERED' && e.handle==='recovered-user'),'actual worker enriches missing ticker and exited-holder profile');
   const pushes=await worker.evaluate(()=>__fomoPushes);
   const feedPush=pushes.find(p=>p.type==='fomo-followed-feed-update'&&p.data?.events?.length===2);
   assert.ok(feedPush,'fresh events published independently of poll completion');
@@ -85,6 +88,7 @@ try {
   worker=context.serviceWorkers().find(w=>w.url()===workerUrl);
   assert.equal(await worker.evaluate(()=>typeof __mv3FomoSentinel),'undefined');
   assert.equal(restored.events.filter(e=>e.key?.includes('mv3-swap-')).length,2,'same-account persisted events restored offline after actual worker stop');
+  assert.ok(restored.events.every(e=>e.symbol==='RECOVERED' && e.handle==='recovered-user'),'enrichment survives actual worker restart');
   const other=`fixture.${Buffer.from(JSON.stringify({sub:'other-account'})).toString('base64url')}.signature`;
   await page.evaluate(token=>chrome.storage.local.set({fomoToken:{token,exp:Date.now()+3600000}}),other);
   const changed=await page.evaluate(()=>chrome.runtime.sendMessage({type:'fomo-followed-feed'}));

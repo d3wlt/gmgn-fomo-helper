@@ -5888,7 +5888,7 @@ Select to open Flap tax details`;
     if (ev?.source === 'fomo-followed') {
       return {
         source: `${FOMO_FEED_MARKERS.followed.icon} ${FOMO_FEED_MARKERS.followed.label}`,
-        title: `@${ev?.handle || ''} · Followed on FOMO`,
+        title: `${ev?.handle ? `@${ev.handle}` : fomoFeedUserLabel(ev)} · Followed on FOMO${ev?.userId ? ` · ${ev.userId}` : ''}`,
         url: ev?.handle ? `https://fomo.family/profile/${encodeURIComponent(ev.handle)}` : '',
       };
     }
@@ -5917,6 +5917,30 @@ Select to open Flap tax details`;
   }
 
 
+  function fomoFeedUserLabel(ev) {
+    const name = String(ev.name || '').trim();
+    if (name && name !== 'Followed user') return name;
+    if (ev.handle) return String(ev.handle);
+    const id = String(ev.userId || '');
+    return id ? `FOMO user ${id.slice(0, 6)}…${id.slice(-4)}` : 'Unknown FOMO user';
+  }
+
+  function fomoFeedTokenLabel(ev) {
+    const symbol = String(ev.symbol || '').trim();
+    if (symbol) return symbol;
+    const address = String(ev.addr || '');
+    return address ? `${address.slice(0, 6)}…${address.slice(-4)}` : 'Token unavailable';
+  }
+
+  // Snapshot only fields that affect card content/behavior. Unchanged polls keep
+  // their DOM; enrichment replaces one row without replaying its entry animation.
+  function fomoFeedCardSignature(ev) {
+    return JSON.stringify([isTrackerTableMode(), ...[
+      'source', 'type', 'stale', 'name', 'handle', 'userId', 'avatar',
+      'symbol', 'img', 'chain', 'addr', 'usd', 'mc', 'comment', 'position', 'profileUrl',
+    ].map(key => ev[key] ?? null)]);
+  }
+
   function buildFomoFeedTableRow(ev, card, tag) {
     const profile = trackingFeedProfileMeta(ev);
     const row = document.createElement('div');
@@ -5941,7 +5965,7 @@ Select to open Flap tax details`;
     }
     const name = document.createElement('span');
     name.className = 'gdh-fomofeed__name';
-    name.textContent = ev.name || ev.handle || '?';
+    name.textContent = fomoFeedUserLabel(ev);
     name.title = profile.title;
     const openProfile = (event) => {
       event.preventDefault(); event.stopPropagation();
@@ -5968,7 +5992,8 @@ Select to open Flap tax details`;
     }
     const symText = document.createElement('span');
     symText.className = 'gdh-fomofeed__symtext';
-    symText.textContent = ev.symbol || '';
+    symText.textContent = fomoFeedTokenLabel(ev);
+    symText.title = ev.symbol ? String(ev.addr || '') : 'Ticker unavailable; token address shown';
     const act = document.createElement('span');
     act.className = 'gdh-fomofeed__tag';
     act.textContent = tag.label;
@@ -6003,6 +6028,7 @@ Select to open Flap tax details`;
     card.dataset.gdhFomoKey = ev.key;
     card.dataset.gdhFeedSource = ev.source || 'fomo';
     card.dataset.gdhFomoStale = ev.stale ? '1' : '0';
+    card.dataset.gdhFomoSignature = fomoFeedCardSignature(ev);
 
     if (ev.chain) {
       const stripe = document.createElement('span');
@@ -6036,7 +6062,7 @@ Select to open Flap tax details`;
 
     const name = document.createElement('span');
     name.className = 'gdh-fomofeed__name';
-    name.textContent = ev.name || ev.handle || '?';
+    name.textContent = fomoFeedUserLabel(ev);
     name.title = profile.title;
     const openProfile = (event) => {
       event.preventDefault();
@@ -6086,10 +6112,11 @@ Select to open Flap tax details`;
       r2.appendChild(logo);
     }
 
-    if (ev.symbol) {
+    {
       const sym = document.createElement('span');
       sym.className = 'gdh-fomofeed__sym';
-      sym.textContent = ev.symbol;
+      sym.textContent = fomoFeedTokenLabel(ev);
+      sym.title = ev.symbol ? String(ev.addr || '') : 'Ticker unavailable; token address shown';
       r2.appendChild(sym);
     }
 
@@ -6133,7 +6160,7 @@ Select to open Flap tax details`;
 
   function fomoFeedCardFor(ev) {
     let el = fomoFeedCards.get(ev.key);
-    if (el instanceof HTMLElement && el.dataset.gdhFomoStale !== (ev.stale ? '1' : '0')) {
+    if (el instanceof HTMLElement && el.dataset.gdhFomoSignature !== fomoFeedCardSignature(ev)) {
       const replacement = buildFomoFeedCard(ev);
       if (el.isConnected) el.replaceWith(replacement);
       el = replacement;

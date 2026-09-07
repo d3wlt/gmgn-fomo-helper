@@ -34,6 +34,8 @@ try {
   }, JSON.parse(fs.readFileSync(`${root}/manifest.json`)).version);
   const hooks = `window.__direct = {
     poll: pollFomoFollowedFeed,
+    build: buildFomoFeedCard,
+    table: buildFomoFeedTableRow,
     epoch: () => fomoFollowedEpoch,
     identity: trackingFeedEventIdentity,
     eligible: () => visibleTrackingFeedEvents(nativeTrackingFeedRows(trackerCards())).map(e => e.key),
@@ -107,6 +109,38 @@ try {
     assert.equal(new Set(result.keys).size,10);
     reports.push({scenario:`heavy scanner ${mode}/${boundary} burst`,...result});
   }
+  await layout('flow','head');
+  const sparse = {...(await eventsFor('metadata','head'))[0], name:'Followed user',handle:'',symbol:'',userId:'synthetic-user-123456789'};
+  await deliver([sparse],1);
+  await page.waitForFunction(()=>document.querySelector('.gdh-fomofeed__sym')?.textContent === '0x3333…3333');
+  assert.match(await page.locator('.gdh-fomofeed__name').innerText(), /FOMO user/);
+  await page.evaluate(()=>window.__fixture.originalCard=document.querySelector('.gdh-fomofeed.is-followed'));
+  await deliver([{...sparse,name:'Recovered Alice',handle:'alice',symbol:'RECOVERED',mc:48000}],1);
+  await page.waitForFunction(()=>document.querySelector('.gdh-fomofeed__sym')?.textContent === 'RECOVERED');
+  assert.equal(await page.locator('.gdh-fomofeed__name').innerText(),'Recovered Alice');
+  assert.match(await page.locator('.gdh-fomofeed__mc').innerText(), /48/);
+  assert.equal(await page.locator('.gdh-fomofeed.is-new').count(),0,'metadata recovery must not replay new-event animation');
+  await page.evaluate(()=>window.__fixture.enrichedCard=document.querySelector('.gdh-fomofeed.is-followed'));
+  await deliver([{...sparse,name:'Recovered Alice',handle:'alice',symbol:'RECOVERED',mc:48000}],1);
+  assert.equal(await page.evaluate(()=>window.__fixture.enrichedCard===document.querySelector('.gdh-fomofeed.is-followed')),true,'unchanged snapshots reuse DOM');
+  reports.push({scenario:'sparse identities visible; same-event enrichment updates card without duplicate or replay',passed:true});
+  for(const mode of ['fixed','table']) {
+    await layout(mode==='table'?'flow':'fixed','head');
+    if(mode==='table') await page.evaluate(()=>{const header=document.createElement('div');header.dataset.testid='follow-tracking-table-header';document.querySelector('#native-fixture').prepend(header);});
+    const initial={...sparse,swapId:`metadata-${mode}`,eventId:`metadata-${mode}`};
+    await deliver([initial],1);
+    const selector=mode==='table'?'.gdh-fomofeed__symtext':'.gdh-fomofeed__sym';
+    await page.waitForFunction(selector=>document.querySelector(selector)?.textContent==='0x3333…3333',selector);
+    await deliver([{...initial,name:'Recovered Alice',handle:'alice',symbol:'RECOVERED'}],1);
+    await page.waitForFunction(selector=>document.querySelector(selector)?.textContent==='RECOVERED',selector);
+    assert.equal(await page.locator('.gdh-fomofeed__name').innerText(),'Recovered Alice');
+    assert.equal(await page.locator('.gdh-fomofeed.is-new').count(),0);
+    if(mode==='fixed') {
+      const overlaps=await page.evaluate(()=>{const a=document.querySelector('.gdh-fomofeed').getBoundingClientRect();const b=document.querySelector('[data-sentry-component="TrackerListItem"]').getBoundingClientRect();return a.bottom>b.top+1;});
+      assert.equal(overlaps,false,'metadata replacement preserves native row offsets');
+    }
+    reports.push({scenario:`managed ${mode} metadata enrichment preserves identity and placement`,passed:true});
+  }
   await layout('fixed','inline');
   const same=await eventsFor('position','inline');
   same.forEach((event,i)=>{
@@ -170,6 +204,29 @@ try {
   await page.waitForTimeout(50);
   assert.equal(await page.locator('.gdh-fomofeed.is-followed').count(),0);
   reports.push({scenario:'delayed old-credential worker push rejected after account switch',passed:true});
+  // Render real card/table output in a separate screenshot fixture, outside the managed feed.
+  fs.mkdirSync(`${root}/test-results`,{recursive:true});
+  for (const width of [1280,570,390]) {
+    await page.setViewportSize({width,height:650});
+    const geometry=await page.evaluate(({sparse,width})=>{
+      document.querySelector('#metadata-preview')?.remove();
+      document.querySelector('#native-fixture')?.remove();
+      document.body.style.cssText='margin:0;background:#111416;color:#eee;font:14px Arial';
+      const host=document.createElement('div');host.id='metadata-preview';host.style.cssText='max-width:570px;width:100%;margin:auto';
+      const heading=document.createElement('h3');heading.textContent='Synthetic metadata recovery — actual tracker renderer';heading.style.padding='12px';host.append(heading);
+      const events=[sparse,{...sparse,key:'enriched-preview',name:'Recovered Alice',handle:'alice',symbol:'RECOVERED',mc:48000}];
+      for(const event of events) host.append(window.__direct.build(event).cloneNode(true));
+      const table=document.createElement('div');table.className='gdh-fomofeed is-table';window.__direct.table(sparse,table,{label:'Buy'});host.append(table);
+      document.body.append(host);
+      const token=table.querySelector('.gdh-fomofeed__symtext').textContent;
+      return {width:innerWidth,scrollWidth:document.documentElement.scrollWidth,token,bounds:[...host.querySelectorAll('.gdh-fomofeed__name,.gdh-fomofeed__sym')].map(el=>{const r=el.getBoundingClientRect();return {left:r.left,right:r.right};})};
+    },{sparse,width});
+    assert.equal(geometry.width,width);assert.ok(geometry.scrollWidth<=width,JSON.stringify(geometry));
+    assert.equal(geometry.token,'0x3333…3333');
+    for(const bounds of geometry.bounds) assert.ok(bounds.left>=0 && bounds.right<=width,JSON.stringify(bounds));
+    await page.locator('#metadata-preview').screenshot({path:`${root}/test-results/fomo-metadata-${width}.png`});
+  }
+  reports.push({scenario:'real sparse/enriched card and table rendering at 1280/570/390px',passed:true});
   assert.deepEqual(errors,[]);
   const latencies=reports.flatMap(r=>r.latencies||[]).sort((a,b)=>a-b);
   const result={synthetic:true,externalNetwork:'blocked',scenarios:reports.length,domInsertionMs:{n:latencies.length,p50:latencies[Math.floor(latencies.length*.5)],p95:latencies[Math.floor(latencies.length*.95)],max:latencies.at(-1)},reports};
