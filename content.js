@@ -5544,7 +5544,7 @@ Select to open Flap tax details`;
     ensureDeveloperBookmarkButtons();
   }
 
-  const FOMO_FEED_POLL_MS = 18000;
+  const FOMO_FEED_POLL_MS = 5000;
   const FOMO_FEED_RENDER_CAP = 40;
   const FOMO_FEED_HEAD_CAP = 6;
   const FOMO_FEED_CHAIN_COLORS = {
@@ -5632,6 +5632,17 @@ Select to open Flap tax details`;
   }
 
   function trackingFeedEventIdentity(ev) {
+    if (ev?.source === 'fomo-followed') {
+      // A tradeId is a position, not a swap or transaction. A single position
+      // can contain many buys, exits and independent comments.
+      const kind = String(ev.type || '');
+      const user = String(ev.userId || ev.handle || '');
+      const narrative = ['thesis', 'reply', 'callout'].includes(kind);
+      const id = narrative
+        ? ev.commentId ? ['comment', ev.commentId] : ['event', ev.eventId || ev.providerEventId || ev.key]
+        : ev.swapId ? ['swap', ev.swapId] : ['event', ev.eventId || ev.providerEventId || ev.key];
+      return `fomo-followed:${JSON.stringify([kind, user, id[0], String(id[1] || '')])}`;
+    }
     const tx = trackingFeedNormalizedTx(ev?.tx);
     if (tx) return `tx:${tx}`;
     const source = String(ev?.source || 'fomo');
@@ -5660,6 +5671,15 @@ Select to open Flap tax details`;
     const side = String(ev?.type || '').trim().toLowerCase();
     if (side !== 'buy' && side !== 'sell') return false;
     const tx = trackingFeedNormalizedTx(ev?.tx);
+    if (ev?.source === 'fomo-followed') {
+      // Direct provider events carry real hashes only; absent a hash, fuzzy
+      // amount/time matching cannot prove that two position fills are one.
+      const addr = trackingFeedNormalizedAddress(ev?.addr);
+      const chain = String(ev?.chain || '').trim().toLowerCase();
+      return !!tx && !!row?.tx && tx === row.tx
+        && !!addr && addr === row.addr && side === row.side
+        && !!chain && chain === row.chain;
+    }
     if (tx && row?.tx && tx === row.tx) return true;
     const addr = trackingFeedNormalizedAddress(ev?.addr);
     if (!addr || !row?.addr || addr !== row.addr || !row.side || side !== row.side) return false;
@@ -5752,11 +5772,50 @@ Select to open Flap tax details`;
     }
   }
 
-  function pollFomoFollowedFeed() {
-    const canDisplay = () => settings.enabled && settings.enableFomoFeed !== false
+  let fomoFollowedRaf = 0;
+  let fomoFollowedEpoch = '';
+  let fomoFollowedRevision = 0;
+  let fomoFollowedUpdatedAt = 0;
+  async function updateFomoFollowedEpoch(record) {
+    const generation = fomoUiAuthGeneration;
+    fomoFollowedEpoch = '';
+    const token = String(record?.token || '').trim();
+    if (!token) return;
+    try {
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+      if (generation !== fomoUiAuthGeneration) return;
+      fomoFollowedEpoch = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+    } catch { /* Poll callbacks still have generation fencing if digest is unavailable. */ }
+  }
+  function canDisplayFomoFollowedFeed() {
+    return settings.enabled && settings.enableFomoFeed !== false
       && (document.querySelector(TRACK_TAB_CELL) || trackerCards().length);
+  }
+  function applyFomoFollowedResponse(resp) {
+    renderFomoFollowedGap(resp);
+    if (!Array.isArray(resp.events)) return;
+    fomoFollowedRevision += 1;
+    fomoFollowedUpdatedAt = Number(resp.updatedAt) || 0;
+    fomoFollowedEvents = resp.events.map((event) => {
+      const normalized = { ...event, source: 'fomo-followed', followed: true };
+      normalized.key = trackingFeedEventIdentity(normalized);
+      return normalized;
+    });
+    scheduleFomoFollowedRender();
+  }
+  function scheduleFomoFollowedRender() {
+    if (fomoFollowedRaf || document.visibilityState === 'hidden') return;
+    fomoFollowedRaf = requestAnimationFrame(() => {
+      fomoFollowedRaf = 0;
+      scanFomoFeed(); // direct callback lane: never wait for the full-page scan
+    });
+  }
+
+  function pollFomoFollowedFeed() {
+    const canDisplay = canDisplayFomoFollowedFeed;
     if (!canDisplay()) { renderFomoFollowedGap(null); return; }
     const generation = fomoUiAuthGeneration;
+    const revision = fomoFollowedRevision;
     fomoFollowedLastPollAt = Date.now();
     try {
       chrome.runtime.sendMessage({ type: 'fomo-followed-feed' }, (resp) => {
@@ -5768,15 +5827,14 @@ Select to open Flap tax details`;
         if (resp.reason === 'not-connected') {
           fomoFollowedEvents = [];
           renderFomoFollowedGap({ stale: true });
-          scheduleScan();
+          scheduleFomoFollowedRender();
           return;
         }
-        renderFomoFollowedGap(resp);
+        // Auth rejection above outranks snapshot freshness, including a push
+        // received while this same-account request was still in flight.
+        if (revision !== fomoFollowedRevision && !(Number(resp.updatedAt) > fomoFollowedUpdatedAt)) return;
         // A failed later page can still carry useful same-account partial data.
-        if (Array.isArray(resp.events)) {
-          fomoFollowedEvents = resp.events.map((event) => ({ ...event, source: 'fomo-followed', followed: true }));
-          scheduleScan();
-        }
+        applyFomoFollowedResponse(resp);
       });
     } catch {
       if (generation === fomoUiAuthGeneration && canDisplay()) renderFomoFollowedGap({ stale: true });
@@ -6268,8 +6326,9 @@ Select to open Flap tax details`;
     let headCount = 0;
     let inlineCount = 0;
     for (const ev of events) {
+      const directFomo = ev.source === 'fomo-followed';
       if (!withTs.length) {
-        if (headCount < FOMO_FEED_HEAD_CAP) { placements.set(ev.key, { ev, anchor: 'head' }); headCount += 1; }
+        if (directFomo || headCount < FOMO_FEED_HEAD_CAP) { placements.set(ev.key, { ev, anchor: 'head' }); if (!directFomo) headCount += 1; }
         continue;
       }
       let anchor = null;
@@ -6278,15 +6337,15 @@ Select to open Flap tax details`;
         else break;
       }
       if (!anchor) {
-        if (headCount < FOMO_FEED_HEAD_CAP) { placements.set(ev.key, { ev, anchor: 'head' }); headCount += 1; }
+        if (directFomo || headCount < FOMO_FEED_HEAD_CAP) { placements.set(ev.key, { ev, anchor: 'head' }); if (!directFomo) headCount += 1; }
         continue;
       }
-      if (anchor === oldest && withTs.length > 1) continue;
+      if (!directFomo && anchor === oldest && withTs.length > 1) continue;
       if (fixedMode) {
-        if (inlineCount >= FOMO_FEED_INLINE_CAP) continue;
+        if (!directFomo && inlineCount >= FOMO_FEED_INLINE_CAP) continue;
         if (!fomoFeedFixedRow(anchor.el)) continue;
         placements.set(ev.key, { ev, anchor: anchor.el });
-        inlineCount += 1;
+        if (!directFomo) inlineCount += 1;
         continue;
       }
       const parent = anchor.el.parentElement;
@@ -6766,6 +6825,9 @@ Select to open Flap tax details`;
         const newIdentity = fomoStoredAccountIdentity(change.newValue);
         const sameAccount = oldIdentity && newIdentity && oldIdentity === newIdentity;
         fomoUiAuthGeneration += 1;
+        fomoFollowedRevision += 1;
+        fomoFollowedUpdatedAt = 0;
+        void updateFomoFollowedEpoch(change.newValue);
         resetFomoUi(!sameAccount);
         fomoPnlCache.clear();
         renderFomoFollowedGap(null);
@@ -6778,6 +6840,13 @@ Select to open Flap tax details`;
         fomoFollowedHoldersFailures.clear();
         fomoFollowedEvents = [];
         fomoFollowedLastPollAt = 0;
+        // Remove old-account cards immediately; a throttled scan can lag seconds.
+        for (const [key, card] of fomoFeedCards) {
+          if (!card.classList.contains('is-followed')) continue;
+          card.remove();
+          fomoFeedCards.delete(key);
+        }
+        scheduleFomoFollowedRender();
         fomoLoadedKey = '';
         fomoErrKey = '';
         fomoLastItems = [];
@@ -6823,6 +6892,11 @@ Select to open Flap tax details`;
     scheduleScan();
   });
 
+  const initialFomoFollowedGeneration = fomoUiAuthGeneration;
+  chrome.storage.local.get('fomoToken', stored => {
+    if (initialFomoFollowedGeneration === fomoUiAuthGeneration) void updateFomoFollowedEpoch(stored?.fomoToken);
+  });
+
   async function updateJ7UiSession(session) {
     const generation = ++j7UiGeneration;
     j7UiEpoch = '';
@@ -6847,6 +6921,14 @@ Select to open Flap tax details`;
 
   try {
     chrome.runtime.onMessage.addListener((msg) => {
+      if (msg?.type === 'fomo-followed-feed-update') {
+        if (!canDisplayFomoFollowedFeed()) return;
+        if (!msg.epoch) { pollFomoFollowedFeed(); return; }
+        if (!fomoFollowedEpoch || msg.epoch !== fomoFollowedEpoch) return;
+        if (!msg.data || (Number(msg.data.updatedAt) && Number(msg.data.updatedAt) < fomoFollowedUpdatedAt)) return;
+        applyFomoFollowedResponse(msg.data);
+        return;
+      }
       if (msg?.type === 'gdh-j7-status' && msg.epoch === j7UiEpoch) {
         j7RecoveryMs = msg.connected ? 60000 : 2000;
         if (!msg.connected) { fomoFeedLastPollAt = 0; pumpFeedLastPollAt = 0; }
@@ -6875,6 +6957,7 @@ Select to open Flap tax details`;
 
   window.setInterval(() => {
     if (document.visibilityState !== 'hidden') {
+      if (Date.now() - fomoFollowedLastPollAt >= FOMO_FEED_POLL_MS) pollFomoFollowedFeed();
       if (Date.now() - fomoFeedLastPollAt > j7RecoveryMs) pollFomoFeed();
       if (Date.now() - pumpFeedLastPollAt > j7RecoveryMs) pollPumpFeed();
       refreshFomoFeedTimes();
@@ -6883,6 +6966,6 @@ Select to open Flap tax details`;
   }, 1000);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') dismissTooltipForLifecycle();
-    else { scheduleJ7FeedRender(); scheduleScan(); }
+    else { scheduleFomoFollowedRender(); scheduleJ7FeedRender(); scheduleScan(); }
   });
 })();

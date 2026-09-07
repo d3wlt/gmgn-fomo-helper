@@ -1,6 +1,6 @@
 # better gmgn
 
-An independent private copy of the Chrome MV3 extension “better gmgn.” Version 0.52.0 is based on upstream version 0.46.27 and adds trading-oriented interface enhancements to GMGN.ai and DeBot without executing trades.
+An independent private copy of the Chrome MV3 extension “better gmgn.” Version 0.53.0 is based on upstream version 0.46.27 and adds trading-oriented interface enhancements to GMGN.ai and DeBot without executing trades.
 
 This repository is not affiliated with GMGN, DeBot, FOMO, Pump, J7Tracker, or the original upstream author.
 
@@ -29,8 +29,10 @@ Chrome does not automatically update unpacked extensions. To update, download an
 - Show 👥N beside tokens held by people you follow on FOMO, highlight those users in the FOMO Holders tab, and link Flap tax badges to the English tax page.
 - Hide the third-party Lightning Trade button.
 - Show FOMO data source, last successful refresh, partial coverage, and Following-only views on GMGN and DeBot.
-- Catch up the followed-user tracker through bounded pages and show gaps when continuity cannot be established.
+- Collect direct FOMO Following activity using Fomobot-derived per-user swaps, social theses, and bounded token-thesis/active-position recovery. Recent events are pushed to the renderer as they arrive; historical gaps do not block fresh collection.
 - Recover from request failures with retry/reconnect guidance and optional allowlisted clipboard diagnostics.
+
+Direct Following polls on a five-second target while the tracker is visible (not a delivery guarantee). Each pass rotates through at most 12 followed users with bounded concurrency and recovery depth. The account-isolated session cache retains up to 500 events; the mixed tracker displays the latest 40 eligible events. These are explicit recent-feed limits, not complete lifetime history. Optional user/token enrichment can remain unavailable when the provider does not return it.
 
 Holder-history reconstruction is a limited current-holder sample, not a complete token history. Fully exited users may be absent; Following-only filtering applies to the loaded sample. Neither a successful response nor a holder badge proves there have been no sells.
 
@@ -51,7 +53,7 @@ The script creates only `dist/985gmgn-helper-vX.Y.Z.zip` and its `.sha256` check
 On macOS or Linux, the portable builder reads the same release-file allowlist and verifies every ZIP entry:
 
 ```bash
-python3 scripts/build-release.py --tag v0.52.0
+python3 scripts/build-release.py --tag v0.53.0
 ```
 
 Run the repository gates (Node.js 22+):

@@ -272,7 +272,12 @@ function slimFomoFollowedEvent(raw, followedIds) {
   const addr = String(raw.tokenAddress || body.tokenAddress || token.address || '').trim();
   const networkId = Number(raw.networkId ?? body.networkId ?? token.networkId);
   const handle = String(raw.userHandle || raw.handle || user.userHandle || user.handle || body.userHandle || '').trim().replace(/^@/, '');
-  const key = String(raw.id || raw.key || raw.tradeId || `${type}:${userId}:${addr}:${ts}`).slice(0, 180);
+  const providerEventId = String(raw.id || raw.key || '').slice(0, 180);
+  const swapId = String(raw.swapId || '').slice(0, 128);
+  const commentId = type === 'thesis' ? String(raw.commentId || body.commentId || raw.tradeComment?.id || (raw.type === 'thesis' ? raw.id : '') || '').slice(0, 128) : '';
+  if (commentId && raw.tradeComment?.id != null && String(raw.tradeComment.id) !== commentId) return null;
+  const key = commentId ? `comment:${commentId}` : swapId ? `swap:${swapId}` : providerEventId ? `event:${providerEventId}` : '';
+  if (!key) return null;
   const rawComment = raw.comment && typeof raw.comment === 'object' ? raw.comment.comment : raw.comment;
   const comment = String(rawComment || raw.text || raw.thesis || body.comment || body.text || '').slice(0, 1500);
   return {
@@ -294,14 +299,17 @@ function slimFomoFollowedEvent(raw, followedIds) {
     img: fomoHttpsUrl(raw.tokenImageUrl || raw.tokenImage || token.imageUrl || token.image),
     mc: Number(raw.fdv ?? raw.marketCap ?? body.fdv ?? body.marketCap) || 0,
     ts,
-    tx: String(raw.txHash || raw.transactionHash || raw.tradeId || body.txHash || '').trim().slice(0, 180),
+    providerEventId, swapId, commentId,
+    tradeId: String(raw.tradeId || trade.id || '').slice(0, 128),
+    transactionHash: String(raw.txHash || raw.transactionHash || body.txHash || '').trim().slice(0, 180),
+    tx: String(raw.txHash || raw.transactionHash || body.txHash || '').trim().slice(0, 180),
   };
 }
 
-const FOMO_FOLLOWED_FEED_MIN_INTERVAL_MS = 15000;
+const FOMO_FOLLOWED_FEED_MIN_INTERVAL_MS = 5000;
 const FOMO_FOLLOWING_IDS_CACHE_MS = 120000;
-const FOMO_FEED_KEEP = 150;
-// Checkpoints are intentionally memory-only: a worker restart is NOT continuous coverage.
+const FOMO_FEED_KEEP = 500;
+// Bounded extension-only session persistence survives MV3 worker eviction.
 const FOMO_FOLLOWED_FEED_PAGE_LIMIT = 100;
 const FOMO_FOLLOWED_FEED_MAX_PAGES = 5;
 function emptyFomoFollowedFeed() {
@@ -372,6 +380,7 @@ async function fetchFomoFollowingIds(force = false) {
       const values = body?.responseObject?.followingIds ?? body?.followingIds;
       if (!Array.isArray(values)) throw fomoFailure('invalid-response');
       const ids = new Set(values.map((value) => String(value || '').trim()).filter(Boolean));
+      reconcileFomoRoster(ids);
       fomoFollowingIdsCache = { ids, fetchedAt: Date.now() };
       return ids;
     } finally {
@@ -382,98 +391,348 @@ async function fetchFomoFollowingIds(force = false) {
   return promise;
 }
 
+const FOMO_COLLECTOR_SESSION = 'fomoFollowingCollectorV1';
+const FOMO_QUOTE_TOKENS = {
+  1399811149: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+  56: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d',
+  8453: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+  4663: '0x5fc5360d0400a0fd4f2af552add042d716f1d168',
+  143: '0x754704bc059f8c67012fed69bc8a327a5aafb603',
+  1: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+};
+function emptyFomoCollector() { return { lanes: {}, positions: {}, watches: {}, profiles: {}, offset: 0, watchOffset: 0 }; }
+let fomoCollector = emptyFomoCollector();
+let fomoCollectorHydration = null;
+let fomoCollectorSave = Promise.resolve();
+let fomoRosterGeneration = 0;
+async function fomoCollectorBinding() {
+  const { fomoToken } = await chrome.storage.local.get('fomoToken');
+  const identity = fomoAccountIdentity(fomoToken) || fomoToken?.token;
+  if (!identity || typeof crypto === 'undefined' || !crypto.subtle) return '';
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity));
+  return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+}
+async function hydrateFomoCollector() {
+  if (!chrome.storage.session) return;
+  if (fomoCollectorHydration) return fomoCollectorHydration;
+  const generation = fomoAuthGeneration;
+  const pending = (async () => {
+    const binding = await fomoCollectorBinding();
+    const saved = (await chrome.storage.session.get(FOMO_COLLECTOR_SESSION))[FOMO_COLLECTOR_SESSION];
+    if (generation !== fomoAuthGeneration || !binding || saved?.binding !== binding || saved?.version !== 1) return;
+    if (!Array.isArray(saved.cache?.events) || !saved.state?.lanes || !saved.state?.watches) return;
+    fomoCollector = saved.state;
+    fomoFollowedFeedCache = { ...saved.cache, events: saved.cache.events.slice(0, FOMO_FEED_KEEP), fetchedAt: 0 };
+    // Always refresh the roster on wake before making restored events visible.
+  })();
+  fomoCollectorHydration = pending;
+  try { await pending; } catch { if (fomoCollectorHydration === pending) fomoCollectorHydration = null; }
+}
+function persistFomoCollector(clear = false) {
+  if (!chrome.storage.session) return Promise.resolve();
+  const generation = fomoAuthGeneration;
+  const snapshot = clear ? null : JSON.parse(JSON.stringify({ version: 1, state: fomoCollector, cache: fomoFollowedFeedCache }));
+  fomoCollectorSave = fomoCollectorSave.catch(() => {}).then(async () => {
+    if (clear) { await chrome.storage.session.remove(FOMO_COLLECTOR_SESSION); return; }
+    const binding = await fomoCollectorBinding();
+    if (generation !== fomoAuthGeneration || !binding) return;
+    await chrome.storage.session.set({ [FOMO_COLLECTOR_SESSION]: { ...snapshot, binding } });
+  }).catch(() => {});
+  return fomoCollectorSave;
+}
+function reconcileFomoRoster(ids) {
+  const before = fomoFollowingIdsCache.ids;
+  if (ids.size === before.size && [...ids].every(id => before.has(id))) return;
+  fomoRosterGeneration += 1;
+  fomoFollowedFeedCache = { ...fomoFollowedFeedCache, fetchedAt: 0, events: fomoFollowedFeedCache.events.filter(e => ids.has(e.userId)) };
+  for (const id of Object.keys(fomoCollector.positions)) if (!ids.has(id)) delete fomoCollector.positions[id];
+  for (const id of Object.keys(fomoCollector.profiles)) if (!ids.has(id)) delete fomoCollector.profiles[id];
+  for (const key of Object.keys(fomoCollector.lanes)) if (key.startsWith('swap:') && !ids.has(key.slice(5))) delete fomoCollector.lanes[key];
+  for (const [key, watch] of Object.entries(fomoCollector.watches)) {
+    watch.users = watch.users.filter(id => ids.has(id));
+    if (!watch.users.length) delete fomoCollector.watches[key];
+  }
+}
+async function fomoCollectorPool(jobs) {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(4, jobs.length) }, async () => {
+    while (next < jobs.length) { const job = jobs[next++]; await job(); }
+  }));
+}
+function fomoSameToken(a, b, network) { return network === 1399811149 ? a === b : String(a).toLowerCase() === String(b).toLowerCase(); }
+function fomoSwapEvent(raw, userId, ids, profile) {
+  if (!raw?.id || (raw.userId && raw.userId !== userId)) return null;
+  const quote = FOMO_QUOTE_TOKENS[raw.outNetworkId];
+  if (!quote) return null;
+  const sell = fomoSameToken(raw.outTokenAddress, quote, raw.outNetworkId);
+  const networkId = sell ? raw.inNetworkId : raw.outNetworkId;
+  const tokenAddress = sell ? raw.inTokenAddress : raw.outTokenAddress;
+  if (!normalizeFomoTokenRef({ networkId, tokenAddress })) return null;
+  const usdAmount = sell ? raw.humanUsdAmountOut : raw.humanUsdAmountIn;
+  if (!Number.isFinite(usdAmount) || usdAmount < 0) return null;
+  return slimFomoFollowedEvent({ ...raw, ...profile, id: raw.id, swapId: raw.id, userId,
+    type: sell ? 'swap_sell' : 'swap_buy', networkId, tokenAddress, usdAmount,
+    tradeId: sell ? raw.inTradeId : raw.outTradeId,
+  }, ids);
+}
 async function fetchFomoFollowedFeed() {
-  if (fomoFollowedFeedInflight?.generation === fomoAuthGeneration) return fomoFollowedFeedInflight.promise;
+  await hydrateFomoCollector();
+  if (fomoFollowedFeedInflight?.generation === fomoAuthGeneration) return fomoFollowedFeedCache.events.length ? { ok: !fomoFollowedFeedCache.reason, ...fomoFollowedFeedCache, refreshing: true } : fomoFollowedFeedInflight.promise;
   if (fomoFollowedFeedCache.fetchedAt && Date.now() - fomoFollowedFeedCache.fetchedAt < FOMO_FOLLOWED_FEED_MIN_INTERVAL_MS) {
     return { ok: !fomoFollowedFeedCache.reason, ...fomoFollowedFeedCache };
   }
   const generation = fomoAuthGeneration;
   const promise = (async () => {
-    let followedIds;
-    const collected = new Map();
-    let pages = 0;
-    let head = null;
-    let overlap = false;
-    let caughtUp = false;
-    let gapReason = '';
-    let failure = null;
-    const checkpoint = fomoFollowedFeedCheckpoint;
-    try {
-      followedIds = await fetchFomoFollowingIds();
-      if (generation !== fomoAuthGeneration) throw fomoFailure('not-connected');
-      // Checkpoints come from the GLOBAL feed, even with zero follows.
-      for (let page = 0; page < FOMO_FOLLOWED_FEED_MAX_PAGES; page += 1) {
-        const { res } = await fomoAuthedFetch(`/feed/tradingActivity?limit=${FOMO_FOLLOWED_FEED_PAGE_LIMIT}&page=${page}`);
-        const body = await res.json().catch(() => null);
-        if (generation !== fomoAuthGeneration) throw fomoFailure('not-connected');
-        fomoCheckResponse(res, body);
-        const box = body?.responseObject ?? body;
-        const rawItems = Array.isArray(box) ? box : box?.items;
-        if (!Array.isArray(rawItems)) throw fomoFailure('invalid-response');
-        pages += 1;
-        const anchors = rawItems.map(fomoEventCheckpoint).filter(Boolean);
-        if (page === 0) head = anchors.reduce((best, item) => !best || item.ts > best.ts ? item : best, null);
-        if (checkpoint && anchors.some((item) => item.id === checkpoint.id && item.ts === checkpoint.ts)) overlap = true;
-        for (const raw of rawItems) {
-          const event = slimFomoFollowedEvent(raw, followedIds);
-          if (event) collected.set(event.key, event);
-        }
-        const hasNext = typeof box?.hasNextPage === 'boolean' ? box.hasNextPage
-          : typeof body?.hasNextPage === 'boolean' ? body.hasNextPage : rawItems.length >= FOMO_FOLLOWED_FEED_PAGE_LIMIT;
-        // Read past the checkpoint's timestamp bucket so ties on a later page aren't lost.
-        caughtUp = !!checkpoint && overlap && (!hasNext || anchors.some((item) => item.ts < checkpoint.ts));
-        if (!checkpoint) { gapReason = 'restart-baseline'; break; }
-        if (caughtUp) break;
-        if (!hasNext) { gapReason = 'checkpoint-missing'; break; }
-        if (!rawItems.length) { gapReason = 'pagination-stalled'; break; }
-        if (page === FOMO_FOLLOWED_FEED_MAX_PAGES - 1) gapReason = 'page-cap';
+    let ids;
+    try { ids = await fetchFomoFollowingIds(); }
+    catch (error) {
+      if (generation !== fomoAuthGeneration) return { ok: false, reason: 'not-connected', ...emptyFomoFollowedFeed() };
+      if (error.reason === 'not-connected') resetFomoAccountCaches();
+      return { ...fomoFollowedFeedCache, ok: false, stale: true, followingKnown: false, coverageGap: true, gapReason: error.reason || 'fetch-failed', reason: error.reason || 'fetch-failed' };
+    }
+    const rosterGeneration = fomoRosterGeneration;
+    const valid = () => generation === fomoAuthGeneration && rosterGeneration === fomoRosterGeneration;
+    // Content checks the credential digest, not the account cache binding. This
+    // prevents a queued push from a previous login from repopulating the page.
+    let pushEpoch = '';
+    if (typeof crypto !== 'undefined' && crypto.subtle) {
+      const stored = (await chrome.storage.local.get('fomoToken')).fomoToken;
+      const token = String(stored?.token || '').trim();
+      if (token) {
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+        pushEpoch = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
       }
-    } catch (error) {
-      // A rejected old request must not return or overwrite the NEW account's data.
-      if (generation !== fomoAuthGeneration) return { ok: false, reason: 'not-connected', events: [], ...emptyFomoFollowedFeed() };
-      failure = error;
-      gapReason = pages ? 'pagination-failed' : (error?.message === 'not-connected' ? 'not-connected' : 'fetch-failed');
     }
-    if (generation !== fomoAuthGeneration) return { ok: false, reason: 'not-connected', ...emptyFomoFollowedFeed() };
-    if (failure?.reason === 'not-connected' || failure?.message === 'not-connected') {
-      fomoFollowedFeedCache = emptyFomoFollowedFeed();
-      fomoFollowedFeedCheckpoint = null;
-      fomoFollowingIdsCache = { ids: new Set(), fetchedAt: 0 };
-      return { ok: false, reason: 'not-connected', ...fomoFollowedFeedCache };
-    }
-    const previous = fomoFollowedFeedCache;
-    const retained = previous.events.filter((event) => !followedIds || followedIds.has(event.userId));
-    const merged = new Map(retained.map((event) => [event.key, event]));
-    for (const [key, event] of collected) merged.set(key, event);
-    const events = [...merged.values()].sort((a, b) => b.ts - a.ts || a.key.localeCompare(b.key)).slice(0, FOMO_FEED_KEEP);
-    // On a gap keep the last verified checkpoint so the next poll can repair it.
-    if (head && (!checkpoint || caughtUp)) fomoFollowedFeedCheckpoint = head;
-    fomoFollowedFeedCache = {
-      events,
-      fetchedAt: pages ? Date.now() : previous.fetchedAt,
-      updatedAt: pages ? Date.now() : previous.updatedAt,
-      coverageGap: !caughtUp || Boolean(failure),
-      // Coverage describes continuity since our baseline, never lifetime history.
-      gapReason: gapReason || (caughtUp ? '' : 'restart-baseline'),
-      historyLimited: true,
-      stale: Boolean(failure),
-      followingKnown: !!followedIds,
-      ...(failure ? { reason: failure.reason || 'fetch-failed' } : {}),
-      ...(failure?.status ? { status: failure.status } : {}),
-      ...(failure?.retryAt ? { retryAt: failure.retryAt } : {}),
+    if (!valid()) return { ok:false, reason:'not-connected', ...emptyFomoFollowedFeed() };
+    const state = JSON.parse(JSON.stringify(fomoCollector));
+    const collected = new Map();
+    const failures = [];
+    const coverage = { attempted: 0, succeeded: 0, rejected: 0, usersAttempted: 0, usersTotal: ids.size, tokenRequests: 0 };
+    const request = async (path, options = {}) => {
+      if (!valid()) throw fomoFailure('not-connected');
+      coverage.attempted++;
+      const { res } = await fomoAuthedFetch(path, { ...options, collector: true });
+      const body = await res.json().catch(() => null);
+      if (!valid()) throw fomoFailure('not-connected');
+      fomoCheckResponse(res, body);
+      coverage.succeeded++;
+      return body?.responseObject ?? body;
     };
-    if (failure) {
-      return {
-        ok: false, ...fomoFollowedFeedCache, stale: true,
-        reason: failure.reason || 'fetch-failed',
-        ...(failure.status ? { status: failure.status } : {}),
-        ...(failure.retryAt ? { retryAt: failure.retryAt } : {}),
-      };
+    const watch = (ref, userId) => {
+      const normalized = normalizeFomoTokenRef(ref);
+      if (!normalized) return;
+      const key = `${normalized.networkId}:${normalized.address}`;
+      const old = state.watches[key];
+      state.watches[key] = { ...old, ...normalized, until: Date.now() + 86400000, users: [...new Set([...(old?.users || []), userId])] };
+    };
+    let publishQueued = false;
+    const publish = () => {
+      if (publishQueued) return;
+      publishQueued = true;
+      queueMicrotask(() => {
+        publishQueued = false;
+        if (!valid()) return;
+        const merged = new Map(fomoFollowedFeedCache.events.filter(e => ids.has(e.userId)).map(e => [e.key, e]));
+        for (const [key, event] of collected) merged.set(key, event);
+        fomoFollowedFeedCache = { ...fomoFollowedFeedCache, events: [...merged.values()].sort((a,b) => b.ts-a.ts || a.key.localeCompare(b.key)).slice(0,FOMO_FEED_KEEP),
+          updatedAt: Date.now(), followingKnown: true, coverageGap: true, gapReason: 'refreshing', refreshing: true };
+        void persistFomoCollector();
+        if (chrome.tabs?.query) void chrome.tabs.query({ url: ['https://gmgn.ai/*', 'https://*.gmgn.ai/*'] }).then(tabs => {
+          if (!valid()) return;
+          for (const tab of tabs) void chrome.tabs.sendMessage(tab.id, { type: 'fomo-followed-feed-update', epoch: pushEpoch, data: { ok: true, ...fomoFollowedFeedCache } }).catch(() => {});
+        }).catch(() => {});
+      });
+    };
+    const ingest = event => {
+      if (!event || !valid()) return;
+      publish();
+      collected.set(event.key, event);
+      if (event.handle) state.profiles[event.userId] = { userHandle: event.handle, profilePictureLink: event.avatar };
+      if (event.type === 'buy' || event.type === 'thesis') watch({ networkId: Number(Object.keys(FOMO_NETWORK_SLUG).find(k => FOMO_NETWORK_SLUG[k] === event.chain)), address: event.addr }, event.userId);
+    };
+    const safely = fn => async () => { try { await fn(); } catch (error) { failures.push(error); if (error.reason === 'not-connected' && valid()) resetFomoAccountCaches(); } };
+    // Every pass reads a fresh head. Historical gap repair has a separate persisted cursor;
+    // a provider-deleted predecessor can never block new events or advance verified coverage.
+    const scan = async (key, pageAt, normalize) => {
+      const lane = state.lanes[key] || { head: '', gap: false };
+      let cursor = '', head = '', overlap = false, exhausted = false;
+      const seen = new Set();
+      state.lanes[key] = lane;
+      for (let page = 0; page < 2; page++) {
+        const box = await pageAt(cursor);
+        if (!Array.isArray(box.rows)) throw fomoFailure('invalid-response');
+        for (const row of box.rows) {
+          const id = String(row?.id || '');
+          if (!id) { coverage.rejected++; continue; }
+          if (!head) head = id;
+          if (id === lane.head) overlap = true;
+          const event = normalize(row);
+          if (event) ingest(event); else if (row?.type !== 'manual' && key.startsWith('swap:')) coverage.rejected++;
+        }
+        const next = String(box.rows.at(-1)?.id || '');
+        exhausted = !box.more;
+        if (exhausted || overlap || !lane.head) { cursor = next; break; }
+        if (!next || seen.has(next)) { lane.gap = true; break; }
+        seen.add(next); cursor = next;
+      }
+      if (lane.head && !overlap) {
+        if (!lane.target) { lane.target = lane.head; lane.cursor = cursor; }
+        lane.gap = true;
+      }
+      if (lane.target) {
+        const repair = await pageAt(lane.cursor || '');
+        if (!Array.isArray(repair.rows)) throw fomoFailure('invalid-response');
+        for (const row of repair.rows) ingest(normalize(row));
+        if (repair.rows.some(row => String(row.id) === lane.target)) { lane.target = ''; lane.cursor = ''; lane.gap = false; }
+        else {
+          const next = String(repair.rows.at(-1)?.id || '');
+          lane.cursor = repair.more && next !== lane.cursor ? next : '';
+        }
+      } else if (overlap || (!lane.head && !head && exhausted)) lane.gap = false;
+      else if (!lane.head) lane.gap = true;
+      if (head) lane.head = head;
+      state.lanes[key] = lane;
+    };
+    const users = [...ids].sort();
+    const chosen = Array.from({ length: Math.min(12, users.length) }, (_, i) => users[(state.offset + i) % users.length]);
+    state.offset = users.length ? (state.offset + chosen.length) % users.length : 0;
+    coverage.usersAttempted = chosen.length;
+    const jobs = [safely(() => scan('social', async cursor => {
+      const params = new URLSearchParams({ limit: '50' });
+      params.append('feedTypes', 'thesis_created'); params.append('feedTypes', 'user_trade_profit_milestone');
+      if (cursor) params.set('lastFeedId', cursor);
+      const box = await request(`/feed?${params}`);
+      return { rows: box.feed, more: box.hasNextPage ?? (box.feed?.length >= 50) };
+    }, row => slimFomoFollowedEvent(row, ids)))];
+    const recoveryJobs = [];
+    for (const userId of chosen) {
+      jobs.push(safely(() => scan(`swap:${userId}`, async cursor => {
+        const box = await request(`/v2/users/${encodeURIComponent(userId)}/swaps${cursor ? `?lastSwapId=${encodeURIComponent(cursor)}` : ''}`);
+        if (typeof box.hasNextPage !== 'boolean') throw fomoFailure('invalid-response');
+        if (box.user?.userHandle) state.profiles[userId] = { userHandle: box.user.userHandle, profilePictureLink: box.user.profilePictureLink };
+        return { rows: box.swaps, more: box.hasNextPage };
+      }, row => fomoSwapEvent(row, userId, ids, state.profiles[userId]))));
+      recoveryJobs.push(safely(async () => {
+        const box = await request(`/v2/users/${encodeURIComponent(userId)}/balances`);
+        if (!Array.isArray(box.balances) || box.balances.length > 2000) throw fomoFailure('invalid-response');
+        const previous = state.positions[userId];
+        const positions = {};
+        for (const row of box.balances) {
+          const trade = row?.activeTrade, token = row?.userToken;
+          if (!trade || trade.closedAt !== null || !(token?.humanAmountRemaining > 0)) continue;
+          if ((trade.userId && trade.userId !== userId) || (token.userId && token.userId !== userId)
+            || trade.networkId !== token.networkId || !fomoSameToken(trade.tokenAddress, token.tokenAddress, trade.networkId)
+            || !normalizeFomoTokenRef({ networkId: trade.networkId, tokenAddress: trade.tokenAddress }) || !trade.id) throw fomoFailure('invalid-response');
+          const old = previous?.[trade.id];
+          positions[trade.id] = { networkId: trade.networkId, tokenAddress: trade.tokenAddress, commentId: trade.commentId || '', pending: old?.pending || '', observedAt: old?.observedAt || Date.now() };
+          if (previous && trade.commentId && old?.commentId !== trade.commentId) {
+            positions[trade.id].pending = trade.commentId; positions[trade.id].observedAt = Date.now();
+          }
+          // Initial census silently baselines old comments, but watches open tokens so
+          // new theses are discoverable even with no recent buy (including later edits).
+          watch({ networkId: trade.networkId, tokenAddress: trade.tokenAddress }, userId);
+        }
+        state.positions[userId] = positions;
+      }));
     }
-    return { ok: true, ...fomoFollowedFeedCache };
-  })().finally(() => {
-    if (fomoFollowedFeedInflight?.promise === promise) fomoFollowedFeedInflight = null;
-  });
+    await fomoCollectorPool(jobs);
+    // Optional metadata never precedes fresh swaps; verified read-only endpoints.
+    recoveryJobs.unshift(safely(async () => {
+      const refs = [...new Map([...collected.values()].map(e => {
+        const networkId = Number(Object.keys(FOMO_NETWORK_SLUG).find(k => FOMO_NETWORK_SLUG[k] === e.chain));
+        return [`${networkId}:${e.addr}`, { networkId, address: e.addr }];
+      })).values()].slice(0, 30);
+      if (!refs.length) return;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 750);
+      try {
+        const options = { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal };
+        const results = await Promise.allSettled([
+          request('/hodlers/friends', { ...options, body: JSON.stringify({ tokens: refs }) }),
+          request('/proxy/filterTokens', { ...options, body: JSON.stringify(refs.map(r => `${r.address}:${r.networkId}`)) }),
+        ]);
+        if (!valid()) return;
+        for (const result of results) if (result.status === 'rejected' && result.reason?.reason === 'not-connected') throw result.reason;
+        const holders = results[0].status === 'fulfilled' && Array.isArray(results[0].value) ? results[0].value : [];
+        for (const box of holders) for (const raw of box.topHolders || []) {
+          const user = slimFomoFollowedHolder(raw);
+          if (ids.has(user.userId) && user.handle) state.profiles[user.userId] = { userHandle: user.handle, profilePictureLink: user.avatar };
+        }
+        const tokens = results[1].status === 'fulfilled' && Array.isArray(results[1].value) ? results[1].value : [];
+        for (const event of collected.values()) {
+          const profile = state.profiles[event.userId];
+          if (profile?.userHandle) { event.handle = String(profile.userHandle).toLowerCase().slice(0,64); event.name = event.handle.slice(0,48); event.avatar = fomoHttpsUrl(profile.profilePictureLink); }
+          const row = tokens.find(row => FOMO_NETWORK_SLUG[row.token?.networkId] === event.chain && fomoSameToken(row.token?.address, event.addr, row.token?.networkId));
+          if (row) { event.symbol = String(row.token.symbol || '').slice(0,24); event.img = fomoHttpsUrl(row.token.info?.imageSmallUrl || row.token.info?.imageThumbUrl); }
+        }
+        publish();
+      } finally { clearTimeout(timer); }
+    }));
+    // Three recovery jobs plus at most two metadata requests = four sockets.
+    for (let i = 0; i < recoveryJobs.length; i += 3) await fomoCollectorPool(recoveryJobs.slice(i, i + 3));
+    const watches = Object.entries(state.watches).filter(([, w]) => w.until > Date.now() && w.users.some(id => ids.has(id))).slice(-200);
+    state.watches = Object.fromEntries(watches);
+    const selected = Array.from({ length: Math.min(6, watches.length) }, (_, i) => watches[(state.watchOffset + i) % watches.length]);
+    state.watchOffset = watches.length ? (state.watchOffset + selected.length) % watches.length : 0;
+    await fomoCollectorPool(selected.map(([key, ref]) => safely(async () => {
+      let cursor = '';
+      let freshCursor = '';
+      const afterTime = Date.now() - 630000;
+      for (let page = 0; page < 2; page++) {
+        const params = new URLSearchParams({ networkId: String(ref.networkId), tokenAddress: ref.address, limit: '80', afterTime: String(afterTime) });
+        if (cursor) params.set('lastId', cursor);
+        coverage.tokenRequests++;
+        const box = await request(`/feed/token/thesis?${params}`);
+        if (!Array.isArray(box.items) || typeof box.hasNextPage !== 'boolean') throw fomoFailure('invalid-response');
+        for (const row of box.items) {
+          if (row.networkId !== ref.networkId || !fomoSameToken(row.tokenAddress, ref.address, ref.networkId)) { coverage.rejected++; continue; }
+          const event = slimFomoFollowedEvent(row, ids);
+          if (event?.type === 'thesis' && event.ts >= Date.now() - 600000) {
+            const position = state.positions[event.userId]?.[event.tradeId];
+            if (!position || position.commentId !== event.commentId || position.pending === event.commentId) ingest(event);
+            if (position?.pending === event.commentId) position.pending = '';
+          }
+        }
+        if (!box.hasNextPage) {
+          state.watches[key].gap = page > 0 && !!ref.cursor && ref.cursor !== freshCursor;
+          state.watches[key].cursor = '';
+          // Retire an unseen expected comment only after a successful exhausted
+          // fresh-window scan and the overlap grace, never on failure/page cap.
+          if (!state.watches[key].gap) for (const userId of ref.users) for (const position of Object.values(state.positions[userId] || {})) {
+            if (position.networkId === ref.networkId && fomoSameToken(position.tokenAddress, ref.address, ref.networkId) && position.pending && position.observedAt < Date.now() - 630000) position.pending = '';
+          }
+          break;
+        }
+        state.watches[key].gap = true;
+        const next = String(box.items.at(-1)?.id || '');
+        if (!next || next === cursor) throw fomoFailure('pagination-stalled');
+        if (page === 0) freshCursor = next;
+        cursor = page === 0 && ref.cursor ? ref.cursor : next;
+        state.watches[key].cursor = next;
+      }
+    })));
+    if (!valid()) return { ok: false, reason: generation !== fomoAuthGeneration ? 'not-connected' : 'roster-changed', ...emptyFomoFollowedFeed() };
+    if (failures.some(error => error.reason === 'not-connected')) {
+      resetFomoAccountCaches();
+      await fomoCollectorSave;
+      return { ok: false, reason: 'not-connected', ...emptyFomoFollowedFeed() };
+    }
+    fomoCollector = state;
+    const merged = new Map(fomoFollowedFeedCache.events.filter(event => ids.has(event.userId)).map(event => [event.key, event]));
+    for (const [key, event] of collected) merged.set(key, event);
+    const pending = Object.values(state.positions).some(rows => Object.values(rows).some(row => row.pending));
+    const gap = failures.length > 0 || coverage.rejected > 0 || chosen.length < users.length || pending
+      || Object.values(state.lanes).some(lane => lane.gap) || Object.values(state.watches).some(ref => ref.gap);
+    fomoFollowedFeedCache = {
+      events: [...merged.values()].sort((a, b) => b.ts - a.ts || a.key.localeCompare(b.key)).slice(0, FOMO_FEED_KEEP),
+      fetchedAt: Date.now(), updatedAt: coverage.succeeded ? Date.now() : fomoFollowedFeedCache.updatedAt,
+      coverageGap: gap, gapReason: failures.length ? 'partial-failure' : gap ? 'bounded-recovery' : '',
+      followingKnown: true, historyLimited: true, stale: failures.length > 0, partial: failures.length > 0,
+      coverage, ...(failures.length ? { reason: failures[0].reason || 'fetch-failed' } : {}),
+    };
+    await persistFomoCollector();
+    return { ok: failures.length === 0, ...fomoFollowedFeedCache };
+  })().finally(() => { if (fomoFollowedFeedInflight?.promise === promise) fomoFollowedFeedInflight = null; });
   fomoFollowedFeedInflight = { generation, promise };
   return promise;
 }
@@ -509,7 +768,7 @@ async function fomoAuthedFetch(path, options) {
       // headers arrive. Otherwise a stalled body strands every coalesced retry.
       await response.clone().text();
       if (generation !== fomoAuthGeneration) throw fomoFailure('not-connected');
-      if (response.status === 429 || response.status >= 500) {
+      if (response.status === 429 || (response.status >= 500 && !options.collector)) {
         fomoApiFailures += 1;
         const retry = response.headers?.get('Retry-After');
         const seconds = retry == null ? NaN : Number(retry);
@@ -521,8 +780,10 @@ async function fomoAuthedFetch(path, options) {
       return response;
     } catch (error) {
       if (generation !== fomoAuthGeneration) throw fomoFailure('not-connected');
-      fomoApiFailures += 1;
-      fomoApiRetryAt = Math.max(fomoApiRetryAt, Date.now() + Math.min(300000, 15000 * (2 ** Math.min(fomoApiFailures - 1, 4))));
+      if (!options.collector) {
+        fomoApiFailures += 1;
+        fomoApiRetryAt = Math.max(fomoApiRetryAt, Date.now() + Math.min(300000, 15000 * (2 ** Math.min(fomoApiFailures - 1, 4))));
+      }
       throw fomoFailure('network', undefined, fomoApiRetryAt);
     } finally {
       clearTimeout(timer);
@@ -1929,6 +2190,9 @@ async function recordFomoPageHeartbeat(message, sender) {
 
 function resetFomoAccountCaches() {
   fomoAuthGeneration += 1;
+  fomoCollector = emptyFomoCollector();
+  fomoCollectorHydration = null;
+  void persistFomoCollector(true);
   fomoApiRetryAt = 0;
   fomoApiFailures = 0;
   fomoFollowedFeedCache = emptyFomoFollowedFeed();
@@ -1951,7 +2215,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes.fomoToken) {
     const previousAccount = fomoAccountIdentity(changes.fomoToken.oldValue);
     const nextAccount = fomoAccountIdentity(changes.fomoToken.newValue);
-    if (previousAccount !== nextAccount) resetFomoAccountCaches();
+    if (previousAccount !== nextAccount || (!nextAccount && changes.fomoToken.oldValue?.token !== changes.fomoToken.newValue?.token)) resetFomoAccountCaches();
   }
   if (changes.j7TrackerSessionV1) {
     resetJ7TrackerCaches();

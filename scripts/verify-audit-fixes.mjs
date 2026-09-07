@@ -77,7 +77,7 @@ function backgroundHarness(route) {
   const ignore = { addListener() {} };
   const context = vm.createContext({
     console, Date, URL, URLSearchParams, atob, btoa, AbortController, TextDecoder,
-    setTimeout, clearTimeout, setInterval, clearInterval,
+    setTimeout, clearTimeout, setInterval, clearInterval, queueMicrotask,
     importScripts() {},
     fetch: async (url, options) => {
       const requestPath = new URL(url).pathname + new URL(url).search;
@@ -270,7 +270,12 @@ await test('Followed FOMO trades and theses are normalized for the GMGN tracker'
     null,
   ]);
   assert.ok(background.includes("'/v2/users/current/followingIds'"));
-  assert.ok(extractFunction(background, 'fetchFomoFollowedFeed').includes('`/feed/tradingActivity?limit=${FOMO_FOLLOWED_FEED_PAGE_LIMIT}&page=${page}`'));
+  const collector = extractFunction(background, 'fetchFomoFollowedFeed');
+  assert.ok(collector.includes('/swaps${cursor'));
+  assert.ok(collector.includes('thesis_created'));
+  assert.ok(collector.includes('/balances'));
+  assert.ok(collector.includes('/feed/token/thesis?'));
+  assert.ok(!collector.includes('/feed/tradingActivity'), 'global activity is no longer the swap authority');
   assert.ok(background.includes("message?.type === 'fomo-followed-feed'"));
   assert.ok(content.includes("chrome.runtime.sendMessage({ type: 'fomo-followed-feed' }"));
   assert.ok(content.includes("source: 'fomo-followed'"));
@@ -282,27 +287,32 @@ await test('Followed FOMO trades and theses are normalized for the GMGN tracker'
 await test('Followed FOMO polling filters the live activity response against current follows', async () => {
   const now = Date.now();
   const worker = backgroundHarness((requestPath) => {
-    assert.ok(['/v2/users/current/followingIds', '/feed/tradingActivity?limit=100&page=0'].includes(requestPath), `unexpected request ${requestPath}`);
-    const responseObject = requestPath.includes('followingIds')
-      ? { followingIds: ['followed-user'] }
-      : { items: [
-        { id: 'visible', type: 'swap_sell', userId: 'followed-user', userHandle: 'alice', createdAt: new Date(now).toISOString(), networkId: 56, tokenAddress: '0x1234567890123456789012345678901234567890' },
-        { id: 'hidden', type: 'swap_buy', userId: 'other-user', createdAt: new Date(now).toISOString(), networkId: 56, tokenAddress: '0x1234567890123456789012345678901234567890' },
-      ], hasNextPage: false };
+    let responseObject;
+    if (requestPath.includes('followingIds')) responseObject = { followingIds: ['followed-user'] };
+    else if (requestPath.endsWith('/swaps')) responseObject = { swaps: [{
+      id:'visible', createdAt:new Date(now).toISOString(), inNetworkId:56, outNetworkId:56,
+      inTokenAddress:'0x1234567890123456789012345678901234567890',
+      outTokenAddress:'0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d',
+      inTradeId:'position', humanUsdAmountOut:0,
+    }], hasNextPage:false };
+    else if (requestPath.endsWith('/balances')) responseObject = { balances:[] };
+    else if (requestPath.startsWith('/feed?')) responseObject = { feed:[
+      {id:'hidden',type:'thesis_created',userId:'other-user',createdAt:new Date(now).toISOString(),networkId:56,tokenAddress:'0x1234567890123456789012345678901234567890',body:{commentId:'hidden-comment',comment:'Not followed'}},
+    ],hasNextPage:false };
+    else throw new Error(`unexpected request ${requestPath}`);
     return new Response(JSON.stringify({ statusCode: 200, responseObject }));
   });
   const response = await worker.run('fetchFomoFollowedFeed()');
-  assert.deepEqual(worker.calls, [
-    '/v2/users/current/followingIds',
-    '/feed/tradingActivity?limit=100&page=0',
-  ]);
+  assert.ok(worker.calls.includes('/v2/users/current/followingIds'));
+  assert.ok(worker.calls.includes('/v2/users/followed-user/swaps'));
+  assert.ok(!worker.calls.some(p => p.includes('other-user/swaps')));
   assert.equal(response.ok, true);
   assert.equal(response.events.length, 1);
   assert.equal(response.events[0].type, 'sell');
   assert.equal(response.events[0].usd, 0);
   assert.equal(response.events[0].followed, true);
   assert.equal(response.followingKnown, true);
-  assert.equal(response.coverageGap, true, 'initial poll must not claim pre-restart coverage');
+  assert.equal(response.historyLimited, true, 'bounded collection never claims lifetime history');
 
   const unauthenticated = backgroundHarness(() => new Response(JSON.stringify({ error: 'unauthorized' }), { status: 430 }));
   unauthenticated.run("fomoFollowedFeedCache = { ...emptyFomoFollowedFeed(), events: [{ key: 'old-account-event' }], updatedAt: 1 }");
@@ -568,7 +578,7 @@ await test('Tracking-feed mutation layout is frame-coalesced', () => {
   assert.ok(!content.includes('refreshFomoFeedFixedRowShifts();\n      }\n      scheduleScan();'));
   assert.ok(content.includes("if (document.visibilityState === 'hidden') return;"));
   assert.ok(bridge.includes("if (document.visibilityState === 'hidden') return;"));
-  assert.match(content, /if \(document\.visibilityState !== 'hidden'\) \{\s*if \(Date.now\(\) - fomoFeedLastPollAt > j7RecoveryMs\) pollFomoFeed\(\);\s*if \(Date.now\(\) - pumpFeedLastPollAt > j7RecoveryMs\) pollPumpFeed\(\);\s*refreshFomoFeedTimes\(\);\s*scanVisibleCards\(\);\s*\}/);
+  assert.match(content, /if \(document\.visibilityState !== 'hidden'\) \{\s*if \(Date.now\(\) - fomoFollowedLastPollAt >= FOMO_FEED_POLL_MS\) pollFomoFollowedFeed\(\);\s*if \(Date.now\(\) - fomoFeedLastPollAt > j7RecoveryMs\) pollFomoFeed\(\);\s*if \(Date.now\(\) - pumpFeedLastPollAt > j7RecoveryMs\) pollPumpFeed\(\);\s*refreshFomoFeedTimes\(\);\s*scanVisibleCards\(\);\s*\}/);
   assert.ok(content.includes("root.querySelectorAll('[data-gdh-fomo-ts]')"));
   assert.ok(content.includes("time.className = 'gdh-fomofeed__tcell gdh-fomofeed__ttime';\n    time.dataset.gdhFomoTs = String(ev.ts);"));
 });

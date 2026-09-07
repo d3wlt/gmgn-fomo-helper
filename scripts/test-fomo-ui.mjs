@@ -119,20 +119,21 @@ let deliver;
 const feedContext = vm.createContext({
   settings:{enabled:true,enableFomoFeed:true}, document:{querySelector:()=>true},
   TRACK_TAB_CELL:'.fixture', trackerCards:()=>[], Date, fomoUiAuthGeneration:0,
-  fomoFollowedLastPollAt:0, fomoFollowedEvents:[], scheduleScan:()=>{},
+  fomoFollowedLastPollAt:0, fomoFollowedEvents:[], fomoFollowedRevision:0, fomoFollowedUpdatedAt:0, fomoFollowedRaf:0, requestAnimationFrame:()=>1, scanFomoFeed:()=>{},
   renderFomoFollowedGap:response=>gaps.push(response),
   chrome:{runtime:{sendMessage:(_message,callback)=>{deliver=callback;}}},
 });
-vm.runInContext(section(gmgnSource,'  function pollFomoFollowedFeed(', '  function fomoFeedRelTime('),feedContext);
+vm.runInContext(section(gmgnSource,'  function trackingFeedNormalizedAddress(', '  function nativeTrackingFeedRows('),feedContext);
+vm.runInContext(section(gmgnSource,'  function canDisplayFomoFollowedFeed(', '  function fomoFeedRelTime('),feedContext);
 check('GMGN followed-feed callback propagates real coverage gaps and partial events',()=>{
   vm.runInContext('pollFomoFollowedFeed()',feedContext);
   deliver({ok:true,coverageGap:true,events:[{key:'new'}]});
   assert.equal(gaps.at(-1).coverageGap,true);
-  assert.equal(feedContext.fomoFollowedEvents[0].key,'new');
+  assert.equal(feedContext.fomoFollowedEvents[0].key,'fomo-followed:["","","event","new"]');
   vm.runInContext('pollFomoFollowedFeed()',feedContext);
   deliver({ok:false,reason:'fetch-failed',coverageGap:true,stale:true,events:[{key:'partial'}]});
   assert.equal(gaps.at(-1).stale,true);
-  assert.equal(feedContext.fomoFollowedEvents[0].key,'partial');
+  assert.equal(feedContext.fomoFollowedEvents[0].key,'fomo-followed:["","","event","partial"]');
 });
 check('GMGN followed-feed callback rejects account-switch races',()=>{
   vm.runInContext('pollFomoFollowedFeed()',feedContext);
@@ -140,10 +141,11 @@ check('GMGN followed-feed callback rejects account-switch races',()=>{
   const count=gaps.length;
   deliver({ok:true,coverageGap:true,events:[{key:'old-account'}]});
   assert.equal(gaps.length,count);
-  assert.equal(feedContext.fomoFollowedEvents[0].key,'partial');
+  assert.equal(feedContext.fomoFollowedEvents[0].key,'fomo-followed:["","","event","partial"]');
 });
-check('GMGN followed-feed authentication failure clears events',()=>{
+check('GMGN followed-feed authentication failure clears events even after a newer push',()=>{
   vm.runInContext('pollFomoFollowedFeed()',feedContext);
+  vm.runInContext('applyFomoFollowedResponse({ok:true,updatedAt:Date.now(),events:[{key:"pushed"}]})',feedContext);
   deliver({ok:false,reason:'not-connected',events:[{key:'must-not-render'}]});
   assert.equal(feedContext.fomoFollowedEvents.length,0);
 });
