@@ -2245,6 +2245,11 @@ a[data-sentry-component="TrackerListItem"] > .gdh-star-button,
 
 
 
+/* One owned scroll surface; the host virtualizer receives native coordinates. */
+.gdh-merged-tracker { position: relative; flex: 1 1 auto; min-height: 0; min-width: 0; width: 100%; overflow: auto; overflow-anchor: none; }
+.gdh-merged-tracker__extent { position: relative; width: 100%; pointer-events: none; }
+.gdh-merged-tracker__extent > * { pointer-events: auto; }
+.gdh-merged-tracker:focus-visible { outline: 1px solid #a78bfa; outline-offset: -1px; }
 .gdh-fomofeed {
   display: flex;
   flex-direction: column;
@@ -2261,6 +2266,17 @@ a[data-sentry-component="TrackerListItem"] > .gdh-star-button,
   line-height: 18px;
   color: inherit;
 }
+.gdh-native-buy-host {
+  position: absolute; right: 12px; top: 4px; z-index: 3;
+  display: none; min-height: 24px; min-width: 48px;
+  border-radius: 4px; background: var(--color-bg-100, #14161b);
+  color: #86efac; font: 600 12px/24px system-ui; text-align: center;
+}
+.gdh-fomofeed:hover .gdh-native-buy-host,
+.gdh-fomofeed:focus-within .gdh-native-buy-host { display: block; }
+.gdh-native-buy-host[data-state="unavailable"] { color: #a0a5af; font-size: 10px; padding: 0 4px; cursor: not-allowed; }
+.gdh-native-buy-host:focus-visible { outline: 1px solid #86efac; }
+.gdh-fomofeed { position: relative; }
 .gdh-fomofeed:hover { background: color-mix(in srgb, currentColor 4%, transparent); }
 .gdh-fomofeed__r1,
 .gdh-fomofeed__r2 { display: flex; align-items: center; gap: 6px; min-width: 0; }
@@ -2420,12 +2436,13 @@ a[data-sentry-component="TrackerListItem"] > .gdh-star-button,
 .gdh-fomofeed.is-table .gdh-fomofeed__thesis { padding: 0 10px 8px 6px; }
 
 
-[data-gdh-flap-room="1"] {
+/* Native tracker rows have fixed virtualizer slots; never auto-size them. */
+[data-gdh-flap-room="1"]:not([data-sentry-component="TrackerListItem"]) {
   height: auto !important;
   min-height: 0 !important;
   max-height: none !important;
 }
-[data-gdh-flap-room="1"] [class*="h-[24px]"] {
+[data-gdh-flap-room="1"]:not([data-sentry-component="TrackerListItem"]) [class*="h-[24px]"] {
   height: auto !important;
   min-height: 24px !important;
   overflow: visible !important;

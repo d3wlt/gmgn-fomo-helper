@@ -172,7 +172,7 @@
   }
 
   const CARD_SELECTOR =
-    '[data-testid="trench-token-card"], [data-sentry-source-file="TokenItem.tsx"][href*="/token/0x"]';
+    '[data-testid="trench-token-card"], [data-sentry-source-file="TokenItem.tsx"][href*="/token/"]';
   const CALLOUT_SELECTOR = '[data-sentry-component="CalloutItem"]';
   const MANIFESTO_SELECTOR = '[data-sentry-component="ManifestoChipInner"]';
   const HOLDING_ROW_SELECTOR = '[data-sentry-component="SmToken"]';
@@ -190,14 +190,18 @@
       : '';
   }
 
-  function getCardAddress(card) {
-    const direct = card.getAttribute('data-gmgn-fee-mode-card');
-    if (normalizeAddress(direct)) return direct.toLowerCase();
+  function normalizeDevAddress(value, chain) {
+    if (typeof value !== 'string') return '';
+    if (chain === 'sol') return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value) ? value : '';
+    return normalizeAddress(value);
+  }
 
-    const match = (card.getAttribute('href') || '').match(
-      /\/[a-z0-9]+\/token\/(0x[a-fA-F0-9]{40})/i,
-    );
-    return match ? match[1].toLowerCase() : '';
+  function getCardAddress(card) {
+    const match = (card.getAttribute('href') || '').match(/^\/(bsc|robinhood|sol)\/token\/([^/?#]+)/);
+    if (match) return normalizeDevAddress(match[2], match[1]);
+    // Legacy BSC cards may expose only the native fee-mode token attribute.
+    const direct = card.getAttribute('data-gmgn-fee-mode-card');
+    return normalizeAddress(direct);
   }
 
   function toTokenData(value, expectedAddress) {
@@ -213,8 +217,9 @@
 
     for (const candidate of candidates) {
       if (!candidate || typeof candidate !== 'object') continue;
-      const address = normalizeAddress(candidate.address);
-      const creator = normalizeAddress(candidate.creator);
+      const chain = expectedAddress.startsWith('0x') ? 'evm' : 'sol';
+      const address = normalizeDevAddress(candidate.address, chain);
+      const creator = normalizeDevAddress(candidate.creator, chain);
       if (address !== expectedAddress || !creator) continue;
 
       return {
@@ -390,7 +395,7 @@
     if (!card.closest('[data-sentry-component="PumpSubX"]')
       && !card.matches('[data-testid="trench-token-card"]')) return;
     const address = getCardAddress(card);
-    if (!address) return;
+    if (!address) { clearTokenData(card); return; }
 
     const data = readTokenData(card, address);
     if (!data) {
@@ -577,8 +582,46 @@
     return null;
   }
 
+  // Export only an observed, ordered native index; never synthesize native trades.
+  function publishTrackerIndex(element, data) {
+    let wrap = element.parentElement;
+    for (let n = 0; wrap && n < 4; n++, wrap = wrap.parentElement) {
+      if (wrap.style.position !== 'absolute') continue;
+      const key = Object.keys(element).find(k => k.startsWith('__reactFiber$'));
+      let fiber = key && element[key];
+      const seen = new Set();
+      const inspect = (value, depth) => {
+        if (!value || typeof value !== 'object' || depth > 3 || seen.has(value)) return null;
+        seen.add(value);
+        if (Array.isArray(value) && value.length && value.length <= 10000) {
+          const stamps = value.map(v => {
+            const t = Number(v?.timestamp);
+            return t > 1.4e12 && t < 4.1e12 ? Math.round(t) : t > 1.4e9 && t < 4.1e9 ? Math.round(t * 1000) : 0;
+          });
+          if (stamps.every((t, i) => t && (!i || stamps[i - 1] >= t))
+            && value.some((v, i) => stamps[i] === data.ts && (v.token_address || v.base_address || v.base_token?.address) === data.address)) return stamps;
+        }
+        for (const k of Object.keys(value).slice(0, 50)) {
+          if (['_owner','return','child','sibling','alternate','stateNode'].includes(k)) continue;
+          const hit = inspect(value[k], depth + 1);
+          if (hit) return hit;
+        }
+        return null;
+      };
+      for (let n = 0; fiber && n < 18; n++, fiber = fiber.return) {
+        const stamps = inspect(fiber.memoizedProps, 0);
+        if (stamps) {
+          setAttribute(wrap.parentElement, 'data-gdh-native-index', JSON.stringify(stamps));
+          return;
+        }
+      }
+      return;
+    }
+  }
+
   function scanTrackerCard(element, suppliedData = null) {
     const data = suppliedData || readTrackerRecord(element);
+    if (data?.ts) publishTrackerIndex(element, data);
     if (data && data.address) {
         setAttribute(element, 'data-gdh-track-addr', data.address);
       if (data.symbol) setAttribute(element, 'data-gdh-track-symbol', data.symbol);

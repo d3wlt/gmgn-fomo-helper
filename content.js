@@ -88,10 +88,11 @@
   }
 
   const CARD_SELECTOR =
-    '[data-testid="trench-token-card"], [data-sentry-source-file="TokenItem.tsx"][href*="/token/0x"]';
+    '[data-testid="trench-token-card"], [data-sentry-source-file="TokenItem.tsx"][href*="/token/"]';
   const CALLOUT_SELECTOR = '[data-sentry-component="CalloutItem"]';
   const MANIFESTO_SELECTOR = '[data-sentry-component="ManifestoChipInner"]';
   const DEFAULTS = {
+    debugLogging: false,
     enabled: true,
     showDevPerformance: true,
     showDevTooltip: true,
@@ -125,7 +126,7 @@
       { address: '0x2ce9d43d1cba6ae31d7f07bfe0098dfa2d833373', name: 'Kuzuo' },
     ],
     enableMarkedHolders: true,
-    enableFlapTax: true,
+    enableFlapTax: false,
     flapRpc: '',
     enableFomoFeed: true,
     enablePumpFeed: true,
@@ -181,14 +182,24 @@
   const devAthQueued = new Set();
   let devAthTimer = 0;
 
-  function getDevAth(creator) {
-    if (!creator) return null;
-    const hit = devAthCache.get(creator);
+  function devIdentity(creator, chain) {
+    if (!['bsc', 'robinhood', 'sol'].includes(chain) || typeof creator !== 'string') return null;
+    const valid = chain === 'sol' ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(creator) : /^0x[a-fA-F0-9]{40}$/.test(creator);
+    if (!valid) return null;
+    const address = chain === 'sol' ? creator : creator.toLowerCase();
+    return { chain, creator: address, key: `${chain}:${address}` };
+  }
+
+  function getDevAth(creator, chain = 'bsc') {
+    const identity = devIdentity(creator, chain);
+    if (!identity) return null;
+    const key = identity.key;
+    const hit = devAthCache.get(key);
     const fresh = hit
       && Date.now() - hit.at < (hit.ok ? DEV_ATH_TTL_MS : DEV_ATH_ERROR_RETRY_MS);
-    if (!fresh && !devAthQueued.has(creator)) {
-      devAthQueued.add(creator);
-      devAthQueue.push(creator);
+    if (!fresh && !devAthQueued.has(key)) {
+      devAthQueued.add(key);
+      devAthQueue.push(identity);
       if (!devAthTimer) devAthTimer = window.setTimeout(processDevAthQueue, 50);
     }
     return hit && hit.ok && hit.mc > 0 ? hit : null;
@@ -201,14 +212,15 @@
       devAthQueued.clear();
       return;
     }
-    const creator = devAthQueue.shift();
-    if (!creator) return;
+    const identity = devAthQueue.shift();
+    if (!identity) return;
+    const { creator, chain, key } = identity;
     let entry = { at: Date.now(), ok: false, mc: 0, symbol: '' };
     try {
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 10000);
       const res = await fetch(
-        `https://gmgn.ai/api/v1/dev_created_tokens/bsc/${creator}?${DEV_ATH_QS}`,
+        `https://gmgn.ai/api/v1/dev_created_tokens/${chain}/${creator}?${DEV_ATH_QS}`,
         { credentials: 'include', signal: controller.signal },
       );
       window.clearTimeout(timeout);
@@ -224,8 +236,8 @@
       }
     } catch {
     }
-    setBoundedMap(devAthCache, creator, entry, DEV_ATH_CACHE_MAX);
-    devAthQueued.delete(creator);
+    setBoundedMap(devAthCache, key, entry, DEV_ATH_CACHE_MAX);
+    devAthQueued.delete(key);
     if (entry.ok && entry.mc > 0) scheduleScan();
     if (devAthQueue.length) devAthTimer = window.setTimeout(processDevAthQueue, DEV_ATH_GAP_MS);
   }
@@ -426,7 +438,8 @@
       : null;
 
     let performance = card.querySelector('.gdh-dev-performance');
-    if (settings.showDevPerformance === false || !metricsRow || card.dataset.gdhReady !== '1') {
+    const cardChain = (card.getAttribute('href') || '').match(/^\/([^/]+)\/token\//)?.[1];
+    if (settings.showDevPerformance === false || (cardChain && !['bsc', 'robinhood', 'sol'].includes(cardChain)) || !metricsRow || card.dataset.gdhReady !== '1') {
       performance?.remove();
       return;
     }
@@ -442,7 +455,9 @@
     const ratio = formatRatio(card);
     applyRateColor(performance, getRatioPercent(card));
 
-    const ath = getDevAth(normalizeAddress(card.dataset.gdhCreator));
+    const chain = (card.getAttribute('href') || '').match(/^\/([^/]+)\/token\//)?.[1]
+      || (card.hasAttribute('data-gmgn-fee-mode-card') ? 'bsc' : '');
+    const ath = getDevAth(card.dataset.gdhCreator, chain);
     const rateText = `M${migrated} L${total} · ${ratio}`;
     const mcText = ath ? `ATH ${formatAthMc(ath.mc)}` : '';
     const tier = ath ? athTierClass(ath.mc) : '';
@@ -1016,7 +1031,7 @@ Select to open Flap tax details`;
 
 
   function requestFlapInfo(token) {
-    if (flapPending.has(token)) return;
+    if (settings.enableFlapTax !== true || flapPending.has(token)) return;
     const cached = flapInfoCache.get(token);
     if (cached) {
       if (cached.ok !== false || cached.reason === 'not-flap') return;
@@ -1059,8 +1074,17 @@ Select to open Flap tax details`;
   }
 
   function scanFlapBadges() {
-    if (settings.enableFlapTax === false) {
-      document.querySelectorAll('.gdh-flap').forEach((el) => el.remove());
+    if (settings.enableFlapTax !== true) {
+      document.querySelectorAll('.gdh-flap, .gdh-flap-row').forEach((el) => el.remove());
+      document.querySelectorAll('[data-gdh-flap-native]').forEach((el) => {
+        el.style.removeProperty('display');
+        el.removeAttribute('data-gdh-flap-native');
+      });
+      document.querySelectorAll('[data-gdh-flap-room], [data-gdh-flap-key], [data-gdh-flap-fail]').forEach((el) => {
+        delete el.dataset.gdhFlapRoom;
+        delete el.dataset.gdhFlapKey;
+        delete el.dataset.gdhFlapFail;
+      });
       return;
     }
     const seen = new Set();
@@ -1161,7 +1185,9 @@ Select to open Flap tax details`;
     return [...addresses].slice(0, 100).map((address) => ({ address, networkId }));
   }
 
+  let fomoFollowedHoldersContextInvalidated = false;
   async function loadFomoFollowedHoldings() {
+    if (fomoFollowedHoldersContextInvalidated) return;
     const chain = currentChain();
     if (!FOMO_NETWORK_ID[chain]) return;
     const failure = fomoFollowedHoldersFailures.get(chain);
@@ -1176,10 +1202,12 @@ Select to open Flap tax details`;
     if (fomoFollowedHoldersInflight.has(chain)) return fomoFollowedHoldersInflight.get(chain);
 
     const generation = fomoFollowedHoldersGeneration;
-    const inflight = chrome.runtime.sendMessage({
+    // sendMessage can THROW synchronously after an extension reload. Start the
+    // call inside the promise chain so both throws and rejections are handled.
+    const inflight = Promise.resolve().then(() => chrome.runtime.sendMessage({
       type: 'fomo-followed-holders',
       payload: { tokens },
-    }).then((res) => {
+    })).then((res) => {
       if (generation !== fomoFollowedHoldersGeneration) return;
       if (!res?.ok) {
         const count = (fomoFollowedHoldersFailures.get(chain)?.count || 0) + 1;
@@ -1207,7 +1235,15 @@ Select to open Flap tax details`;
       }
       fomoFollowedHoldersByChain.set(chain, { at: Date.now(), requested, map });
       scheduleScan();
-    }).catch(() => {
+    }).catch((error) => {
+      if (/extension context invalidated/i.test(String(error?.message || error))) {
+        fomoFollowedHoldersContextInvalidated = true;
+        fomoFollowedHoldersGeneration += 1;
+        fomoFollowedHoldersByChain.clear();
+        fomoFollowedHoldersFailures.clear();
+        fomoFollowedHoldersInflight.clear();
+        return;
+      }
       if (generation !== fomoFollowedHoldersGeneration) return;
       const count = (fomoFollowedHoldersFailures.get(chain)?.count || 0) + 1;
       const delay = Math.min(
@@ -2963,7 +2999,8 @@ Select to open Flap tax details`;
   // A single notice outside the virtual rows never changes their offsets.
   function renderFomoFollowedGap(response) {
     let notice = document.querySelector('.gdh-fomo-feed-gap');
-    const gap = response?.coverageGap === true || response?.stale === true;
+    const passive = response?.mode === 'passive';
+    const gap = passive || response?.coverageGap === true || response?.stale === true;
     if (!gap) { notice?.remove(); return; }
     if (!notice) {
       notice = document.createElement('div');
@@ -2972,9 +3009,20 @@ Select to open Flap tax details`;
       notice.tabIndex = 0;
       document.body.appendChild(notice);
     }
-    const text = response?.coverageGap === true ? 'Following feed: coverage gap' : 'Following feed: stale';
+    const passiveLabels = {
+      'waiting-for-fomo-tab': 'Following feed: waiting for FOMO tab',
+      'waiting-for-account': 'Following feed: sign in on FOMO',
+      'waiting-for-following': 'Following feed: waiting for native following list',
+      'waiting-for-activity': 'Following feed: open FOMO Alerts',
+      connected: response?.coverageGap ? 'Following feed: native tab connected · partial coverage' : 'Following feed: receiving from FOMO tab',
+      disconnected: 'Following feed: FOMO tab disconnected',
+    };
+    const text = passive ? (passiveLabels[response.passiveStatus] || 'Following feed: waiting for FOMO tab')
+      : response?.coverageGap === true ? 'Following feed: coverage gap' : 'Following feed: stale';
     if (notice.textContent !== text) notice.textContent = text;
-    notice.title = 'Bounded polling may omit activity. This feed is not a complete trade history.';
+    notice.title = passive
+      ? 'Passive mode: keep a signed-in FOMO Alerts tab open. This tracker observes native activity only; it does not poll FOMO or open a separate connection. Missing activity is not automatically fetched.'
+      : 'Bounded polling may omit activity. This feed is not a complete trade history.';
   }
 
   function fomoUiPanel() { return fomoPanelEl; }
@@ -5546,7 +5594,6 @@ Select to open Flap tax details`;
 
   const FOMO_FEED_POLL_MS = 5000;
   const FOMO_FEED_RENDER_CAP = 40;
-  const FOMO_FEED_HEAD_CAP = 6;
   const FOMO_FEED_CHAIN_COLORS = {
     sol: '#7b44f2', bsc: '#eab204', base: '#3073ff', eth: '#4d84f7', robinhood: '#9fc700',
     stable: '#007b4f', arc: '#5c8de5', xlayer: '#4a4a4a', hyperevm: '#55c6ab',
@@ -5638,7 +5685,9 @@ Select to open Flap tax details`;
       const kind = String(ev.type || '');
       const user = String(ev.userId || ev.handle || '');
       const narrative = ['thesis', 'reply', 'callout'].includes(kind);
-      const id = narrative
+      const id = typeof ev.canonicalIdentity === 'string' && ev.canonicalIdentity
+        ? ['canonical', ev.canonicalIdentity]
+        : narrative
         ? ev.commentId ? ['comment', ev.commentId] : ['event', ev.eventId || ev.providerEventId || ev.key]
         : ev.swapId ? ['swap', ev.swapId] : ['event', ev.eventId || ev.providerEventId || ev.key];
       return `fomo-followed:${JSON.stringify([kind, user, id[0], String(id[1] || '')])}`;
@@ -5824,9 +5873,14 @@ Select to open Flap tax details`;
           renderFomoFollowedGap({ stale: true });
           return;
         }
+        if (resp.mode === 'passive') {
+          if (revision !== fomoFollowedRevision) return;
+          applyFomoFollowedResponse(resp); // empty snapshots must clear stale account rows too
+          return;
+        }
         if (resp.reason === 'not-connected') {
           fomoFollowedEvents = [];
-          renderFomoFollowedGap({ stale: true });
+          renderFomoFollowedGap({ ...resp, stale: true });
           scheduleFomoFollowedRender();
           return;
         }
@@ -5936,9 +5990,31 @@ Select to open Flap tax details`;
   // their DOM; enrichment replaces one row without replaying its entry animation.
   function fomoFeedCardSignature(ev) {
     return JSON.stringify([isTrackerTableMode(), ...[
-      'source', 'type', 'stale', 'name', 'handle', 'userId', 'avatar',
-      'symbol', 'img', 'chain', 'addr', 'usd', 'mc', 'comment', 'position', 'profileUrl',
+      'source', 'dataSource', 'type', 'stale', 'name', 'handle', 'userId', 'avatar',
+      'symbol', 'img', 'chain', 'addr', 'usd', 'mc', 'mcSource', 'comment', 'position', 'profileUrl',
     ].map(key => ev[key] ?? null)]);
+  }
+
+  // Native Alerts use absolute amounts and compact Math.round formatting (not
+  // the signed/decimal formatter used by positions and PnL elsewhere).
+  function fomoFeedUsd(ev, value) {
+    if (ev.dataSource !== 'trading-activity') return fomoUsd(value);
+    if (value == null || value === '' || !Number.isFinite(Number(value))) return '';
+    const n = Math.abs(Number(value));
+    if (n < 1000 && Math.round(n) < 1000) return `$${Math.round(n)}`;
+    const units = [[1e3, 'K'], [1e6, 'M'], [1e9, 'B']];
+    let i = n < 1e6 ? 0 : n < 1e9 ? 1 : 2;
+    if (i < 2 && Number((n / units[i][0]).toFixed(1)) >= 1000) i++;
+    return `$${(n / units[i][0]).toFixed(1).replace(/\.0$/, '')}${units[i][1]}`;
+  }
+
+  function fomoFeedMcTitle(ev) {
+    return {
+      'alerts-fdv': 'Native Alerts MC: provider fdv (preferred over marketCap)',
+      'alerts-market-cap': 'Native Alerts MC: provider marketCap (fdv unavailable)',
+      'alerts-unavailable': 'Native Alerts market cap unavailable',
+      'current-token': 'Current token market cap — not the historical trade-time market cap',
+    }[ev.mcSource] || 'Provider market cap';
   }
 
   function buildFomoFeedTableRow(ev, card, tag) {
@@ -6002,11 +6078,12 @@ Select to open Flap tax details`;
 
     const amt = document.createElement('span');
     amt.className = 'gdh-fomofeed__tcell gdh-fomofeed__tamt';
-    amt.textContent = ev.usd > 0 ? fomoUsd(ev.usd) : '';
+    amt.textContent = ev.dataSource === 'trading-activity' || ev.usd > 0 ? fomoFeedUsd(ev, ev.usd) : '';
 
     const mc = document.createElement('span');
     mc.className = 'gdh-fomofeed__tcell gdh-fomofeed__tmc';
     mc.textContent = ev.mc > 0 ? fomoUsd(ev.mc) : '';
+    mc.title = fomoFeedMcTitle(ev);
 
     row.append(time, who, sym, amt, mc);
     card.appendChild(row);
@@ -6093,10 +6170,10 @@ Select to open Flap tax details`;
     const r2 = document.createElement('div');
     r2.className = 'gdh-fomofeed__r2';
 
-    if (ev.usd > 0) {
+    if (ev.dataSource === 'trading-activity' || ev.usd > 0) {
       const usd = document.createElement('span');
       usd.className = 'gdh-fomofeed__usd';
-      usd.textContent = fomoUsd(ev.usd);
+      usd.textContent = fomoFeedUsd(ev, ev.usd);
       r2.appendChild(usd);
     }
 
@@ -6124,6 +6201,7 @@ Select to open Flap tax details`;
       const mc = document.createElement('span');
       mc.className = 'gdh-fomofeed__mc';
       mc.textContent = `MC:${fomoUsd(ev.mc)}`;
+      mc.title = fomoFeedMcTitle(ev);
       r2.appendChild(mc);
     }
     card.appendChild(r2);
@@ -6142,9 +6220,25 @@ Select to open Flap tax details`;
 
 
   function attachFomoFeedCardBehavior(ev, card) {
+    if (ev.source === 'fomo-followed' && ev.addr && ev.chain) {
+      const buy = document.createElement('div');
+      buy.className = 'gdh-native-buy-host';
+      buy.tabIndex = 0;
+      buy.setAttribute('aria-label', `Quick buy ${ev.symbol || ev.addr} on ${ev.chain}`);
+      buy.dataset.chain = ev.chain;
+      buy.dataset.address = ev.addr;
+      buy.dataset.symbol = ev.symbol || '';
+      buy.dataset.logo = ev.img || '';
+      buy.dataset.eventKey = ev.key;
+      buy.dataset.state = 'idle';
+      buy.textContent = 'Buy';
+      buy.title = 'Hover to load native GMGN quick buy';
+      card.appendChild(buy);
+    }
     if (ev.addr && ev.chain) {
       card.title = `${ev.symbol || ev.addr} · Open GMGN token page`;
       card.addEventListener('click', (event) => {
+        if (event.target.closest?.('.gdh-native-buy-host')) { event.stopPropagation(); return; }
         event.preventDefault();
         event.stopPropagation();
         gdhSpaNavigate(`/${ev.chain}/token/${ev.addr}`);
@@ -6177,7 +6271,6 @@ Select to open Flap tax details`;
     return el;
   }
 
-  const FOMO_FEED_INLINE_CAP = 6;
   const fomoFeedShifted = new Map();
   let fomoFeedReflowRaf = 0;
   const fomoFeedScrollTargets = new WeakSet();
@@ -6233,38 +6326,23 @@ Select to open Flap tax details`;
   }
 
 
-  function fomoFeedInsertionShift(rowTop, inserts) {
-    let shift = 0;
-    for (const insert of inserts) {
-      if (insert.afterTop <= rowTop + 0.25) shift += insert.height;
-    }
-    return shift;
-  }
-
-
   function refreshFomoFeedFixedRowShifts() {
+    if (mergedTracker) { syncMergedTracker(); return; }
     const cards = trackerCards().filter((card) => card.isConnected);
     const rows = [];
     for (const card of cards) {
       const info = fomoFeedFixedRow(card);
       if (info) rows.push({ card, ...info });
     }
-    if (!rows.length) return;
+    if (!rows.length) { clearFomoFeedShifts(); return; }
     rows.sort((a, b) => a.top - b.top);
     const spacer = rows[0].wrap.parentElement;
     if (!(spacer instanceof HTMLElement)) return;
-    const inserts = [...fomoFeedCards.values()]
-      .filter((el) => el.isConnected && el.parentElement === spacer && el.classList.contains('is-abs'))
-      .map((el) => ({
-        afterTop: Number.parseFloat(el.dataset.gdhFomoAfterTop),
-        height: el.offsetHeight + 2,
-      }))
-      .filter((item) => Number.isFinite(item.afterTop) && item.height > 0);
 
     const stillShifted = new Set();
     let collapsed = 0;
     for (const row of rows) {
-      const amount = fomoFeedInsertionShift(row.top, inserts) + collapsed;
+      const amount = collapsed;
       if (setFomoFeedRowShift(row.wrap, amount) && amount) stillShifted.add(row.wrap);
       if (row.card.dataset.gdhTokenBlocked === '1') collapsed -= row.h;
     }
@@ -6277,7 +6355,7 @@ Select to open Flap tax details`;
 
   function scheduleFomoFeedRowReflow() {
     if (fomoFeedReflowRaf) return;
-    if (!document.querySelector('.gdh-fomofeed.is-abs, [data-gdh-token-blocked="1"]')) return;
+    if (!fomoFeedShifted.size && !document.querySelector('[data-gdh-token-blocked="1"]')) return;
     fomoFeedReflowRaf = window.requestAnimationFrame(() => {
       fomoFeedReflowRaf = 0;
       refreshFomoFeedFixedRowShifts();
@@ -6299,7 +6377,9 @@ Select to open Flap tax details`;
             - Number(state?.amount || 0);
         }
         if (!Number.isFinite(top)) top = Number.parseFloat(wrap.style.top);
-        const h = wrap.offsetHeight || Number.parseFloat(wrap.style.height);
+        // Native rows may be fractional CSS pixels (e.g. 64.5px); offsetHeight
+        // rounds to 65 and invalidates every subsequent virtual index boundary.
+        const h = wrap.getBoundingClientRect().height || Number.parseFloat(wrap.style.height) || wrap.offsetHeight;
         if (Number.isFinite(top) && h > 0) return { wrap, top, h };
         return null;
       }
@@ -6311,19 +6391,34 @@ Select to open Flap tax details`;
   function teardownFomoFeed() {
     for (const el of fomoFeedCards.values()) el.remove();
     fomoFeedCards.clear();
+    destroyMergedTracker();
     clearFomoFeedShifts();
   }
 
   let fomoFeedLastMode = null;
+  let debugRenderAt = 0;
+  function logTrackingRender(events = [], reason = 'rendered') {
+    if (settings.debugLogging !== true || Date.now()-debugRenderAt < 5000) return;
+    debugRenderAt=Date.now();
+    const received=fomoFollowedEvents.length;
+    const eligible=events.filter(e=>e.source==='fomo-followed').length;
+    const placed=[...fomoFeedCards.values()].filter(el=>el.isConnected && el.dataset.gdhFeedSource==='fomo-followed').length;
+    try { chrome.runtime.sendMessage({type:'debug-render',fields:{source:'gmgn',reason,received,eligible,placed,
+      filtered:Math.max(0,received-eligible),missingProfiles:fomoFollowedEvents.filter(e=>!e.handle).length,
+      missingSymbols:fomoFollowedEvents.filter(e=>!e.symbol).length,missingMC:fomoFollowedEvents.filter(e=>!e.mc).length,
+    }},()=>{ void chrome.runtime.lastError; }); } catch {}
+  }
 
   function scanFomoFeed() {
     if (!settings.enabled) {
       teardownFomoFeed();
+      logTrackingRender([], 'disabled');
       return;
     }
     if (settings.enableFomoFeed === false && settings.enablePumpFeed === false) {
       teardownFomoFeed();
       collapseBlockedTrackerRows();
+      logTrackingRender([], 'disabled');
       return;
     }
     const mode = isTrackerTableMode() ? 'table' : 'card';
@@ -6335,153 +6430,143 @@ Select to open Flap tax details`;
 
     const cards = trackerCards().filter((c) => c.isConnected);
     const events = visibleTrackingFeedEvents(nativeTrackingFeedRows(cards));
-    if (!events.length || !cards.length) {
+    if (!events.length) {
       teardownFomoFeed();
-      if (cards.length) layoutFomoFeedFixed(cards, new Map());
+      collapseBlockedTrackerRows();
+      logTrackingRender(events, cards.length ? 'filtered' : 'no-native-rows');
       return;
     }
 
-    const withTs = cards
-      .map((el) => ({ el, ts: Number(el.getAttribute('data-gdh-track-ts')) || 0 }))
-      .filter((item) => item.ts > 0)
-      .sort((a, b) => b.ts - a.ts);
-    const oldest = withTs.length ? withTs[withTs.length - 1] : null;
-    const headCard = withTs[0]?.el || cards[0];
-    const fixedMode = !!fomoFeedFixedRow(headCard);
-
-    const placements = new Map();
-    let headCount = 0;
-    let inlineCount = 0;
-    for (const ev of events) {
-      const directFomo = ev.source === 'fomo-followed';
-      if (!withTs.length) {
-        if (directFomo || headCount < FOMO_FEED_HEAD_CAP) { placements.set(ev.key, { ev, anchor: 'head' }); if (!directFomo) headCount += 1; }
-        continue;
-      }
-      let anchor = null;
-      for (const item of withTs) {
-        if (item.ts >= ev.ts) anchor = item;
-        else break;
-      }
-      if (!anchor) {
-        if (directFomo || headCount < FOMO_FEED_HEAD_CAP) { placements.set(ev.key, { ev, anchor: 'head' }); if (!directFomo) headCount += 1; }
-        continue;
-      }
-      if (!directFomo && anchor === oldest && withTs.length > 1) continue;
-      if (fixedMode) {
-        if (!directFomo && inlineCount >= FOMO_FEED_INLINE_CAP) continue;
-        if (!fomoFeedFixedRow(anchor.el)) continue;
-        placements.set(ev.key, { ev, anchor: anchor.el });
-        if (!directFomo) inlineCount += 1;
-        continue;
-      }
-      const parent = anchor.el.parentElement;
-      if (!parent || parent.querySelectorAll(TRACKER_SYMBOL_CELL).length > 1) continue;
-      placements.set(ev.key, { ev, anchor: anchor.el });
-    }
-
-    for (const [key, el] of fomoFeedCards) {
-      if (!placements.has(key)) {
-        el.remove();
-        fomoFeedCards.delete(key);
-      }
-    }
-
-    const byAnchor = new Map();
-    const headItems = [];
-    for (const it of placements.values()) {
-      if (it.anchor === 'head') { headItems.push(it.ev); continue; }
-      if (!byAnchor.has(it.anchor)) byAnchor.set(it.anchor, []);
-      byAnchor.get(it.anchor).push(it.ev);
-    }
-
-    if (fixedMode) {
-      layoutFomoFeedFixed(cards, byAnchor, headItems);
+    if (!renderMergedTracker(cards, events)) {
+      teardownFomoFeed();
+      logTrackingRender(events, 'no-native-rows');
       return;
     }
+    logTrackingRender(events);
+  }
+
+  let mergedTracker = null;
+
+  function destroyMergedTracker() {
+    const m = mergedTracker;
+    if (!m) return;
+    mergedTracker = null;
+    m.observer.disconnect();
+    m.resize.disconnect();
+    m.viewport.style.cssText = m.originalStyle;
+    if (m.viewport.parentElement === m.surface) {
+      m.surface.before(m.viewport);
+    }
+    m.surface.remove();
     clearFomoFeedShifts();
-    let headPrev = null;
-    for (const ev of headItems) {
-      const el = fomoFeedCardFor(ev);
-      el.classList.remove('is-abs');
-      delete el.dataset.gdhFomoAfterTop;
-      if (el.style.top) el.style.top = '';
-      if (!headPrev) {
-        if (headCard.previousElementSibling !== el) headCard.insertAdjacentElement('beforebegin', el);
-      } else if (headPrev.nextElementSibling !== el) {
-        headPrev.insertAdjacentElement('afterend', el);
-      }
-      headPrev = el;
+  }
+
+  function syncMergedTracker() {
+    const m = mergedTracker;
+    if (!m || !m.surface.isConnected) return;
+    const y = m.surface.scrollTop;
+    // Invert the insertion map. While traversing an inserted run, pin the host
+    // at its native boundary instead of asking it for a nonexistent native index.
+    let nativeY = y;
+    let added = 0;
+    for (const slot of m.slots) {
+      if (y < slot.top) break;
+      if (y < slot.top + slot.height) { nativeY = slot.at; break; }
+      added += slot.height;
+      nativeY = y - added;
     }
-    for (const [anchorEl, list] of byAnchor) {
-      let prev = anchorEl;
-      for (const ev of list) {
-        const el = fomoFeedCardFor(ev);
-        el.classList.remove('is-abs');
-        delete el.dataset.gdhFomoAfterTop;
-        if (el.style.top) el.style.top = '';
-        if (prev.nextElementSibling !== el) prev.insertAdjacentElement('afterend', el);
-        prev = el;
-      }
+    m.viewport.style.top = `${y}px`;
+    m.viewport.style.height = `${m.surface.clientHeight}px`;
+    m.viewport.scrollTop = Math.max(0, nativeY);
+    const delta = y - m.viewport.scrollTop;
+    for (const el of [...fomoFeedShifted.keys()]) if (!el.isConnected) fomoFeedShifted.delete(el);
+    for (const card of trackerCards()) {
+      const row = fomoFeedFixedRow(card);
+      if (!row || row.wrap.parentElement !== m.spacer) continue;
+      const before = m.slots.reduce((sum, slot) => sum + (slot.at <= row.top + .25 ? slot.height : 0), 0);
+      // Blocking still hides native cards. Keep their index-sized gap here:
+      // partial visible-only compaction would overlap the interleaved rows.
+      setFomoFeedRowShift(row.wrap, before - delta);
     }
   }
 
-
+  function renderMergedTracker(cards, events) {
+    const first = cards.map(fomoFeedFixedRow).find(Boolean);
+    if (!first) return false;
+    const spacer = first.wrap.parentElement;
+    let stamps;
+    try { stamps = JSON.parse(spacer.getAttribute('data-gdh-native-index')); } catch { return false; }
+    // Full index ownership is mandatory. Unknown host layouts fail closed rather
+    // than silently losing native rows or pretending visible samples are history.
+    if (!Array.isArray(stamps) || !stamps.length || stamps.length > 10000
+      || !stamps.every((t, i) => Number.isFinite(t) && t > 0 && (!i || stamps[i - 1] >= t))) return false;
+    const h = first.h;
+    for (const card of cards) {
+      const row = fomoFeedFixedRow(card);
+      if (!row || row.wrap.parentElement !== spacer || Math.abs(row.h - h) > .5) return false;
+      const index = Math.round(row.top / h);
+      if (Math.abs(index * h - row.top) > .5 || stamps[index] !== Number(card.dataset.gdhTrackTs)) return false;
+    }
+    if (mergedTracker && (mergedTracker.spacer !== spacer || !mergedTracker.surface.isConnected)) destroyMergedTracker();
+    if (!mergedTracker) {
+      let viewport = spacer.parentElement;
+      while (viewport && viewport !== document.body && !/(auto|scroll)/.test(getComputedStyle(viewport).overflowY)) viewport = viewport.parentElement;
+      if (!viewport || viewport === document.body) return false;
+      const originalStyle = viewport.style.cssText;
+      const surface = document.createElement('div');
+      surface.className = 'gdh-merged-tracker';
+      surface.tabIndex = 0;
+      surface.setAttribute('aria-label', 'GMGN and FOMO chronological activity');
+      surface.style.height = `${viewport.clientHeight}px`;
+      viewport.before(surface);
+      surface.append(viewport);
+      const extent = document.createElement('div');
+      extent.className = 'gdh-merged-tracker__extent';
+      surface.append(extent);
+      viewport.style.cssText += ';position:absolute;left:0;top:0;width:100%;overflow:hidden;overflow-anchor:none;min-height:0;';
+      const observer = new MutationObserver(() => {
+        // Native recycling/arrival is independent of the throttled page scanner.
+        if (mergedTracker?.spacer === spacer) {
+          if (spacer.getAttribute('data-gdh-native-index') !== mergedTracker.index) scheduleJ7FeedRender();
+          syncMergedTracker();
+        }
+      });
+      observer.observe(spacer, { childList:true, subtree:true, attributes:true, attributeFilter:['data-gdh-native-index','data-gdh-track-ts','data-gdh-token-blocked'] });
+      const resize = new ResizeObserver(syncMergedTracker);
+      resize.observe(surface);
+      mergedTracker = { surface, extent, viewport, spacer, originalStyle, observer, resize, slots:[], index:'' };
+      surface.addEventListener('scroll', syncMergedTracker, { passive:true });
+      viewport.addEventListener('wheel', event => {
+        if (mergedTracker?.viewport !== viewport) return;
+        event.preventDefault();
+        surface.scrollTop += event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? surface.clientHeight : 1);
+      }, { passive:false });
+    }
+    const m = mergedTracker;
+    m.index = spacer.getAttribute('data-gdh-native-index');
+    const wanted = new Set(events.map(ev => ev.key));
+    for (const [key, el] of fomoFeedCards) if (!wanted.has(key)) { el.remove(); fomoFeedCards.delete(key); }
+    m.slots = [];
+    let added = 0;
+    for (const ev of [...events].sort((a,b) => b.ts - a.ts)) {
+      let index = stamps.findIndex(ts => ts < ev.ts);
+      if (index < 0) index = stamps.length;
+      const at = index * h;
+      const el = fomoFeedCardFor(ev);
+      if (el.parentElement !== m.extent) m.extent.append(el);
+      el.style.position = 'absolute';
+      el.style.width = '100%';
+      el.style.top = `${at + added}px`;
+      const height = el.offsetHeight;
+      m.slots.push({ at, top:at + added, height });
+      added += height;
+    }
+    m.extent.style.height = `${stamps.length * h + added}px`;
+    syncMergedTracker();
+    return true;
+  }
 
   function collapseBlockedTrackerRows() {
-    const cards = trackerCards().filter((c) => c.isConnected);
-    if (cards.length) layoutFomoFeedFixed(cards, new Map());
-  }
-
-  function layoutFomoFeedFixed(cards, byAnchor, headItems = []) {
-    const rows = [];
-    for (const card of cards) {
-      const info = fomoFeedFixedRow(card);
-      if (info) rows.push({ card, wrap: info.wrap, top: info.top, h: info.h });
-    }
-    if (!rows.length) { clearFomoFeedShifts(); return; }
-    rows.sort((a, b) => a.top - b.top);
-    const spacer = rows[0].wrap.parentElement;
-    if (!(spacer instanceof HTMLElement)) { clearFomoFeedShifts(); return; }
-
-    const stillShifted = new Set();
-    let cum = 0;
-    let headInner = 0;
-    for (const ev of headItems) {
-      const el = fomoFeedCardFor(ev);
-      el.classList.add('is-abs');
-      if (el.parentElement !== spacer) spacer.appendChild(el);
-      el.dataset.gdhFomoAfterTop = String(rows[0].top);
-      const top = `${rows[0].top + headInner}px`;
-      if (el.style.top !== top) el.style.top = top;
-      headInner += el.offsetHeight + 2;
-    }
-    cum = headInner;
-    for (const row of rows) {
-      if (setFomoFeedRowShift(row.wrap, cum) && cum) stillShifted.add(row.wrap);
-      if (row.card.dataset.gdhTokenBlocked === '1') {
-        cum -= row.h;
-        continue;
-      }
-      const group = byAnchor.get(row.card);
-      if (!group) continue;
-      let inner = 0;
-      for (const ev of group) {
-        const el = fomoFeedCardFor(ev);
-        el.classList.add('is-abs');
-        if (el.parentElement !== spacer) spacer.appendChild(el);
-        el.dataset.gdhFomoAfterTop = String(row.top + row.h);
-        const top = `${row.top + row.h + cum + inner}px`;
-        if (el.style.top !== top) el.style.top = top;
-        inner += el.offsetHeight + 2;
-      }
-      cum += inner;
-    }
-    for (const el of [...fomoFeedShifted.keys()]) {
-      if (!stillShifted.has(el)) {
-        setFomoFeedRowShift(el, 0);
-      }
-    }
     refreshFomoFeedFixedRowShifts();
   }
 
@@ -6746,7 +6831,7 @@ Select to open Flap tax details`;
   document.addEventListener('scroll', handleTooltipScroll, true);
   window.addEventListener('blur', dismissTooltipForLifecycle);
 
-  const GDH_SELF_SELECTOR = '[data-gdh-fomo-key], .gdh-flap-row, .gdh-flap, .gdh-marked, .gdh-remind-card, .gdh-notification-launcher, .gdh-notification-panel, .gdh-fomo, .gdh-fomo-panel, .gdh-fomo-ui, .gdh-fomo-feed-gap, .gdh-tooltip, .gdh-tokenblock';
+  const GDH_SELF_SELECTOR = '[data-gdh-fomo-key], .gdh-flap-row, .gdh-flap, .gdh-marked, .gdh-remind-card, .gdh-notification-launcher, .gdh-notification-panel, .gdh-fomo, .gdh-fomo-panel, .gdh-fomo-ui, .gdh-fomo-feed-gap, .gdh-fomofeed-lane, .gdh-tooltip, .gdh-tokenblock';
   const observer = new MutationObserver((records) => {
     if (activeCard && !activeCard.isConnected) hideTooltip();
     for (const record of records) {
@@ -6841,8 +6926,10 @@ Select to open Flap tax details`;
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== 'local') return;
+    if (Object.keys(changes).every(key=>key==='gdhDebugLogV1')) return;
     let fomoTokenChanged = false;
     for (const [key, change] of Object.entries(changes)) {
+      if (key === 'gdhDebugLogV1') continue;
       if (key === MANI_SEEN_STORE_KEY) {
         mergeManiSeenKeys(change.newValue);
         continue;

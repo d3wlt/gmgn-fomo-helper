@@ -3,6 +3,7 @@
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 const DEFAULTS = {
   enabled: true,
+  debugLogging: false,
   showDevPerformance: true,
   showDevTooltip: true,
   enableDevBookmark: true,
@@ -17,7 +18,7 @@ const DEFAULTS = {
   holdingSurgeCooldown: 60,
   mergeFomoHolders: true,
   enableMarkedHolders: true,
-  enableFlapTax: true,
+  enableFlapTax: false,
   flapRpc: '',
   enableFomoFeed: true,
   enablePumpFeed: true,
@@ -50,6 +51,37 @@ const featureInputs = {
   enableHoldingSurge: document.querySelector('#enable-holding-surge'),
   hideLightningTrade: document.querySelector('#hide-lightning-trade'),
 };
+const debugInput = document.querySelector('#debug-logging');
+const debugStatus = document.querySelector('#debug-status');
+const debugExport = document.querySelector('#debug-export');
+const debugClear = document.querySelector('#debug-clear');
+function debugLabel() { debugStatus.textContent = debugInput.checked ? 'Logging on — reproduce the issue, then export.' : 'Logging off — existing logs can still be exported or cleared.'; }
+debugInput.addEventListener('change', async () => {
+  try { await chrome.storage.local.set({debugLogging:debugInput.checked}); debugLabel(); }
+  catch { debugInput.checked=!debugInput.checked; debugStatus.textContent='Could not save debug setting. Please retry.'; }
+});
+debugExport.addEventListener('click', async () => {
+  debugExport.disabled=true;
+  try {
+    const result=await chrome.runtime.sendMessage({type:'debug-export'});
+    if (!result?.ok || !result.data) throw new Error('unavailable');
+    const blob=new Blob([JSON.stringify(result.data,null,2)],{type:'application/json'});
+    const url=URL.createObjectURL(blob), link=document.createElement('a');
+    link.href=url;link.download=`better-gmgn-debug-${new Date().toISOString().replace(/[:.]/g,'-')}.json`;
+    document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);
+    debugStatus.textContent='Log file exported. Send it with the screenshot and approximate issue time.';
+  } catch { debugStatus.textContent='Export failed. Please retry or reload the extension.'; }
+  finally { debugExport.disabled=false; }
+});
+debugClear.addEventListener('click', async () => {
+  debugClear.disabled=true;
+  try {
+    const result=await chrome.runtime.sendMessage({type:'debug-clear'});
+    if (!result?.ok) throw new Error('unavailable');
+    debugStatus.textContent='Logs cleared.';
+  } catch { debugStatus.textContent='Could not clear logs. Please retry.'; }
+  finally { debugClear.disabled=false; }
+});
 const devListInput = document.querySelector('#dev-list');
 const colorInput = document.querySelector('#highlight-color');
 const surgeThresholdInput = document.querySelector('#holding-surge-threshold');
@@ -177,6 +209,8 @@ function formatDevList(entries) {
 }
 
 chrome.storage.local.get(DEFAULTS, (stored) => {
+  debugInput.checked = stored.debugLogging === true;
+  debugLabel();
   for (const [key, input] of Object.entries(featureInputs)) {
     input.checked = stored[key] !== false;
   }
@@ -188,7 +222,7 @@ chrome.storage.local.get(DEFAULTS, (stored) => {
   surgeCooldownInput.value = String(stored.holdingSurgeCooldown || DEFAULTS.holdingSurgeCooldown);
   mergeHoldersInput.checked = stored.mergeFomoHolders !== false;
   markedEnableInput.checked = stored.enableMarkedHolders !== false;
-  flapEnableInput.checked = stored.enableFlapTax !== false;
+  flapEnableInput.checked = stored.enableFlapTax === true;
   flapRpcInput.value = String(stored.flapRpc || '');
   fomoFeedEnableInput.checked = stored.enableFomoFeed !== false;
   pumpFeedEnableInput.checked = stored.enablePumpFeed !== false;
@@ -213,6 +247,7 @@ chrome.storage.local.get({ j7TrackerSyncStateV1: null }, (stored) => {
 });
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'local' && changes.debugLogging) { debugInput.checked=changes.debugLogging.newValue===true;debugLabel(); }
   if (areaName === 'local' && changes.gmgnHoldingSignalSyncState) {
     renderGmgnHoldingSyncState(changes.gmgnHoldingSignalSyncState.newValue);
   }

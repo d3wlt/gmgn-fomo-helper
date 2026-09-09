@@ -51,6 +51,38 @@ try {
   await page.screenshot({ path: path.join(resultsDir, 'popup-j7tracker.png'), fullPage: true });
   assert.deepEqual(errors, []);
 
+  // Real settings controls, persistent worker logger, and native file download.
+  assert.equal(await page.locator('#debug-logging').isChecked(),false);
+  await worker.evaluate(async()=>{await gdhDebug.ready;gdhDebug.record('request',{endpoint:'user-swaps',status:500});});
+  let debug=await page.evaluate(()=>chrome.runtime.sendMessage({type:'debug-export'}));
+  assert.equal(debug.ok,true);assert.equal(debug.data.entries.length,0,'off by default');
+  await page.locator('#debug-logging').check();
+  await page.waitForFunction(async()=> (await chrome.storage.local.get('debugLogging')).debugLogging===true);
+  await worker.evaluate(async()=>{await gdhDebug.setEnabled(true);gdhDebug.record('request',{endpoint:'user-swaps',status:429,durationMs:125,reason:'http-error',token:'NEVER_EXPORT_SECRET',url:'https://private.test',userId:'PRIVATE_USER'});
+    const original=fetch;globalThis.fetch=async()=>new Response(JSON.stringify({statusCode:401,error:'unauthorized',token:'NEVER_EXPORT_SECRET'}),{status:200});
+    try { await fomoAuthedFetch('/v2/users/PRIVATE_USER/swaps?cursor=NEVER_EXPORT_SECRET',{}); } finally { globalThis.fetch=original; }
+  });
+  const downloadEvent=page.waitForEvent('download');
+  await page.locator('#debug-export').click();
+  const download=await downloadEvent;
+  const exported=fs.readFileSync(await download.path(),'utf8');
+  const log=JSON.parse(exported);
+  assert.ok(log.entries.some(e=>e.kind==='request' && e.status===429));
+  assert.ok(log.entries.some(e=>e.endpoint==='user-swaps' && e.status===200 && e.reason==='not-connected'),'HTTP200 auth failure classified without raw payload');
+  assert.ok(!/NEVER_EXPORT_SECRET|private\.test|PRIVATE_USER|fixture-j7-session/.test(exported));
+  await page.locator('#debug-section').screenshot({path:path.join(resultsDir,'popup-debug.png')});
+  await page.locator('#debug-clear').click();
+  await page.waitForFunction(()=>document.querySelector('#debug-status').textContent==='Logs cleared.');
+  debug=await page.evaluate(()=>chrome.runtime.sendMessage({type:'debug-export'}));
+  assert.equal(debug.data.entries.length,0);
+  await worker.evaluate(()=>gdhDebug.record('render',{source:'gmgn',reason:'rendered',received:3,eligible:2,placed:2,filtered:1}));
+  await page.evaluate(()=>chrome.runtime.sendMessage({type:'debug-export'})); // drain durable write before restart
+  await page.locator('#debug-logging').uncheck();
+  await worker.evaluate(()=>gdhDebug.setEnabled(false));
+  await worker.evaluate(()=>gdhDebug.record('request',{endpoint:'user-swaps',status:599}));
+  debug=await page.evaluate(()=>chrome.runtime.sendMessage({type:'debug-export'}));
+  assert.ok(!debug.data.entries.some(e=>e.status===599));
+
   await context.route('https://j7tracker.io/**', route => route.fulfill({
     status: 200,
     contentType: 'text/html',
@@ -130,8 +162,11 @@ try {
   assert.ok(restoredJ7.events.some(e => e.id === 'mv3-persisted'), 'real worker restored session cache before offline network completion');
   assert.equal(await worker.evaluate(() => !!j7TrackerLiveSocket && j7TrackerLiveToken === 'fixture-j7-session'), true, 'wake recreated authenticated socket');
   assert.equal(response.ok, false, 'offline request is failure, never successful empty data');
+  debug=await page.evaluate(()=>chrome.runtime.sendMessage({type:'debug-export'}));
+  assert.equal(debug.data.enabled,false);
+  assert.ok(debug.data.entries.some(e=>e.kind==='render' && e.placed===2),'diagnostics survive real worker restart');
   assert.deepEqual(errors, []);
-  console.log(`MV3 ${manifest.version}: loaded, apex-only J7 session bridged, popup states rendered at 380x600, worker stopped/reawakened, offline failure preserved.`);
+  console.log(`MV3 ${manifest.version}: debug toggle/export/clear/sanitization/restart passed; loaded, apex-only J7 session bridged, popup states rendered at 380x600, worker stopped/reawakened, offline failure preserved.`);
 } finally {
   if (context) await context.close();
   fs.rmSync(profile, { recursive:true, force:true });

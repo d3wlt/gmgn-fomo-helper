@@ -2423,6 +2423,7 @@
       scheduleFeedLayout();
     });
     chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (Object.keys(changes).every(key=>key==='gdhDebugLogV1')) return;
       if (areaName !== 'local') return;
       for (const [key, change] of Object.entries(changes)) {
         if (key === 'j7TrackerSessionV1') {

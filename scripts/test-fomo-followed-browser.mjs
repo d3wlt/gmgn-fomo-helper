@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { installNativeBridge } from './native-tracker-fixture.mjs';
 
 // Synthetic direct-provider callback tests. Never attach to a live browser/account.
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -17,7 +18,7 @@ try {
   await page.goto('https://gmgn.ai/eth/token/0x1111111111111111111111111111111111111111');
   await page.evaluate(version => {
     const state = { fomoToken:{token:'synthetic-direct-token'}, enabled:true, enableFomoFeed:true, enablePumpFeed:false, enableFomoPanel:false, enableHoldingSurge:false, enableManifestoTab:false, enableManifestoToast:false, enableMarkedHolders:false, enableFlapTax:false, markedListMigratedV2:true };
-    const f = window.__fixture = { state, pending:[], listeners:[], runtimeListeners:[], blockedHistory:[] };
+    const f = window.__fixture = { state, pending:[], listeners:[], runtimeListeners:[], blockedHistory:[], debug:[] };
     const local = {
       get(keys, cb) {
         const out = typeof keys === 'object' && !Array.isArray(keys) ? {...keys} : {};
@@ -27,11 +28,13 @@ try {
       set(values, cb) { Object.assign(state, values); if (cb) queueMicrotask(cb); return Promise.resolve(); },
     };
     window.chrome = { storage:{local,onChanged:{addListener(fn){f.listeners.push(fn);}}}, runtime:{ id:'synthetic', lastError:null, getManifest:()=>({version}), getURL:p=>p, onMessage:{addListener(fn){f.runtimeListeners.push(fn);}}, sendMessage(msg, cb) {
+      if (msg.type === 'debug-render') { f.debug.push(msg.fields);if(cb)cb({ok:true});return; }
       if (msg.type === 'fomo-followed-feed') { f.pending.push(cb); return; }
       if (['fomo-feed','pump-feed','fomo-token-feed'].includes(msg.type)) { f.blockedHistory.push(cb); return; }
       if (cb) queueMicrotask(()=>cb({ok:false,events:[],items:[]})); else return Promise.resolve({ok:false});
     } } };
   }, JSON.parse(fs.readFileSync(`${root}/manifest.json`)).version);
+  await installNativeBridge(page);
   const hooks = `window.__direct = {
     poll: pollFomoFollowedFeed,
     build: buildFomoFeedCard,
@@ -50,21 +53,8 @@ try {
 
   async function layout(mode, boundary) {
     await page.evaluate(({mode,boundary}) => {
-      document.querySelector('#native-fixture')?.remove();
-      const host = document.createElement('div'); host.id='native-fixture'; host.style.cssText='position:relative;width:1000px;height:600px';
-      const now = Date.now(); window.__fixture.now = now;
-      for (let i=0;i<2;i++) {
-        const wrap=document.createElement('div');
-        if (mode==='fixed') wrap.style.cssText=`position:absolute;top:${i*70}px;height:70px;width:1000px`;
-        const card=document.createElement('div'); card.dataset.sentryComponent='TrackerListItem';
-        card.dataset.gdhTrackTs=String(boundary==='untimed' ? 0 : now-i*10000);
-        card.dataset.gdhTrackAddr='0x8888888888888888888888888888888888888888';
-        card.style.height='70px';
-        const symbol=document.createElement('span'); symbol.dataset.testid='follow-tracking-row-symbol'; symbol.textContent='NATIVE';
-        const maker=document.createElement('span'); maker.dataset.testid='follow-tracking-row-maker'; maker.textContent='synthetic maker';
-        card.append(symbol,maker); wrap.append(card); host.append(wrap);
-      }
-      document.body.append(host); window.__fixture.pending=[];
+      const {now}=window.__mountNativeFixture({mode,untimed:boundary==='untimed'});
+      window.__fixture.now=now;window.__fixture.pending=[];
     },{mode,boundary});
   }
   async function deliver(events, expected, response = {}, push = false) {
@@ -102,14 +92,119 @@ try {
     const now=await page.evaluate(()=>window.__fixture.now);
     return Array.from({length:10},(_,i)=>({key:`${label}-${i}`,eventId:`${label}-${i}`,swapId:`${label}-${i}`,tradeId:'one-position',tx:'legacy-position-not-unique',source:'fomo-followed',type:'buy',userId:'alice',handle:'alice',name:'Synthetic Alice',symbol:`S${i}`,chain:'eth',addr:'0x3333333333333333333333333333333333333333',usd:24,ts:now+(boundary==='head'?5000:boundary==='oldest'?-20000:-5000)-i}));
   }
-  for (const mode of ['flow','fixed']) for (const boundary of ['head','inline','oldest','untimed']) {
+  for (const mode of ['fixed']) for (const boundary of ['head','inline','oldest']) {
     await layout(mode,boundary);
     const events=await eventsFor(`${mode}-${boundary}`,boundary);
     const result=await deliver(events,10);
     assert.equal(new Set(result.keys).size,10);
     reports.push({scenario:`heavy scanner ${mode}/${boundary} burst`,...result});
   }
-  await layout('flow','head');
+  // Flow/untimed layouts used to accept ungrounded placement. They now fail
+  // closed: eligible events remain known, but no merged DOM may survive.
+  for (const [mode,boundary] of [['flow','head'],['fixed','untimed']]) {
+    await layout('fixed','head');
+    await deliver(await eventsFor('supported-before-reject','head'),10);
+    await layout(mode,boundary);
+    await page.evaluate(() => {
+      window.__fixture.pending=[];window.__direct.poll();
+      window.__fixture.pending.shift()({ok:true,events:[{key:'unsupported',eventId:'unsupported',source:'fomo-followed',type:'buy',userId:'alice',ts:Date.now()}]});
+    });
+    await page.waitForFunction(()=>!document.querySelector('.gdh-merged-tracker,.gdh-fomofeed'));
+    assert.equal(await page.locator('[data-sentry-component="TrackerListItem"]').count(),2);
+    assert.equal(await page.locator('.gdh-fomofeed-lane').count(),0);
+    reports.push({scenario:`unsupported ${mode}/${boundary} clears merged DOM and preserves native rows`,passed:true});
+  }
+  await page.evaluate(()=>{const {now}=window.__mountNativeFixture({count:12,height:64.5});window.__fixture.now=now;});
+  await deliver(await eventsFor('fractional','inline'),10);
+  assert.equal(await page.locator('.gdh-merged-tracker').count(),1);
+  assert.equal(await page.locator('[data-sentry-component="TrackerListItem"]').first().evaluate(el=>el.parentElement.getBoundingClientRect().height),64.5);
+  reports.push({scenario:'fractional 64.5px native rows pass complete-index geometry validation',passed:true});
+  await layout('fixed','head');
+  for(const [passiveStatus,label] of Object.entries({
+    'waiting-for-fomo-tab':'waiting for FOMO tab',
+    'waiting-for-account':'sign in on FOMO',
+    'waiting-for-following':'waiting for native following list',
+    'waiting-for-activity':'open FOMO Alerts',
+    'connected':'receiving from FOMO tab',
+    'disconnected':'FOMO tab disconnected',
+  })) {
+    await deliver([],0,{mode:'passive',passiveStatus,coverageGap:false});
+    assert.ok((await page.locator('.gdh-fomo-feed-gap').textContent()).includes(label));
+    assert.match(await page.locator('.gdh-fomo-feed-gap').getAttribute('title'),/does not poll FOMO/);
+    if(passiveStatus==='waiting-for-activity'){
+      for(const width of [1280,390]){
+        await page.setViewportSize({width,height:850});
+        const box=await page.locator('.gdh-fomo-feed-gap').boundingBox();
+        assert.ok(box.x>=0&&box.x+box.width<=width&&box.y>=0&&box.y+box.height<=850);
+        await page.locator('.gdh-fomo-feed-gap').screenshot({path:`test-results/fomo-passive-status-${width}.png`});
+      }
+      await page.setViewportSize({width:1280,height:850});
+    }
+  }
+  reports.push({scenario:'passive native-tab status states through actual tracker callback',passed:true});
+  // Invented values, verified public Alerts field contract (not captured account
+  // traffic): ClanWindowSelector-v2-CmH09vyz.js Xf/Jf and chains-v2-jVPHqSWp.js Je.
+  // This explicit adapter tests the renderer's normalized-event boundary, NOT
+  // background ingestion. Keep mcSource/dataSource aligned with that collector.
+  const avatar = 'https://fixture.invalid/avatar.svg';
+  await context.route('https://fixture.invalid/*.svg', route => route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><rect width="24" height="24" fill="#8c6"/></svg>'}));
+  for (const mode of ['flow','table']) {
+    await layout('fixed','head');
+    if (mode==='table') await page.evaluate(()=>{const header=document.createElement('div');header.dataset.testid='follow-tracking-table-header';document.querySelector('#native-fixture').prepend(header);});
+    const now=await page.evaluate(()=>window.__fixture.now);
+    const rawBase={userId:'synthetic-native-user',userHandle:'native_alice',displayName:'Synthetic Alice',profilePictureLink:avatar,networkId:1,tokenAddress:'0x3333333333333333333333333333333333333333',ticker:'SYNTH',tokenImageUrl:'https://fixture.invalid/token.svg',createdAt:new Date(now+5000).toISOString()};
+    const items=[
+      {...rawBase,id:`native-buy-${mode}`,type:'swap_buy',usdAmount:9.5,fdv:48000,marketCap:12000},
+      {...rawBase,id:`native-sell-${mode}`,type:'swap_sell',usdAmount:-999.5,marketCap:12500},
+      {...rawBase,id:`native-thesis-${mode}`,type:'thesis',userHandle:'',displayName:'Synthetic Author',comment:{id:'synthetic-comment',comment:'Synthetic thesis: <b>not HTML</b> & patient conviction.',commentSegments:[]},authorTrade:{usdValue:25.49,percentageUnrealizedPnl:12.5,closedAt:null}},
+    ];
+    const normalized=items.map(item=>({key:`fomo-followed:event:${item.id}`,eventId:item.id,source:'fomo-followed',dataSource:'trading-activity',type:item.type==='thesis'?'thesis':item.type==='swap_sell'?'sell':'buy',userId:item.userId,handle:item.userHandle,name:item.userHandle||item.displayName,avatar:item.profilePictureLink,symbol:item.ticker,img:item.tokenImageUrl,chain:'eth',addr:item.tokenAddress,ts:Date.parse(item.createdAt),usd:Math.abs(item.usdAmount??item.authorTrade?.usdValue??0),mc:item.fdv??item.marketCap??0,mcSource:item.fdv!=null?'alerts-fdv':item.marketCap!=null?'alerts-market-cap':'alerts-unavailable',comment:item.comment?.comment||''}));
+    await deliver(normalized,3);
+    const snapshot=await page.evaluate(()=>[...document.querySelectorAll('.gdh-fomofeed.is-followed')].map(card=>({name:card.querySelector('.gdh-fomofeed__name').textContent,avatar:card.querySelector('.gdh-fomofeed__av img')?.getAttribute('src'),symbol:card.querySelector('.gdh-fomofeed__symtext,.gdh-fomofeed__sym').textContent,usd:card.querySelector('.gdh-fomofeed__usd,.gdh-fomofeed__tamt').textContent,mc:card.querySelector('.gdh-fomofeed__mc,.gdh-fomofeed__tmc')?.textContent,title:card.querySelector('.gdh-fomofeed__mc,.gdh-fomofeed__tmc')?.title,thesis:card.querySelector('.gdh-fomofeed__thesis')?.textContent,html:card.querySelector('.gdh-fomofeed__thesis b')!==null})));
+    assert.deepEqual(snapshot.map(row=>row.usd),['$10','$1K','$25']);
+    assert.deepEqual(snapshot.map(row=>row.name),['native_alice','native_alice','Synthetic Author']);
+    for(const row of snapshot) { assert.equal(row.avatar,avatar);assert.equal(row.symbol,'SYNTH'); }
+    assert.match(snapshot[0].mc,/\$48\.0K$/);assert.match(snapshot[0].title,/provider fdv/);
+    assert.match(snapshot[1].mc,/\$12\.5K$/);assert.match(snapshot[1].title,/provider marketCap/);
+    assert.equal(snapshot[2].thesis,items[2].comment.comment);assert.equal(snapshot[2].html,false);
+    // Verify actual images load through the offline route, not just src strings.
+    await page.waitForFunction(()=>[...document.querySelectorAll('.gdh-fomofeed__av img')].every(img=>img.complete&&img.naturalWidth===24));
+    const enriched=normalized.map(e=>({...e,avatar:'https://fixture.invalid/recovered.svg',mcSource:e.mc?'current-token':e.mcSource,comment:e.type==='thesis'?`${e.comment} Updated.`:e.comment}));
+    await deliver(enriched,3);
+    await page.waitForFunction(()=>document.querySelector('.gdh-fomofeed__av img')?.getAttribute('src')==='https://fixture.invalid/recovered.svg');
+    assert.match(await page.locator('.gdh-fomofeed__mc,.gdh-fomofeed__tmc').first().getAttribute('title'),/not the historical/);
+    assert.equal(await page.locator('.gdh-fomofeed.is-new').count(),0,'native metadata must not reanimate');
+    await page.evaluate(()=>window.__fixture.nativeCards=[...document.querySelectorAll('.gdh-fomofeed.is-followed')]);
+    await deliver(enriched,3);
+    assert.equal(await page.evaluate(()=>window.__fixture.nativeCards.every((card,i)=>card===[...document.querySelectorAll('.gdh-fomofeed.is-followed')][i])),true);
+    // Independently exercise signed input and compact rounding boundaries in both layouts.
+    const amounts=[[-9.5,'$10'],[0,'$0'],[0.49,'$0'],[0.5,'$1'],[9.49,'$9'],[999.49,'$999'],[999.5,'$1K'],[1000,'$1K'],[999950,'$1M'],[1000000000,'$1B']];
+    for(const [usd,expected] of amounts) {
+      const text=await page.evaluate(event=>window.__direct.build(event).querySelector('.gdh-fomofeed__usd,.gdh-fomofeed__tamt')?.textContent,{...normalized[0],usd});
+      assert.equal(text,expected,`${mode} native USD ${usd}`);
+    }
+    await layout('fixed','head');
+    const fallback={...normalized[0],dataSource:'user-swaps',canonicalIdentity:'fomo-followed:swap:synthetic-stable',swapId:'synthetic-stable',eventId:'old-provider-id',usd:554};
+    await deliver([fallback],1);
+    const oldIdentity=await page.evaluate(e=>window.__direct.identity(e),fallback);
+    const native={...fallback,dataSource:'trading-activity',eventId:'new-provider-id',providerEventId:'new-provider-id',swapId:'native-other-id',usd:556};
+    await deliver([native],1);
+    assert.equal(await page.evaluate(e=>window.__direct.identity(e),native),oldIdentity);
+    assert.equal(await page.locator('.gdh-fomofeed').count(),1);
+    assert.equal(await page.locator('.gdh-fomofeed.is-new').count(),0,'verified cross-source alias must not replay animation');
+    assert.equal(await page.locator('.gdh-fomofeed__usd').textContent(),'$556');
+    reports.push({scenario:`synthetic native Alerts contract ${mode}: USD/MC provenance/identity/avatar/thesis/stable metadata`,passed:true});
+  }
+  assert.equal(await page.evaluate(()=>window.__fixture.debug.length),0,'render diagnostics off by default');
+  await page.evaluate(()=>window.__direct.settings({debugLogging:true}));
+  await deliver(await eventsFor('debug-render','head'),10);
+  await page.waitForFunction(()=>window.__fixture.debug.some(e=>e.placed===10));
+  const renderLog=await page.evaluate(()=>window.__fixture.debug.find(e=>e.placed===10));
+  assert.equal(renderLog.received,10);assert.equal(renderLog.eligible,10);assert.equal(renderLog.source,'gmgn');
+  assert.ok(!JSON.stringify(renderLog).includes('alice'));
+  await page.evaluate(()=>window.__direct.settings({debugLogging:false}));
+  reports.push({scenario:'opt-in diagnostics report actual connected DOM counts without identities',passed:true});
+  await layout('fixed','head');
   const sparse = {...(await eventsFor('metadata','head'))[0], name:'Followed user',handle:'',symbol:'',userId:'synthetic-user-123456789'};
   await deliver([sparse],1);
   await page.waitForFunction(()=>document.querySelector('.gdh-fomofeed__sym')?.textContent === '0x3333…3333');
@@ -125,7 +220,7 @@ try {
   assert.equal(await page.evaluate(()=>window.__fixture.enrichedCard===document.querySelector('.gdh-fomofeed.is-followed')),true,'unchanged snapshots reuse DOM');
   reports.push({scenario:'sparse identities visible; same-event enrichment updates card without duplicate or replay',passed:true});
   for(const mode of ['fixed','table']) {
-    await layout(mode==='table'?'flow':'fixed','head');
+    await layout('fixed','head');
     if(mode==='table') await page.evaluate(()=>{const header=document.createElement('div');header.dataset.testid='follow-tracking-table-header';document.querySelector('#native-fixture').prepend(header);});
     const initial={...sparse,swapId:`metadata-${mode}`,eventId:`metadata-${mode}`};
     await deliver([initial],1);

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { installNativeBridge } from './native-tracker-fixture.mjs';
 
 // These are synthetic fixtures, not live FOMO/API observations. The complete
 // production content scripts and styles execute in a real Chromium document.
@@ -92,9 +93,10 @@ async function boot(site, width = 1280) {
     window.chrome = { runtime: { id: 'fixture', getManifest: () => ({ version }), sendMessage, onMessage: { addListener() {} }, getURL: p => p }, storage: { local, onChanged: { addListener: fn => listeners.push(fn) } } };
     Object.defineProperty(navigator, 'clipboard', { configurable:true, value:{ writeText: async text => { window.__fixture.copied = text; } } });
   }, { version: manifest.version, address });
+  if (site === 'gmgn') await installNativeBridge(page);
   const file = site === 'gmgn' ? 'content.js' : 'debot-content.js';
   const hooks = site === 'gmgn'
-    ? 'window.__test = { shift: setFomoFeedRowShift, insertionShift: fomoFeedInsertionShift, gap: renderFomoFollowedGap, relativeTime: fomoFeedRelTime, feedCard: event => fomoFeedCardFor(event), pollJ7Fomo: () => pollFomoFeed(), pollJ7Pump: () => pollPumpFeed(), scanJ7Feed: () => scanFomoFeed(), load: () => loadFomoData(true), sync: () => scanVisibleCards(), tab: value => {fomoTab=value;return loadFomoData(true);}, close: () => {setFomoOpen(false);scanVisibleCards();}, open: () => {setFomoOpen(true);scanVisibleCards();} };'
+    ? 'window.__test = { shift: setFomoFeedRowShift, gap: renderFomoFollowedGap, relativeTime: fomoFeedRelTime, feedCard: event => fomoFeedCardFor(event), pollJ7Fomo: () => pollFomoFeed(), pollJ7Pump: () => pollPumpFeed(), scanJ7Feed: () => scanFomoFeed(), load: () => loadFomoData(true), sync: () => scanVisibleCards(), tab: value => {fomoTab=value;return loadFomoData(true);}, close: () => {setFomoOpen(false);scanVisibleCards();}, open: () => {setFomoOpen(true);scanVisibleCards();} };'
     : 'window.__test = { gap: renderFomoFollowedGap, feedCard: event => buildFeedCard(event), load: () => loadPanel(true), sync: () => syncRoute(), tab: value => {panelTab=value;return loadPanel(true);}, close: () => {settings.debotFomoPanelOpen=false;syncPanel();}, open: () => {settings.debotFomoPanelOpen=true;syncPanel();} };';
   const source = fs.readFileSync(path.join(root, file), 'utf8').replace(/\}\)\(\);\s*$/, `${hooks}\n})();`);
   await page.addStyleTag({ path: path.join(root, site === 'gmgn' ? 'styles.css' : 'debot-styles.css') });
@@ -159,13 +161,8 @@ try {
       reports.push({ site, scenario: 'J7Tracker Pump callout label and narrative render in a real card', passed:true });
       if (site === 'gmgn') {
         const integrated = await page.evaluate(async () => {
-          const native = document.createElement('div');
-          native.dataset.sentryComponent = 'TrackerListItem';
-          native.dataset.gdhTrackAddr = '0x8888888888888888888888888888888888888888';
-          native.dataset.gdhTrackTs = String(Date.now());
-          const symbol = document.createElement('span'); symbol.dataset.testid = 'follow-tracking-row-symbol'; symbol.textContent = 'NATIVE';
-          const maker = document.createElement('span'); maker.dataset.testid = 'follow-tracking-row-maker'; maker.textContent = 'fixture maker';
-          native.append(symbol, maker); document.body.appendChild(native);
+          window.__mountNativeFixture({count:1});
+          const native=document.querySelector('[data-sentry-component="TrackerListItem"]');
           window.__test.pollJ7Fomo(); window.__test.pollJ7Pump();
           await new Promise(resolve => setTimeout(resolve, 20));
           window.__test.scanJ7Feed();
@@ -179,7 +176,8 @@ try {
           window.__test.scanJ7Feed();
           await new Promise(resolve => requestAnimationFrame(resolve));
           result.staleText = [...document.querySelectorAll('.gdh-fomofeed')].map(card => card.innerText).join('\n');
-          document.querySelectorAll('.gdh-fomofeed').forEach(card => card.remove()); native.remove();
+          document.querySelectorAll('.gdh-fomofeed').forEach(card => card.remove()); document.querySelector('#native-fixture').remove();
+          window.__test.scanJ7Feed();
           return result;
         });
         assert.equal(integrated.count, 5);
@@ -302,7 +300,7 @@ try {
           row.style.cssText='position:absolute;top:0;transform:translateY(130px);height:64px;width:300px';
           row.textContent='Synthetic virtual row'; wrap.appendChild(row); document.body.appendChild(wrap);
           const original=row.getBoundingClientRect().top;
-          const shift=window.__test.insertionShift(130,[{afterTop:100,height:66}]);
+          const shift=-64; // Existing native token-block collapse only.
           window.__test.shift(row,shift);
           const shifted=row.getBoundingClientRect().top;
           const transform=row.style.transform;
@@ -313,7 +311,7 @@ try {
           wrap.remove(); window.__test.gap({coverageGap:false});
           return {original,shifted,withNotice,restored,transform};
         });
-        assert.equal(geometry.shifted-geometry.original,66);
+        assert.equal(geometry.shifted-geometry.original,-64);
         assert.equal(geometry.withNotice,geometry.shifted);
         assert.equal(geometry.restored,geometry.original);
         assert.equal(geometry.transform,'translateY(130px)');

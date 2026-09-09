@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { installNativeBridge } from './native-tracker-fixture.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const sourceRaw = fs.readFileSync(`${root}/content.js`, 'utf8');
@@ -61,15 +62,10 @@ await page.evaluate((version) => {
     },
     storage: { local, onChanged: { addListener(fn) { storageListeners.push(fn); } } },
   };
-  const native = document.createElement('div');
-  native.dataset.sentryComponent = 'TrackerListItem';
-  native.dataset.gdhTrackAddr = '0x8888888888888888888888888888888888888888';
-  native.dataset.gdhTrackTs = String(Date.now());
-  const symbol = document.createElement('span');
-  symbol.dataset.testid = 'follow-tracking-row-symbol'; symbol.textContent = 'NATIVE';
-  const maker = document.createElement('span'); maker.dataset.testid = 'follow-tracking-row-maker'; maker.textContent = 'fixture maker';
-  native.append(symbol, maker); document.body.appendChild(native);
 }, JSON.parse(fs.readFileSync(`${root}/manifest.json`, 'utf8')).version);
+await installNativeBridge(page);
+await page.evaluate(()=>window.__mountNativeFixture({count:1}));
+await page.addStyleTag({path:`${root}/styles.css`});
 const hooks = `window.__latency = {
   metrics() { return j7LatencyMetrics; },
   epoch() { return j7UiEpoch; },

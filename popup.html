@@ -129,7 +129,7 @@
           <label class="switch-row">
             <span>
               <strong>Flap tax badge</strong>
-              <small>Show tax rates beside Flap tokens ending in 7777/8888. Hover for the allocation. Your browser reads the chain directly.</small>
+              <small>Off by default. Enable to show Flap tax badges and allocation details. When enabled, your browser reads BSC directly.</small>
             </span>
             <input id="enable-flap-tax" type="checkbox" />
           </label>
@@ -200,6 +200,20 @@
             <input id="hide-lightning-trade" type="checkbox" />
           </label>
         </div>
+      </section>
+
+      <section class="settings-section" id="debug-section">
+        <h2>Diagnostics</h2>
+        <label class="switch-row">
+          <span><strong>Debug logging</strong><small>Off by default. Changes save immediately. Enable before reproducing a problem.</small></span>
+          <input id="debug-logging" type="checkbox" />
+        </label>
+        <p class="debug-help">Keeps up to 500 diagnostic entries for 24 hours on this device. Records request outcomes and feed counts, not tokens, cookies, wallet addresses, names or raw responses. Nothing is uploaded automatically.</p>
+        <div class="debug-actions">
+          <button id="debug-export" type="button">Export logs</button>
+          <button id="debug-clear" type="button">Clear logs</button>
+        </div>
+        <small id="debug-status" aria-live="polite">Logging off</small>
       </section>
 
       <label class="field" for="dev-list">

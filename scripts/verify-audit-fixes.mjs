@@ -241,6 +241,7 @@ await test('Followed FOMO trades and theses are normalized for the GMGN tracker'
     extractFunction(background, 'fomoNetworkSlug'),
     extractFunction(background, 'fomoHttpsUrl'),
     extractFunction(background, 'fomoMetadataText'),
+    extractFunction(background, 'fomoMetadataNumber'),
     extractFunction(background, 'slimFomoFollowedEvent'),
   ];
   const events = evaluate(functions, `[
@@ -272,11 +273,9 @@ await test('Followed FOMO trades and theses are normalized for the GMGN tracker'
   ]);
   assert.ok(background.includes("'/v2/users/current/followingIds'"));
   const collector = extractFunction(background, 'fetchFomoFollowedFeed');
-  assert.ok(collector.includes('/swaps${cursor'));
-  assert.ok(collector.includes('thesis_created'));
-  assert.ok(collector.includes('/balances'));
-  assert.ok(collector.includes('/feed/token/thesis?'));
-  assert.ok(!collector.includes('/feed/tradingActivity'), 'global activity is no longer the swap authority');
+  assert.ok(collector.includes('passiveFomoSnapshot'), 'Following reads the passive cache');
+  assert.ok(!/fomoAuthedFetch|fetch\(|fomoKeepAlive|ensureFreshFomoToken/.test(collector), 'no independent network or auth path');
+  assert.ok(background.includes("message?.type === 'fomo-passive-event'"));
   assert.ok(background.includes("message?.type === 'fomo-followed-feed'"));
   assert.ok(content.includes("chrome.runtime.sendMessage({ type: 'fomo-followed-feed' }"));
   assert.ok(content.includes("source: 'fomo-followed'"));
@@ -285,42 +284,15 @@ await test('Followed FOMO trades and theses are normalized for the GMGN tracker'
   assert.ok(styles.includes('.gdh-fomofeed__position'));
 });
 
-await test('Followed FOMO polling filters the live activity response against current follows', async () => {
-  const now = Date.now();
-  const worker = backgroundHarness((requestPath) => {
-    let responseObject;
-    if (requestPath.includes('followingIds')) responseObject = { followingIds: ['followed-user'] };
-    else if (requestPath.endsWith('/swaps')) responseObject = { swaps: [{
-      id:'visible', createdAt:new Date(now).toISOString(), inNetworkId:56, outNetworkId:56,
-      inTokenAddress:'0x1234567890123456789012345678901234567890',
-      outTokenAddress:'0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d',
-      inTradeId:'position', humanUsdAmountOut:0,
-    }], hasNextPage:false };
-    else if (requestPath.endsWith('/balances')) responseObject = { balances:[] };
-    else if (requestPath.startsWith('/feed?')) responseObject = { feed:[
-      {id:'hidden',type:'thesis_created',userId:'other-user',createdAt:new Date(now).toISOString(),networkId:56,tokenAddress:'0x1234567890123456789012345678901234567890',body:{commentId:'hidden-comment',comment:'Not followed'}},
-    ],hasNextPage:false };
-    else throw new Error(`unexpected request ${requestPath}`);
-    return new Response(JSON.stringify({ statusCode: 200, responseObject }));
-  });
+await test('Passive Following reads make no FOMO requests or expose legacy cached data', async () => {
+  const worker = backgroundHarness(() => { throw new Error('Passive feed cannot request FOMO'); });
+  worker.run("fomoFollowedFeedCache = { ...emptyFomoFollowedFeed(), events: [{ key: 'old-account-event' }], updatedAt: 1 }");
   const response = await worker.run('fetchFomoFollowedFeed()');
-  assert.ok(worker.calls.includes('/v2/users/current/followingIds'));
-  assert.ok(worker.calls.includes('/v2/users/followed-user/swaps'));
-  assert.ok(!worker.calls.some(p => p.includes('other-user/swaps')));
-  assert.equal(response.ok, true);
-  assert.equal(response.events.length, 1);
-  assert.equal(response.events[0].type, 'sell');
-  assert.equal(response.events[0].usd, 0);
-  assert.equal(response.events[0].followed, true);
-  assert.equal(response.followingKnown, true);
-  assert.equal(response.historyLimited, true, 'bounded collection never claims lifetime history');
-
-  const unauthenticated = backgroundHarness(() => new Response(JSON.stringify({ error: 'unauthorized' }), { status: 430 }));
-  unauthenticated.run("fomoFollowedFeedCache = { ...emptyFomoFollowedFeed(), events: [{ key: 'old-account-event' }], updatedAt: 1 }");
-  const disconnected = await unauthenticated.run('fetchFomoFollowedFeed()');
-  assert.equal(disconnected.ok, false);
-  assert.equal(disconnected.reason, 'not-connected');
-  assert.deepEqual(JSON.parse(JSON.stringify(disconnected.events)), [], 'authentication failure must not expose cached account events');
+  assert.equal(response.mode, 'passive');
+  assert.equal(response.passiveStatus, 'waiting-for-fomo-tab');
+  assert.equal(response.coverageGap, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(response.events)), []);
+  assert.deepEqual(worker.calls, []);
 });
 
 await test('Notification history is sanitized, deduplicated, and capped', () => {
@@ -444,20 +416,12 @@ await test('Each chain retains up to 100 positions independently', () => {
   assert.equal(result.filter((x) => x.chain === 'sol').length, 100);
 });
 
-await test('New virtual rows inherit existing feed offsets', () => {
-  const fn = extractFunction(content, 'fomoFeedInsertionShift');
-  const inserts = [
-    { afterTop: 516, height: 66 },
-    { afterTop: 516, height: 66 },
-    { afterTop: 646.5, height: 66 },
-    { afterTop: 712.5, height: 66 },
-    { afterTop: 778.5, height: 66 },
-    { afterTop: 844.5, height: 66 },
-  ];
-  assert.equal(evaluate([fn], `fomoFeedInsertionShift(451.5, ${JSON.stringify(inserts)})`), 0);
-  assert.equal(evaluate([fn], `fomoFeedInsertionShift(838.5, ${JSON.stringify(inserts)})`), 330);
-  assert.equal(evaluate([fn], `fomoFeedInsertionShift(903, ${JSON.stringify(inserts)})`), 396);
-  assert.match(content, /scheduleFomoFeedRowReflow\(\);\s*\n\s*}\s*\n\s*if \(\!\(target instanceof Element\)/);
+await test('Recycled native rows only inherit token-block collapse, never feed height', () => {
+  const fn = extractFunction(content, 'refreshFomoFeedFixedRowShifts');
+  assert.ok(fn.includes('const amount = collapsed;'));
+  assert.ok(fn.includes("if (row.card.dataset.gdhTokenBlocked === '1') collapsed -= row.h;"));
+  assert.ok(!fn.includes('offsetHeight'));
+  assert.ok(content.includes('scheduleFomoFeedRowReflow();'));
 });
 
 await test('Feed offsets preserve GMGN virtual-list transforms', () => {
@@ -502,22 +466,22 @@ await test('Feed offsets preserve GMGN virtual-list transforms', () => {
   );
   assert.deepEqual(JSON.parse(JSON.stringify({ top: geometry.top, h: geometry.h })), { top: 190, h: 64.5 });
 
-  for (const name of ['clearFomoFeedShifts', 'refreshFomoFeedFixedRowShifts', 'layoutFomoFeedFixed']) {
+  for (const name of ['clearFomoFeedShifts', 'refreshFomoFeedFixedRowShifts']) {
     assert.ok(!extractFunction(content, name).includes('style.transform'), `${name} overwrites native transform`);
   }
 });
 
-await test('New FOMO and Pump events insert without a staging strip', () => {
-  const shiftFn = extractFunction(content, 'fomoFeedInsertionShift');
-  assert.equal(evaluate([shiftFn], 'fomoFeedInsertionShift(0, [{ afterTop: 0, height: 66 }])'), 66);
-  assert.match(content, /placements\.set\(ev\.key, \{ ev, anchor: 'head' \}\)/);
-  assert.ok(content.includes('layoutFomoFeedFixed(cards, byAnchor, headItems);'));
-  assert.ok(content.includes("headCard.insertAdjacentElement('beforebegin', el);"));
-  assert.ok(content.includes("const headCard = withTs[0]?.el || cards[0];"));
-  assert.match(extractFunction(content, 'layoutFomoFeedFixed'), /el\.dataset\.gdhFomoAfterTop = String\(rows\[0\]\.top\);/);
-  assert.ok(!content.includes('gdh-fomofeed-pin'));
-  assert.ok(!content.includes('fomo / Pump activity'));
-  assert.ok(!styles.includes('.gdh-fomofeed-pin'));
+await test('Merged tracker owns scroll mapping rather than a capped split lane', () => {
+  const scan = extractFunction(content, 'scanFomoFeed');
+  assert.ok(scan.includes('renderMergedTracker(cards, events)'));
+  assert.ok(!scan.includes('HEAD_CAP'));
+  assert.ok(!scan.includes('INLINE_CAP'));
+  const layout = extractFunction(content, 'renderMergedTracker');
+  assert.ok(layout.includes('data-gdh-native-index'));
+  assert.ok(layout.includes('stamps[index] !== Number(card.dataset.gdhTrackTs)'));
+  assert.ok(extractFunction(content, 'syncMergedTracker').includes('m.viewport.scrollTop ='));
+  assert.ok(!styles.includes('max-height: min(220px, 28vh)'));
+  assert.match(styles, /\.gdh-merged-tracker\s*\{[^}]*overflow: auto/s);
 });
 
 await test('Long-lived caches evict their oldest entries', () => {
@@ -1178,7 +1142,8 @@ await test('FOMO recognizes authentication errors inside HTTP 200', () => {
   assert.equal(evaluate([fn], "fomoBodyUnauthed({ error: 'unauthorized' })"), true);
   assert.equal(evaluate([fn], "fomoBodyUnauthed({ statusCode: 430 })"), true);
   assert.equal(evaluate([fn], "fomoBodyUnauthed({ success: true, statusCode: 200 })"), false);
-  const authedFetch = extractFunction(background, 'fomoAuthedFetch');
+  const authedFetch = extractFunction(background, 'fomoAuthedFetchImpl');
+  assert.ok(extractFunction(background, 'fomoAuthedFetch').includes('fomoAuthedFetchImpl(path,options)'));
   assert.ok(authedFetch.includes('res.status === 430'));
   assert.ok(authedFetch.includes('res.status === 431'));
 });
