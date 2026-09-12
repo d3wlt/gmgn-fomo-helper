@@ -1,6 +1,6 @@
 # GMGN FOMO Helper
 
-A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.16** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
+A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.18** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
 
 **J7Tracker and DeBot integrations have been removed.** No J7Tracker account, tab or companion service is required; the extension no longer integrates with DeBot. The native GMGN tracker and passive FOMO Following feed remain separate from that retired integration.
 
@@ -77,7 +77,7 @@ Requirements: Node.js 22+, Python 3 for the portable builder, or PowerShell for 
 npm ci
 npx playwright install chromium
 npm run verify
-python3 scripts/build-release.py --tag v0.53.16
+python3 scripts/build-release.py --tag v0.53.18
 ```
 
 On PowerShell:

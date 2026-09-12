@@ -2,6 +2,18 @@
 
 Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
 
+## 0.53.18 - 2026-09-12
+
+- Remove the redundant followed star from compact FOMO rows to reclaim name space. Format large FOMO values with B/T suffixes, including rounding-boundary promotion.
+
+- Fix fractional CSS translation readback: use the browser-serialized applied shift rather than comparing rounded CSSOM values against unrounded input. This prevents false native slot-index mismatches caused by the extension's own translation.
+- Add a failure-before/pass-after actual Chromium precision regression; retain geometry validation, removed-transform detection and diagnostic logging. User-side blinking confirmation remains pending.
+
+## 0.53.17 - 2026-09-12
+
+- Diagnostic build: add opt-in tracker lifecycle, validation-reason, visible-card and outer/native scroll measurements. Lifecycle transitions bypass the five-second render sampler; scroll samples are limited to four per second.
+- Preserve privacy allowlists, 500-entry/24-hour retention and existing tracker behaviour. This build diagnoses blinking; it does not claim to fix it.
+
 ## 0.53.16 - 2026-09-12
 
 - Removed the separate 40-card FOMO render cap, retaining the passive source's bounded history; made native dedup independent of recycled visible rows.
