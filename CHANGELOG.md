@@ -2,6 +2,15 @@
 
 Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
 
+## 0.53.16 - 2026-09-12
+
+- Removed the separate 40-card FOMO render cap, retaining the passive source's bounded history; made native dedup independent of recycled visible rows.
+- Added identity-based same-second scroll anchors, logical scroll bounds after tail eviction, and fractional-height/late-thesis layout handling. Tracker metadata now uses committed React ancestry, including native liquidity-add/remove rows rather than borrowing a neighbouring trade. Verified locally and in both live layouts.
+- Restore native recycler parentage before card/list layout switches, preventing React `removeChild` crashes during native unmounts.
+- Position-surge toasts now dismiss after five seconds even while hovered and omit the trailing token price. Cost/5m metrics, token action and notification history remain.
+- Moved the FOMO/holder-count launcher to the end of the token-information header and notification history to the end of GMGN's main navigation; removed floating launchers.
+- Added browser coverage for bursts, idle scrolling, source eviction, dedup, toast lifetime, launcher placement, header remounts and narrow viewports.
+
 ## 0.53.15 - 2026-09-12
 
 - Renamed the private repository and extension branding to GMGN FOMO Helper; updated package names, documentation and links while preserving the extension key and identity.
