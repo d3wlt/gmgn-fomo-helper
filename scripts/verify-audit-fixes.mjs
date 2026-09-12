@@ -1591,13 +1591,13 @@ await test('FOMO followed-holder lookup batches tokens and prefers usernames', a
     fomoAuthGeneration: 0,
     fomoAuthedFetch: async (path, options) => {
       calls.push({ path, method: options.method, payload: JSON.parse(options.body) });
-      const body = { statusCode: 200, responseObject: [{
+      const body = { statusCode: 200, responseObject: { tokens: [{
         tokenAddress: address, networkId: 56, totalHolders: 2,
         topHolders: [
           { user: { id: 'u1', userHandle: '@alice_user', displayName: 'Alice Nick' } },
           { user: { id: 'u2', displayName: 'Bob Nick' } },
         ],
-      }] };
+      }] } };
       return { res: { ok: true, status: 200, json: async () => body } };
     },
   });
@@ -1611,7 +1611,7 @@ await test('FOMO followed-holder lookup batches tokens and prefers usernames', a
   assert.ok(content.includes("type: 'fomo-followed-holders'"));
   assert.ok(content.includes("followed.textContent = '★ Following'"));
   assert.ok(styles.includes('.gdh-fomo__hrow.is-followed'));
-  assert.ok(popupHtml.includes('FOMO-following holder badge'));
+  assert.ok(popupHtml.includes('Token-page FOMO holder count'));
   assert.ok(background.includes('fomoFollowedHoldersCache.clear()'));
   assert.ok(background.includes('fomoAuthGeneration += 1'));
   assert.ok(content.includes('fomoFollowedHoldersGeneration += 1'));

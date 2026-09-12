@@ -859,7 +859,7 @@
   let markedMap = new Map();
   const markedByChain = new Map();
   let markedLoading = false;
-  const FOMO_FOLLOWED_HOLDERS_TTL = 30000;
+  const FOMO_FOLLOWED_HOLDERS_TTL = 60000;
   const FOMO_FOLLOWED_HOLDERS_RETRY_MIN = 15000;
   const FOMO_FOLLOWED_HOLDERS_RETRY_MAX = 120000;
   const fomoFollowedHoldersByChain = new Map();
@@ -874,28 +874,21 @@
   }
 
   function visibleFomoTokenRefs() {
-    const chain = currentChain();
-    const networkId = FOMO_NETWORK_ID[chain];
-    if (!networkId) return [];
-    const addresses = new Set();
-    const add = (value) => {
-      const address = normalizeFomoTokenAddress(value);
-      if (address) addresses.add(address);
-    };
-    add(currentTokenRoute()?.address);
-    trackerCards().forEach((card) => add(card.dataset.gdhTrackAddr));
-    document.querySelectorAll(`a[href*="/${chain}/token/"]`).forEach((link) => {
-      const href = link.getAttribute('href') || '';
-      const raw = href.match(new RegExp(`/${chain}/token/([^/?#]+)`, 'i'))?.[1] || '';
-      try { add(decodeURIComponent(raw)); } catch { add(raw); }
-    });
-    return [...addresses].slice(0, 100).map((address) => ({ address, networkId }));
+    const route = currentTokenRoute();
+    if (!route || settings.enableFomoPanel === false || settings.enableMarkedHolders === false
+      || document.visibilityState !== 'visible') return [];
+    const address = normalizeFomoTokenAddress(route.address);
+    const networkId = FOMO_NETWORK_ID[route.chain];
+    return address && networkId ? [{ address, networkId }] : [];
   }
 
   let fomoFollowedHoldersContextInvalidated = false;
   async function loadFomoFollowedHoldings() {
     if (fomoFollowedHoldersContextInvalidated) return;
-    const chain = currentChain();
+    const route = currentTokenRoute();
+    if (!route || settings.enableFomoPanel === false || settings.enableMarkedHolders === false
+      || document.visibilityState !== 'visible') return;
+    const chain = route.chain;
     if (!FOMO_NETWORK_ID[chain]) return;
     const failure = fomoFollowedHoldersFailures.get(chain);
     if (failure && Date.now() < failure.retryAt) return;
@@ -934,7 +927,7 @@
       for (const holding of (Array.isArray(res.holdings) ? res.holdings : [])) {
         const address = normalizeFomoTokenAddress(holding?.address);
         const count = Number(holding?.count);
-        if (!address || !(count > 0)) continue;
+        if (!address || !requested.has(address) || Number(holding.networkId) !== FOMO_NETWORK_ID[chain] || !(count > 0)) continue;
         const names = (Array.isArray(holding?.users) ? holding.users : [])
           .map((user) => String(user?.handle || user?.name || '').trim().replace(/^@/, ''))
           .filter(Boolean);
@@ -1072,56 +1065,41 @@
   }
 
   function ensureMarkedBadge(host, tokenAddress) {
-    const chain = currentChain();
-    const followedMode = Boolean(FOMO_NETWORK_ID[chain]);
-    const followed = fomoFollowedHoldersByChain.get(chain)?.map
-      ?.get(normalizeFomoTokenAddress(tokenAddress));
-    const names = followedMode ? followed?.names : markedMap.get(String(tokenAddress).toLowerCase());
-    const count = followedMode ? Number(followed?.count) || 0 : names?.length || 0;
+    const route = currentTokenRoute();
+    if (!route || !host.matches('.gdh-fomo-launcher')) return;
+    const token = normalizeFomoTokenAddress(tokenAddress);
+    const cached = fomoFollowedHoldersByChain.get(route.chain);
+    const covered = cached?.requested.has(token);
+    const failure = fomoFollowedHoldersFailures.get(route.chain);
+    const fresh = covered && Date.now() - cached.at < FOMO_FOLLOWED_HOLDERS_TTL;
+    const followed = fresh ? cached.map.get(token) : null;
     let badge = host.querySelector(':scope > .gdh-marked');
-    if (!count) {
-      badge?.remove();
-      return;
-    }
     if (!badge) {
       badge = document.createElement('span');
-      badge.className = 'gdh-marked';
+      badge.className = 'gdh-marked is-followed';
       host.appendChild(badge);
     }
-    badge.classList.toggle('is-followed', followedMode);
-    badge.textContent = `${followedMode ? '👥' : '👤'}${count}`;
-    badge.title = followedMode
-      ? `People you follow on FOMO holding this token${names?.length ? `: ${names.join(', ')}` : ''}`
-      : `Marked people holding this token: ${names.join(', ')}`;
+    const text = fresh ? `👥${Number(followed?.count) || 0}` : failure ? '👥?' : '👥…';
+    const title = fresh
+      ? `People you follow on FOMO currently holding this token: ${Number(followed?.count) || 0}${followed?.names?.length ? ` · ${followed.names.join(', ')}` : ''}`
+      : failure ? 'Followed holders unavailable. Sign in to FOMO; retries are rate-limited.' : 'Checking followed holders for this token only';
+    if (badge.textContent !== text) badge.textContent = text;
+    if (badge.title !== title) badge.title = title;
+    if (host.title !== title) host.title = title;
   }
 
   function scanMarkedBadges() {
-    if (settings.enableMarkedHolders === false) {
-      document.querySelectorAll('.gdh-marked').forEach((el) => el.remove());
+    // No tracker/trenches scans or arbitrary-wallet requests: token detail only.
+    document.querySelectorAll('.gdh-marked').forEach((el) => {
+      if (!el.closest('.gdh-fomo-launcher')) el.remove();
+    });
+    const launcher = document.querySelector('.gdh-fomo-launcher');
+    if (!currentTokenRoute() || settings.enableFomoPanel === false || settings.enableMarkedHolders === false) {
+      launcher?.querySelector('.gdh-marked')?.remove();
       return;
     }
-    const chain = currentChain();
-    if (FOMO_NETWORK_ID[chain]) loadFomoFollowedHoldings();
-    else loadMarkedHoldings();
-
-    trackerCards().forEach((card) => {
-      const addr = card.dataset.gdhTrackAddr;
-      if (!addr) return;
-      const host = card.querySelector(TRACKER_SYMBOL_CELL);
-      if (host) ensureMarkedBadge(host, addr);
-      else { card.querySelector(':scope .gdh-marked')?.remove(); }
-    });
-
-    document.querySelectorAll('a[href*="/token/"]').forEach((link) => {
-      if (link.closest(TRACKER_ITEM_SELECTOR)) return;
-      if (link.querySelector(TRACKER_SYMBOL_CELL) || link.querySelector(TRACKER_MAKER_CELL)) return;
-      const raw = link.getAttribute('href')?.match(/\/token\/([^/?#]+)/)?.[1] || '';
-      let address = raw;
-      try { address = decodeURIComponent(raw); } catch {}
-      address = normalizeFomoTokenAddress(address);
-      if (!address) return;
-      ensureMarkedBadge(link, address);
-    });
+    loadFomoFollowedHoldings();
+    if (launcher) ensureMarkedBadge(launcher, currentTokenRoute().address);
   }
 
   const HOLDER_ROW_SELECTOR = '[data-testid="token-detail-holders-row"]';

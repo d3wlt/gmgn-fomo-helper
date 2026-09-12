@@ -7,6 +7,7 @@ function fixture(send){
  const c=vm.createContext({send,Promise,Map,Set,Date,calls:0,scans:0,chain:'eth'});
  vm.runInContext(`const FOMO_NETWORK_ID={eth:1,bsc:56}; const FOMO_FOLLOWED_HOLDERS_TTL=10000,FOMO_FOLLOWED_HOLDERS_RETRY_MIN=1,FOMO_FOLLOWED_HOLDERS_RETRY_MAX=100;
  const fomoFollowedHoldersFailures=new Map(),fomoFollowedHoldersByChain=new Map(),fomoFollowedHoldersInflight=new Map();let fomoFollowedHoldersGeneration=0;
+ const currentTokenRoute=()=>({chain}),settings={},document={visibilityState:'visible'};
  const currentChain=()=>chain,visibleFomoTokenRefs=()=>[{address:'0x1111111111111111111111111111111111111111'}],normalizeFomoTokenAddress=x=>x,scheduleScan=()=>scans++;
  const chrome={runtime:{sendMessage:()=>{calls++;return send(chain)}}};
  ${loader}

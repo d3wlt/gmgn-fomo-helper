@@ -1222,7 +1222,7 @@ async function fomoAuthedFetchImpl(path, options) {
   return { res, stored, renewed };
 }
 
-const FOMO_FOLLOWED_HOLDERS_TTL_MS = 30000;
+const FOMO_FOLLOWED_HOLDERS_TTL_MS = 60000;
 const FOMO_FOLLOWED_HOLDERS_CACHE_MAX = 30;
 const fomoFollowedHoldersCache = new Map();
 
@@ -1281,10 +1281,12 @@ async function fetchFomoFollowedHolders(payload) {
       if (unauthorized) fomoFollowedHoldersCache.clear();
       return { ok: false, reason: unauthorized ? 'not-connected' : 'fetch-failed', holdings: [] };
     }
-    const boxes = Array.isArray(body?.responseObject) ? body.responseObject : [];
+    const response = body?.responseObject;
+    const boxes = Array.isArray(response?.tokens) ? response.tokens : Array.isArray(response) ? response : null;
+    if (!boxes) return { ok: false, reason: 'invalid-response', holdings: [] };
     const holdings = boxes.map((box) => {
       const ref = normalizeFomoTokenRef(box);
-      if (!ref) return null;
+      if (!ref || !normalized.some(token => token.address === ref.address && token.networkId === ref.networkId)) return null;
       const users = (Array.isArray(box?.topHolders) ? box.topHolders : [])
         .map(slimFomoFollowedHolder);
       const count = Number(box?.totalHolders);
