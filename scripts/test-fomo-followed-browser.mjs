@@ -198,8 +198,8 @@ try {
   assert.equal(await page.evaluate(()=>window.__fixture.debug.length),0,'render diagnostics off by default');
   await page.evaluate(()=>window.__direct.settings({debugLogging:true}));
   await deliver(await eventsFor('debug-render','head'),10);
-  await page.waitForFunction(()=>window.__fixture.debug.some(e=>e.placed===10));
-  const renderLog=await page.evaluate(()=>window.__fixture.debug.find(e=>e.placed===10));
+  await page.waitForFunction(()=>window.__fixture.debug.some(e=>e.placed===10&&e.reason==='rendered'));
+  const renderLog=await page.evaluate(()=>window.__fixture.debug.find(e=>e.placed===10&&e.reason==='rendered'));
   assert.equal(renderLog.received,10);assert.equal(renderLog.eligible,10);assert.equal(renderLog.source,'gmgn');
   assert.ok(!JSON.stringify(renderLog).includes('alice'));
   await page.evaluate(()=>window.__direct.settings({debugLogging:false}));

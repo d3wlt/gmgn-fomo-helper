@@ -81,6 +81,14 @@ test('pagination is private and successful request bursts coalesce without hidin
   const restart=harness(h.state); await restart.api.ready; assert.equal((await restart.report()).entries[3].pages,3);
 });
 
+test('tracker lifecycle and scroll diagnostics survive export without private fields',async()=>{
+  const h=harness({debugLogging:true});await h.api.ready;
+  for(const event of ['surface-created','validation-deferred','validation-failed','surface-destroyed','validation-recovered','scroll']) h.api.record('render',{source:'gmgn',event,failure:'stamp-timeout',surfaceId:3,scrollY:3500,nativeY:2200,visible:4,extent:8000,viewportHeight:900,pendingMs:1501,token:'PRIVATE',html:'PRIVATE',stack:'PRIVATE'});
+  h.api.record('render',{event:'PRIVATE',failure:'PRIVATE',scrollY:-1,nativeY:Infinity});
+  const out=await h.report();assert.equal(out.entries.length,7);assert.equal(out.entries[2].failure,'stamp-timeout');assert.equal(out.entries[5].scrollY,3500);assert.equal(out.entries[5].visible,4);assert.ok(!JSON.stringify(out).includes('PRIVATE'));assert.equal(out.entries[6].event,undefined);assert.equal(out.entries[6].scrollY,undefined);
+  const restart=harness(h.state);await restart.api.ready;assert.equal((await restart.report()).entries[5].nativeY,2200);
+});
+
 test('passive connection diagnostics never export document or account identifiers',async()=>{
   const h=harness({debugLogging:true});await h.api.ready;
   h.api.record('passive',{status:'disconnected',event:'tab-closed',received:10,accountId:'PRIVATE',bridgeId:'PRIVATE',documentId:'PRIVATE',items:['PRIVATE']});

@@ -32,7 +32,7 @@
       'buy', 'sell', 'thesis', 'coverageGap', 'count', 'attempted', 'succeeded',
       'rejected', 'unsupported', 'usersAttempted', 'usersTotal'],
     render: ['received', 'eligible', 'placed', 'filtered', 'count', 'missingProfiles',
-      'missingSymbols', 'missingMC'],
+      'missingSymbols', 'missingMC', 'visible', 'surfaceId', 'scrollY', 'nativeY', 'extent', 'viewportHeight', 'nativeCount', 'hidden', 'pendingMs'],
     passive: ['received', 'retained', 'rejected', 'unsupported'],
     pagination: ['pages', 'received'],
     lifecycle: []
@@ -91,6 +91,9 @@
     } else if (kind === 'render') {
       const source = own(fields, 'source');
       if (source === 'gmgn') out.source = source;
+      const event = own(fields, 'event'), failure = own(fields, 'failure');
+      if (['surface-created','surface-destroyed','validation-failed','validation-deferred','validation-recovered','scroll'].includes(event)) out.event = event;
+      if (['teardown','layout-switch','no-events','unvalidated-surface','stamp-mismatch','stamp-timeout','invalid-index','row-height-changed','nonuniform-rows','slot-index-mismatch','missing-viewport'].includes(failure)) out.failure = failure;
     } else if (kind === 'lifecycle') {
       const event = own(fields, 'event');
       if (EVENTS.has(event)) out.event = event;

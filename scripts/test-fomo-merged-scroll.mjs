@@ -11,11 +11,12 @@ try {
   await page.goto('https://gmgn.ai/');
   const errors=[]; page.on('pageerror',e=>errors.push(e.message));
   await page.evaluate(()=>{
-    window.chrome={storage:{local:{get:(k,cb)=>cb?.({enabled:false}),set:(v,cb)=>cb?.()},onChanged:{addListener(){}}},runtime:{id:'fixture',getURL:p=>p,getManifest:()=>({version:'fixture'}),onMessage:{addListener(){}},sendMessage:(m,cb)=>cb?.({ok:false})}};
+    window.diagnosticMessages=[];
+    window.chrome={storage:{local:{get:(k,cb)=>cb?.({enabled:false}),set:(v,cb)=>cb?.()},onChanged:{addListener(){}}},runtime:{id:'fixture',getURL:p=>p,getManifest:()=>({version:'fixture'}),onMessage:{addListener(){}},sendMessage:(m,cb)=>{if(m.type==="debug-render")window.diagnosticMessages.push(m.fields);cb?.({ok:false});}}};
   });
   await page.addStyleTag({path:new URL('styles.css',root).pathname});
   let source=fs.readFileSync(new URL('content.js',root),'utf8');
-  source=source.replace(/\}\)\(\);\s*$/, `window.__merged={render:(cards,events)=>{settings.enabled=true;lastFullScanAt=Infinity;fomoFollowedLastPollAt=Infinity;fomoFollowedEvents=events;return renderMergedTracker(cards,visibleTrackingFeedEvents(nativeTrackingFeedRows(cards)));}, sync:syncMergedTracker, scan:scanFomoFeed, state:()=>mergedTracker, destroy:()=>{settings.enabled=false;teardownFomoFeed();}};})();`);
+  source=source.replace(/\}\)\(\);\s*$/, `window.__merged={render:(cards,events)=>{settings.enabled=true;settings.debugLogging=true;lastFullScanAt=Infinity;fomoFollowedLastPollAt=Infinity;fomoFollowedEvents=events;return renderMergedTracker(cards,visibleTrackingFeedEvents(nativeTrackingFeedRows(cards)));}, sync:syncMergedTracker, scan:scanFomoFeed, state:()=>mergedTracker, destroy:()=>{settings.enabled=false;teardownFomoFeed();}};})();`);
   source=source.replace('const anchor = mergedTrackerAnchor(m);', `const anchor = mergedTrackerAnchor(m); (window.renderLog ||= []).push({time:performance.now(),y:m.surface.scrollTop,old:m.stamps?.length,next:stamps.length,index:anchor?.index,offset:anchor?.offset,key:anchor?.key});if(window.renderLog.length>40)window.renderLog.shift();`);
   await page.addScriptTag({content:source});
   await page.waitForTimeout(100);
@@ -242,6 +243,11 @@ try {
   assert.equal(await page.locator('.gdh-merged-tracker').count(),0);
   assert.equal(await page.locator('#host > #viewport').count(),1);
   assert.equal(await page.locator('.native-wrap').evaluateAll(els=>els.every(el=>!el.style.translate)),true);
+  const diagnostics=await page.evaluate(()=>window.diagnosticMessages);
+  for(const event of ['surface-created','surface-destroyed','validation-deferred','validation-failed','validation-recovered','scroll']) assert.ok(diagnostics.some(e=>e.event===event),event);
+  assert.ok(diagnostics.some(e=>e.failure==='stamp-timeout'));
+  assert.ok(diagnostics.some(e=>['nonuniform-rows','row-height-changed'].includes(e.failure)));
+  assert.ok(diagnostics.filter(e=>e.event==='scroll').every(e=>Number.isFinite(e.scrollY)&&Number.isFinite(e.nativeY)));
   assert.deepEqual(errors,[]);
   await page.close();
   console.log('PASS merged scroll: 180 native + 72 FOMO reachable down/end/up, chronological/no missing slots, retained single surface, fractional in-place async recycling, native/FOMO arrival anchors, style-only reuse/no observer loop, original native handler/nodes, responsive widths, bounded stale rejection/recovery and teardown; synthetic host only',height);

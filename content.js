@@ -5424,11 +5424,16 @@
       fomoFeedShifted.delete(el);
       return true;
     }
-    state.amount = next;
+    if (state.requestedAmount === next && el.style.translate === state.appliedTranslate) return true;
+    state.requestedAmount = next;
     // React can recycle a wrapper in place, including replacing its style.
     // Avoid writing identical styles: our geometry observer also sees translate.
     const translate = `0px ${next}px`;
     if (el.style.translate !== translate) el.style.translate = translate;
+    // CSSOM rounds fractional values. Compare the browser's serialized value,
+    // not the higher-precision input, when detecting whether our shift remains.
+    state.appliedTranslate = el.style.translate;
+    state.amount = Number.parseFloat(state.appliedTranslate.split(/\s+/)[1]) || 0;
     return true;
   }
 
@@ -5486,7 +5491,7 @@
           const wrapRect = wrap.getBoundingClientRect();
           const parentRect = parent.getBoundingClientRect();
           top = wrapRect.top - parentRect.top - parent.clientTop + parent.scrollTop
-            - (state && wrap.style.translate === `0px ${state.amount}px` ? state.amount : 0);
+            - (state && wrap.style.translate === (state.appliedTranslate ?? `0px ${state.amount}px`) ? state.amount : 0);
         }
         if (!Number.isFinite(top)) top = Number.parseFloat(wrap.style.top);
         // Native rows may be fractional CSS pixels (e.g. 64.5px); offsetHeight
@@ -5500,10 +5505,10 @@
     return null;
   }
 
-  function teardownFomoFeed() {
+  function teardownFomoFeed(reason) {
     for (const el of fomoFeedCards.values()) el.remove();
     fomoFeedCards.clear();
-    destroyMergedTracker();
+    destroyMergedTracker(reason);
     clearFomoFeedShifts();
   }
 
@@ -5534,14 +5539,14 @@
       return;
     }
     const mode = isTrackerTableMode() ? 'table' : 'card';
-    if (fomoFeedLastMode !== null && fomoFeedLastMode !== mode) teardownFomoFeed();
+    if (fomoFeedLastMode !== null && fomoFeedLastMode !== mode) teardownFomoFeed('layout-switch');
     fomoFeedLastMode = mode;
     if (settings.enableFomoFeed !== false && Date.now() - fomoFollowedLastPollAt > FOMO_FEED_POLL_MS) pollFomoFollowedFeed();
 
     const cards = trackerCards().filter((c) => c.isConnected);
     const events = visibleTrackingFeedEvents(nativeTrackingFeedRows(cards));
     if (!events.length) {
-      teardownFomoFeed();
+      teardownFomoFeed('no-events');
       collapseBlockedTrackerRows();
       logTrackingRender(events, cards.length ? 'filtered' : 'no-native-rows');
       return;
@@ -5561,14 +5566,45 @@
   // recycler. Waiting for a mutation observer is too late for removeChild.
   window.addEventListener('click', event => {
     if (event.target instanceof Element && event.target.closest('[data-icon="IconLayoutcard16pxRegular"], [data-icon="IconLayoutlist16pxRegular"]')) {
-      teardownFomoFeed();
+      teardownFomoFeed('layout-switch');
       scheduleTrackingFeedRender();
     }
   }, true);
 
-  function destroyMergedTracker() {
+  let trackerDiagnosticId = 0;
+  let trackerDiagnosticFailure = '';
+  function logTrackerDiagnostic(event, failure = '') {
+    if (settings.debugLogging !== true) return;
+    const m = mergedTracker;
+    const now = performance.now();
+    if (event === 'scroll') {
+      if (!m || now - (m.debugScrollAt || 0) < 250) return;
+      if (m.debugScrollY === m.surface.scrollTop && m.debugNativeY === m.viewport.scrollTop) return;
+      m.debugScrollAt = now;
+      m.debugScrollY = m.surface.scrollTop;
+      m.debugNativeY = m.viewport.scrollTop;
+    }
+    const bounds = m?.surface.getBoundingClientRect();
+    const visible = bounds ? [...fomoFeedCards.values()].filter(el=>{if (!el.isConnected) return false; const r=el.getBoundingClientRect();return r.bottom>bounds.top && r.top<bounds.bottom;}).length : 0;
+    const fields = {source:'gmgn', event, failure, visible, surfaceId:m?.debugId || 0,
+      scrollY:m?.surface.scrollTop || 0, nativeY:m?.viewport.scrollTop || 0,
+      extent:m ? Number.parseFloat(m.extent.style.height) || 0 : 0,
+      viewportHeight:m?.surface.clientHeight || 0, nativeCount:m?.stamps?.length || 0,
+      placed:[...fomoFeedCards.values()].filter(el=>el.isConnected).length,
+      hidden:document.hidden ? 1 : 0,
+      pendingMs:m?.pendingSince ? Math.max(0, now-m.pendingSince) : 0};
+    try { chrome.runtime.sendMessage({type:'debug-render',fields},()=>{void chrome.runtime.lastError;}); } catch { /* invalidated context */ }
+  }
+  function trackerValidationFailure(reason) {
+    if (trackerDiagnosticFailure !== reason) logTrackerDiagnostic('validation-failed', reason);
+    trackerDiagnosticFailure = reason;
+    return false;
+  }
+
+  function destroyMergedTracker(reason) {
     const m = mergedTracker;
     if (!m) return;
+    logTrackerDiagnostic('surface-destroyed', reason || trackerDiagnosticFailure || 'teardown');
     mergedTracker = null;
     m.observer.disconnect();
     m.resize.disconnect();
@@ -5606,6 +5642,7 @@
     // Translated pool rows may enlarge native scrollHeight too; the complete
     // native index, not that transient visual overflow, owns native coordinates.
     m.viewport.scrollTop = Math.max(0, Math.min(nativeY, m.stamps.length * m.h - m.surface.clientHeight));
+    logTrackerDiagnostic('scroll');
     const delta = y - m.viewport.scrollTop;
     for (const el of [...fomoFeedShifted.keys()]) if (!el.isConnected) fomoFeedShifted.delete(el);
     const rows = trackerCards().map(fomoFeedFixedRow).filter(row => row && row.wrap.parentElement === m.spacer);
@@ -5622,15 +5659,16 @@
   // genuinely unknown geometry/index must never bootstrap from visible samples.
   function deferMergedTrackerValidation(spacer) {
     const m = mergedTracker;
-    if (!m || m.spacer !== spacer || !m.surface.isConnected || !spacer.isConnected) return false;
+    if (!m || m.spacer !== spacer || !m.surface.isConnected || !spacer.isConnected) return trackerValidationFailure('unvalidated-surface');
     if (!m.pendingSince) {
       m.pendingSince = performance.now();
+      logTrackerDiagnostic('validation-deferred', 'stamp-mismatch');
       m.pendingTimer = setTimeout(() => {
         m.pendingTimer = 0;
         if (mergedTracker === m) scanFomoFeed();
       }, 1500);
     }
-    if (performance.now() - m.pendingSince >= 1500) return false;
+    if (performance.now() - m.pendingSince >= 1500) return trackerValidationFailure('stamp-timeout');
     syncMergedTracker();
     return true;
   }
@@ -5657,19 +5695,19 @@
     if (!first) return deferMergedTrackerValidation(mergedTracker?.spacer);
     const spacer = first.wrap.parentElement;
     let stamps;
-    try { stamps = JSON.parse(spacer.getAttribute('data-gdh-native-index')); } catch { return false; }
+    try { stamps = JSON.parse(spacer.getAttribute('data-gdh-native-index')); } catch { return trackerValidationFailure('invalid-index'); }
     // Full index ownership is mandatory. Unknown host layouts fail closed rather
     // than silently losing native rows or pretending visible samples are history.
     if (!Array.isArray(stamps) || !stamps.length || stamps.length > 10000
-      || !stamps.every((t, i) => Number.isFinite(t) && t > 0 && (!i || stamps[i - 1] >= t))) return false;
+      || !stamps.every((t, i) => Number.isFinite(t) && t > 0 && (!i || stamps[i - 1] >= t))) return trackerValidationFailure('invalid-index');
     const h = first.h;
     let pending = false;
-    if (mergedTracker?.spacer === spacer && Math.abs(mergedTracker.h - h) > .5) return false;
+    if (mergedTracker?.spacer === spacer && Math.abs(mergedTracker.h - h) > .5) return trackerValidationFailure('row-height-changed');
     for (const card of cards) {
       const row = fomoFeedFixedRow(card);
-      if (!row || row.wrap.parentElement !== spacer || Math.abs(row.h - h) > .5) return false;
+      if (!row || row.wrap.parentElement !== spacer || Math.abs(row.h - h) > .5) return trackerValidationFailure('nonuniform-rows');
       const index = Math.round(row.top / h);
-      if (Math.abs(index * h - row.top) > .5 || index < 0 || index >= stamps.length) return false;
+      if (Math.abs(index * h - row.top) > .5 || index < 0 || index >= stamps.length) return trackerValidationFailure('slot-index-mismatch');
       // GMGN may leave overscan metadata stale indefinitely. Its complete index
       // still owns those slots; validate card stamps when the native slot enters
       // the viewport, not while an off-screen recycled row is parked in the pool.
@@ -5683,7 +5721,7 @@
     if (!mergedTracker) {
       let viewport = spacer.parentElement;
       while (viewport && viewport !== document.body && !/(auto|scroll)/.test(getComputedStyle(viewport).overflowY)) viewport = viewport.parentElement;
-      if (!viewport || viewport === document.body) return false;
+      if (!viewport || viewport === document.body) return trackerValidationFailure('missing-viewport');
       const originalStyle = viewport.style.cssText;
       const surface = document.createElement('div');
       surface.className = 'gdh-merged-tracker';
@@ -5707,7 +5745,7 @@
           const previous = mergedTracker.geometry.get(el);
           mergedTracker.geometry.set(el, geometry);
           const shift = fomoFeedShifted.get(el);
-          return previous !== geometry || (shift && el.style.translate !== `0px ${shift.amount}px`);
+          return previous !== geometry || (shift && el.style.translate !== (shift.appliedTranslate ?? `0px ${shift.amount}px`));
         }).some(Boolean);
         if (!changed) return;
         scheduleTrackingFeedRender();
@@ -5716,7 +5754,8 @@
       observer.observe(spacer, { childList:true, subtree:true, attributes:true, attributeFilter:['style','data-gdh-native-index','data-gdh-native-rows','data-gdh-track-ts','data-gdh-token-blocked'] });
       const resize = new ResizeObserver(() => { syncMergedTracker(); scheduleTrackingFeedRender(); });
       resize.observe(surface);
-      mergedTracker = { surface, extent, viewport, spacer, originalStyle, observer, resize, slots:[], index:'', geometry:new WeakMap(), h };
+      mergedTracker = { surface, extent, viewport, spacer, originalStyle, observer, resize, slots:[], index:'', geometry:new WeakMap(), h, debugId:++trackerDiagnosticId };
+      logTrackerDiagnostic('surface-created');
       surface.addEventListener('scroll', syncMergedTracker, { passive:true });
       mergedTracker.onWheel = event => {
         if (mergedTracker?.viewport !== viewport) return;
@@ -5727,6 +5766,8 @@
     }
     const m = mergedTracker;
     const anchor = mergedTrackerAnchor(m);
+    if (m.pendingSince || trackerDiagnosticFailure) logTrackerDiagnostic('validation-recovered');
+    trackerDiagnosticFailure = '';
     clearTimeout(m.pendingTimer);
     m.pendingTimer = 0;
     m.pendingSince = 0;
