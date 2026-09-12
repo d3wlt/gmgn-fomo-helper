@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "better gmgn",
-  "version": "0.53.13",
+  "version": "0.53.14",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAotBvFq65NLPkl/sfJPAOUsAY3wrS4I0WOVQ4K8D6Vy9tZyNnRoDrntLCxiJnlJQ88+jPsBmpgL3/Km3dqUFzJnmPqlgbCFrzCWXi6YaX6lqYFAip0MUOPnNogNkY6flkwP+NurfV8Hf5ZlXnN/moR9DmdN15M9Qg390yqIhQFapxozPGZUbj1vHyCiJJ6fHo48DLfJHNhixAa/LLUF6msICVgDyfU/Rnj7RWEWbpUhA0CcQzUa5MY14IcS4Ktkegb6FGNgUa2p/g2+OjIBGIvAYvVGNgYuwN9GGdA5mx+PPxRwKegne0tFrX7Irzk4xG9A2LiTIkzaWjcptRrP+01QIDAQAB",
   "description": "Trading tools for GMGN.ai and DeBot: highlighted developers, J7Tracker social activity, and position alerts.",
   "homepage_url": "https://github.com/d3wlt/985gmgn-helper-private",

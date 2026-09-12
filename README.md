@@ -1,6 +1,6 @@
 # better gmgn
 
-An independent private copy of the Chrome MV3 extension “better gmgn.” Version 0.53.13 is based on upstream version 0.46.27 and adds trading-oriented interface enhancements to GMGN.ai and DeBot. FOMO Following cards expose GMGN's real native QuickBuy on hover, using its Following wallet/amount settings. Clicking it can execute a trade through GMGN; the helper never submits trades automatically or implements its own trading API. The adapter validates chain/token identity and native context and fails closed if the supported native component contract is unavailable.
+An independent private copy of the Chrome MV3 extension “better gmgn.” Version 0.53.14 is based on upstream version 0.46.27 and adds trading-oriented interface enhancements to GMGN.ai and DeBot. FOMO Following cards expose GMGN's real native QuickBuy on hover, using its Following wallet/amount settings. Clicking it can execute a trade through GMGN; the helper never submits trades automatically or implements its own trading API. The adapter validates chain/token identity and native context and fails closed if the supported native component contract is unavailable.
 
 This repository is not affiliated with GMGN, DeBot, FOMO, Pump, J7Tracker, or the original upstream author.
 
