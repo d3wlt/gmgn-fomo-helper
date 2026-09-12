@@ -1,58 +1,82 @@
-# better gmgn
+# GMGN FOMO Helper
 
-An independent private copy of the Chrome MV3 extension “better gmgn.” Version 0.53.14 is based on upstream version 0.46.27 and adds trading-oriented interface enhancements to GMGN.ai and DeBot. FOMO Following cards expose GMGN's real native QuickBuy on hover, using its Following wallet/amount settings. Clicking it can execute a trade through GMGN; the helper never submits trades automatically or implements its own trading API. The adapter validates chain/token identity and native context and fails closed if the supported native component contract is unavailable.
+A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.15** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
 
-This repository is not affiliated with GMGN, DeBot, FOMO, Pump, J7Tracker, or the original upstream author.
+**J7Tracker and DeBot integrations have been removed.** No J7Tracker account, tab or companion service is required; the extension no longer integrates with DeBot. The native GMGN tracker and passive FOMO Following feed remain separate from that retired integration.
 
-## Install manually
+This project is not affiliated with GMGN, FOMO or the original upstream author.
 
-1. Download the versioned ZIP from [GitHub Releases](https://github.com/d3wlt/985gmgn-helper-private/releases).
-2. Verify its SHA-256 checksum against the accompanying `.sha256` file.
-3. Extract the ZIP to a permanent local folder.
-4. Open `chrome://extensions` or `edge://extensions`.
-5. Enable **Developer mode**.
-6. Select **Load unpacked** and choose the extracted folder.
+## Install and update
 
-Chrome does not automatically update unpacked extensions. To update, download and verify a newer ZIP, replace the extracted files, then select **Reload** on the extension card. No companion application is required.
+1. Download the versioned extension ZIP and matching `.sha256` file from [Releases](https://github.com/d3wlt/gmgn-fomo-helper/releases). Repository access is required.
+2. Verify the ZIP checksum, then extract it to a permanent folder.
+3. Open `chrome://extensions` or `edge://extensions` and enable **Developer mode**.
+4. Select **Load unpacked** and choose the extracted folder.
+5. Refresh GMGN and your existing signed-in FOMO tab so the page observers initialize.
 
-## Features
+For an update, replace the files in your existing unpacked extension folder, select **Reload** on its extension card, and refresh the supported pages. Chromium does not automatically update unpacked extensions. Keep the same browser profile; the extension identity is preserved across the repository rename.
 
-- Highlight watched developer wallets and show developer launch performance.
-- Save developer wallets from GMGN details and filter blocked callout accounts.
-- Show manifesto notifications and a time-ordered manifesto list.
-- Share special-watch wallet colors and pin preferences across GMGN and DeBot.
-- Add a FOMO panel for token holders, narratives, and trades using your browser-local FOMO session, with explicit buy/sell and First/More/Partial/All position labels. When FOMO's token feed is empty, the Trades tab reconstructs activity from the visible holders' trade histories.
-- Translate non-English FOMO and DeBot narratives into English with the browser's local Translation API while keeping the original text.
-- Insert account-filtered J7Tracker activity into GMGN and DeBot tracking: bounded history catch-up and live FOMO buys, sells, and narratives plus Pump.fun callouts and replies. Open `j7tracker.io` once while signed in to connect the same browser profile.
-- Interleave FOMO Following and J7/Pump activity chronologically with original native GMGN cards using one mapped scroll surface. No capped split pane. The native virtualizer index and fractional row heights are validated; unsupported layouts preserve native rows without injecting FOMO. Followed-user highlighting, username-first labels, compact badges and native token blocking are preserved.
-- Alert on held-token price surges after confirming the current balance and GMGN app notification setting.
-- Show 👥N only on the open token page’s bottom-right FOMO button, with followed-holder names on hover. No token-list or tracker holder lookups; refreshes once per minute while visible. The FOMO Holders tab keeps its existing followed-user highlighting.
+## What it does
+
+### One GMGN + FOMO tracker
+
+- Interleaves passive FOMO Following activity with original native GMGN cards in one chronological panel and one scrollbar.
+- Handles fractional native row heights and asynchronous row recycling without rebuilding the panel during normal scrolling.
+- Preserves your reading position when new activity arrives below the top. Unsupported geometry or persistently stale index data fails closed instead of guessing native row positions.
+- Keeps original native GMGN row actions, token blocking and followed-user highlighting.
+- FOMO cards can expose GMGN's **native QuickBuy** on hover, including Robinhood. It uses GMGN's Following wallet/amount settings and validates the current account, chain and token.
+
+**Clicking native QuickBuy can execute a real trade.** The helper does not submit trades automatically or implement its own trading API. Native controls stay unavailable if their supported context cannot be verified.
+
+### Passive Following feed
+
+Keep a FOMO tab open and signed in so the native application receives activity. Open your FOMO profile if the following roster has not initialized, and select Alerts as needed to receive native activity. The helper observes supported native history responses and live frames; it does **not** independently poll the Following feed, open sockets, subscribe, reconnect or create hidden keeper tabs.
+
+- Tracker status distinguishes waiting for a tab, account, following roster or activity from connection states.
+- Closing, signing out, navigating away from or suspending the source tab can stop delivery.
+- Missed activity is recovered only when FOMO itself receives it.
+- The account-isolated buffer is bounded to 500 events; the tracker displays the latest 40 eligible rows, not complete lifetime history.
+- Grouped multi-user and transfer rows are not supported. Worker/browser restarts may clear the passive event cache; subsequent native observations refill it.
+- Names, avatars, tickers and market caps come from observed native data. Missing metadata has explicit fallbacks rather than invented values.
+
+### Token context
+
+- A FOMO token panel on GMGN shows holders, narratives and trades, with buy/sell and First/More/Partial/All labels, source information, refresh time and coverage warnings.
+- On GMGN, **👥N** on the open token page's bottom-right FOMO button shows current holders among people you follow on FOMO. Hover shows returned names.
+- Holder-count requests cover only the open token and exact chain, with one-minute successful-result caching while visible. No token-list or tracker holder-count scanning. Unavailable data is distinct from confirmed zero.
+- Holder-history reconstruction is a limited sample of current holders, not complete token history. Fully exited users can be missing; neither a badge nor a successful response proves there have been no sells.
+- Supported non-English narratives can use the browser's local Translation API while retaining the original text.
+
+The token panel and holder count may make their own scoped requests using your browser-local FOMO session. The **passive-only** guarantee describes the Following tracker, not every token-panel feature.
+
+### GMGN utilities
+
+- Highlight watched developer wallets, show developer launch performance, save developer wallets and filter blocked callout accounts.
+- Monitor your own positions for price surges with fresh ownership confirmation, valid cost/balance checks and native notification-setting handling. Hybrid multichain holdings and Robinhood are supported.
 - Hide the third-party Lightning Trade button.
-- Show FOMO data source, last successful refresh, partial coverage, and Following-only views on GMGN and DeBot.
-- Passively reuse native FOMO Alerts already received by an open signed-in FOMO tab, forwarding observed REST history and live activity into GMGN. The direct Following tracker makes no independent FOMO requests, sockets, subscriptions or reconnects.
-- Use names, avatars, tickers and market-cap values already present in native activity. Passive mode does not issue metadata/profile recovery requests; missing fields remain explicit rather than being invented.
-- Refresh already-rendered rows when metadata changes, without duplicating trades or replaying entry animation. Unavailable tickers show a shortened token address rather than a blank; unresolved people show a user-ID fallback rather than an invented name.
-- Recover from request failures with retry/reconnect guidance and optional allowlisted clipboard diagnostics.
 
-Direct Following is passive-only. Keep one FOMO tab open and signed in, and select Alerts so the native application receives the relevant activity. Refresh FOMO after installing or reloading this extension so document-start observation is active. A visible tracker status distinguishes waiting for a tab/account/following/activity from connected/disconnected states. Closing, navigating away, signing out or suspending the source tab stops live delivery; no hidden keeper tab is opened. Missed activity is recovered only if FOMO itself receives it. The account-isolated feed is bounded to 500 events and the tracker displays the latest 40 eligible rows; this is not complete lifetime history. Grouped multi-user and transfer rows remain unsupported. The passive event cache is memory-only: worker/browser restarts may clear old rows, and only subsequent native observations refill it. Refresh FOMO to reobserve its native history/session if needed.
+Open the native GMGN **Holding** panel to initialize the selected wallets. Surge monitoring needs a visible GMGN page and recent captured native request scopes. Expired scopes and ambiguous chain/account data fail closed. Manifesto pop-ups/list tabs, Flap tax badges, custom BSC RPC settings J7Tracker/Pump activity and DeBot support are not included.
 
-Holder-history reconstruction is a limited current-holder sample, not a complete token history. Fully exited users may be absent; Following-only filtering applies to the loaded sample. Neither a successful response nor a holder badge proves there have been no sells.
+## Diagnostics
 
-## Debug logging
+In the extension popup, open **Diagnostics**, enable **Debug logging**, reproduce the issue, then select **Export logs**. Include a screenshot and approximate time when reporting a problem; turn logging off afterwards. **Clear logs** removes stored history, not files already exported.
 
-Open the extension popup → **Diagnostics** → enable **Debug logging**. This toggle saves immediately; no Save settings click is needed. Reproduce the problem, click **Export logs**, and send the JSON with a screenshot and the approximate issue time. Turn logging off afterwards; **Clear logs** removes the saved history.
-
-Logging is off by default and local-only. The export contains extension version, timestamps, categorical FOMO request outcomes/timings, collection/metadata counts, and GMGN direct-Following received/eligible/actually-placed counts. It does not include credentials, cookies, raw URLs/responses, user names/IDs, wallet/token addresses, trade IDs or thesis text. No automatic uploads or download permission are used. Consequently a screenshot is still needed to identify a specific missing event. This is targeted feed diagnostics, not a raw console/network dump or instrumentation of every extension feature.
-
-Pagination records include pages fetched, items received, whether more pages remain, cursor advancement and a categorical stop reason—never cursor values. Successful requests to the same endpoint/status are coalesced into ten-second buckets: `count` is the request count and `durationMs` is the maximum duration in that bucket. Failures remain individual records.
-
-The ring retains at most 500 entries from the previous 24 hours, pruned on use, with batched writes and five-second render sampling. It survives worker/browser restarts. Clear waits for pending writes so old entries cannot return. Exported files are not erased by Clear logs. Storage failures are nonfatal; unsaved trailing entries can be lost if the browser stops before the batch write.
+Logging is off by default and local-only. It records bounded categorical outcomes, timings and counts—not credentials, cookies, raw responses, user names/IDs, wallet/token addresses, trade IDs or narrative text. There are no automatic uploads. The ring holds at most 500 entries from the previous 24 hours; batched writes can lose trailing unsaved entries if the browser stops.
 
 ## Privacy and safety
 
-The extension stores settings, cached display data, and supported-site session mirrors in Chrome local storage. It does not include analytics, remote executable code, wallet signing, or transaction execution. See [PRIVACY.md](PRIVACY.md) for details.
+Settings, supported-site session mirrors and bounded display/diagnostic data are stored in browser extension storage. No browser profiles or credentials are bundled in release ZIPs. The helper has no analytics or remote executable code. Native trading buttons can execute trades through the host site when you explicitly activate them; this is distinct from the helper submitting transactions itself. See [PRIVACY.md](PRIVACY.md).
 
-## Build a release
+## Development and releases
+
+Requirements: Node.js 22+, Python 3 for the portable builder, or PowerShell for the Windows builder.
+
+```bash
+npm ci
+npx playwright install chromium
+npm run verify
+python3 scripts/build-release.py --tag v0.53.15
+```
 
 On PowerShell:
 
@@ -60,26 +84,10 @@ On PowerShell:
 ./scripts/build-release.ps1
 ```
 
-The script creates only `dist/985gmgn-helper-vX.Y.Z.zip` and its `.sha256` checksum. Release notes are built from the matching current note with `scripts/build-release-notes.ps1`.
+Builders use the canonical runtime-file allowlist and produce `dist/gmgn-fomo-helper-vX.Y.Z.zip` plus its SHA-256 checksum. Tests, screenshots, local diagnostics and dependencies stay outside the package. Release notes must match the manifest version and include the required installation, usage, updating and privacy sections.
 
-On macOS or Linux, the portable builder reads the same release-file allowlist and verifies every ZIP entry:
-
-```bash
-python3 scripts/build-release.py --tag v0.53.5
-```
-
-Run the repository gates (Node.js 22+):
-
-```bash
-npm ci
-npx playwright install chromium
-npm run verify
-```
-
-The audit retains historical release notes and derives the current version from the manifest. Data and UI tests execute production functions with controlled fixtures. Browser tests execute the full content scripts and real styles in isolated Chromium pages with synthetic responses: no live accounts or authenticated API access. They exercise filtering, stale data, account/token/tab races, extension-message failures, rate limits, and panel lifecycle. Screenshots and structured results are written under `test-results/` and excluded from the release ZIP.
-
-These fixture gates do not replace a signed-in smoke test against changed third-party APIs. J7Tracker's public Socket.IO path and invalid-session response are checked live without using an account; a signed-in J7Tracker session is still required to validate account-specific history. Unpacked extension reload and GMGN/DeBot page refresh are required after installation.
+The tag-triggered GitHub workflow runs the verification suite before building and publishing release assets. Fixture tests cover production code with synthetic data and isolated Chromium, including account/route races, passive delivery, native-control guards, merged scrolling, retirement of removed integrations and MV3 lifecycle. They do not replace a signed-in smoke test when third-party interfaces change.
 
 ## Repository
 
-Private-copy source and releases: <https://github.com/d3wlt/985gmgn-helper-private>
+Source and releases: **[d3wlt/gmgn-fomo-helper](https://github.com/d3wlt/gmgn-fomo-helper)** (private).

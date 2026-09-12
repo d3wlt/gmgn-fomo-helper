@@ -1,5 +1,5 @@
 {
-  "name": "better-gmgn-private",
+  "name": "gmgn-fomo-helper",
   "private": true,
   "scripts": {
     "test": "node scripts/test-hybrid-holdings.mjs && node scripts/test-dev-performance-chains.mjs && node scripts/test-holder-context-lifecycle.mjs && node scripts/test-debug-log.mjs && node scripts/test-fomo-passive.mjs && node scripts/verify-audit-fixes.mjs && node scripts/test-fomo-data.mjs && node scripts/test-retired-integrations.mjs && node scripts/test-fomo-ui.mjs",

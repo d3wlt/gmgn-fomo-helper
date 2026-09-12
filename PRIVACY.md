@@ -1,6 +1,6 @@
 # Privacy
 
-better gmgn runs only on the sites declared in `manifest.json`. It injects packaged extension code for interface enhancements, browser-local session mirroring, and optional account-setting synchronization. It does not load remote executable code.
+GMGN FOMO Helper runs only on the sites declared in `manifest.json`. It injects packaged extension code for interface enhancements, browser-local session mirroring, and optional account-setting synchronization. It does not load remote executable code.
 
 ## Data stored locally
 

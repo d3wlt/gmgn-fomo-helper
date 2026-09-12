@@ -669,7 +669,7 @@ await test('The background avoids direct Privy session calls and public secrets'
 
 await test('The download page is safe and ZIP-only', () => {
   assert.ok(!site.includes('.innerHTML ='));
-  assert.ok(site.includes('985gmgn-helper-private/releases'));
+  assert.ok(site.includes('gmgn-fomo-helper/releases'));
   assert.ok(site.includes('Load unpacked'));
   assert.ok(site.includes('.sha256'));
 });

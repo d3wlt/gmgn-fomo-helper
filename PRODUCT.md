@@ -1,6 +1,6 @@
 # Product overview
 
-better gmgn is an independent Chrome MV3 interface extension for GMGN.ai. This private copy preserves the upstream trading-view enhancements while making the maintained source and user interface English-only.
+GMGN FOMO Helper is an independent Chrome MV3 interface extension for GMGN.ai. This private copy preserves the upstream trading-view enhancements while making the maintained source and user interface English-only.
 
 ## Core behavior
 
@@ -19,4 +19,4 @@ Distribution is ZIP-only through this repository's GitHub Releases page. Users v
 
 This project has no analytics, remote code, wallet signing, or transaction execution. It is not affiliated with the supported websites or the original upstream author.
 
-Repository: <https://github.com/d3wlt/985gmgn-helper-private>
+Repository: <https://github.com/d3wlt/gmgn-fomo-helper>
