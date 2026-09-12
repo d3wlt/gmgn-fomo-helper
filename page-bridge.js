@@ -52,7 +52,7 @@
     const candidates = [payload, payload?.data, payload?.result];
     const rows = candidates.find((value) => Array.isArray(value));
     if (!rows) return null;
-    const allowed = new Set(['sol', 'bsc', 'base']);
+    const allowed = new Set(['sol', 'bsc', 'base', 'robinhood']);
     const sanitized = [];
     for (const row of rows) {
       const chain = String(row?.push_chain || '').trim().toLowerCase();
@@ -102,6 +102,7 @@
         });
         return;
       }
+      if (token !== gmgnPageAccessToken()) return emitHoldingConfigResult({ ok: false, reason: 'login-required', stage: 'account-changed' });
       emitHoldingConfigResult({ ok: true, data });
     } catch {
       emitHoldingConfigResult({ ok: false, reason: 'unavailable', stage: 'fetch' });
@@ -116,6 +117,183 @@
       .finally(() => { holdingConfigInflight = null; });
   });
 
+  // Request descriptors and credentials stay in MAIN. Never infer/union wallet groups.
+  const nativeHoldingFetch = window.fetch;
+  const holdingScopes = new Map();
+  const holdingReads = new Map();
+  const holdingCaptures = new Set();
+  const holdingChains = new Set(['sol', 'bsc', 'base', 'robinhood']);
+  let holdingAccount = '';
+  let holdingSequence = 0;
+  const HOLDING_SCOPE_MAX_AGE = 10 * 60 * 1000;
+
+  function holdingAccountCurrent() {
+    const token = gmgnPageAccessToken();
+    if (token !== holdingAccount) {
+      holdingAccount = token;
+      holdingScopes.clear();
+      // Keep old reads counted until their deadline; they cannot cross this account boundary.
+    }
+    return token;
+  }
+
+  function holdingDeadline(work, ms = 10000, controller = null) {
+    let timer;
+    return Promise.race([Promise.resolve().then(work), new Promise((_, reject) => {
+      timer = window.setTimeout(() => { controller?.abort(); reject(new Error('timeout')); }, ms);
+    })]).finally(() => window.clearTimeout(timer));
+  }
+
+  function holdingRequestUrl(raw) {
+    try {
+      const url = new URL(raw, location.href);
+      return url.origin === location.origin && !url.username && !url.password && location.hostname === 'gmgn.ai'
+        && ['/td/api/v1/wallets/holdings', '/td/api/v1/wallets/hybrid/holdings'].includes(url.pathname) ? url : null;
+    } catch { return null; }
+  }
+
+  function rememberHoldingRequest(url, method, text, token, sequence, at) {
+    if (!token || token !== holdingAccountCurrent()) return;
+    let groups;
+    let body;
+    if (url.pathname.endsWith('/hybrid/holdings')) {
+      if (method !== 'POST' || typeof text !== 'string' || text.length > 65536) return;
+      try { body = JSON.parse(text); } catch { return; }
+      groups = body?.chain_wallets;
+    } else {
+      if (method !== 'GET') return;
+      groups = [{ chain: url.searchParams.get('chain'), wallet_addresses: url.searchParams.getAll('wallet_addresses') }];
+    }
+    if (!Array.isArray(groups) || !groups.length || groups.length > 8) return;
+    const wallets = new Map();
+    for (const group of groups) {
+      const chain = group?.chain;
+      if (!holdingChains.has(chain) || wallets.has(chain) || !Array.isArray(group.wallet_addresses)
+        || !group.wallet_addresses.length || group.wallet_addresses.length > 100) return;
+      const addresses = group.wallet_addresses.map(normalizeTokenStatAddress);
+      if (addresses.some((address) => !address)) return;
+      wallets.set(chain, new Set(addresses));
+    }
+    const descriptor = { url: url.href, method, body: body ? JSON.stringify(body) : undefined,
+      wallets, token, sequence, at };
+    for (const chain of wallets.keys()) {
+      if ((holdingScopes.get(chain)?.sequence || 0) < sequence) holdingScopes.set(chain, descriptor);
+    }
+  }
+
+  function captureHoldingRequest(input, init) {
+    const url = holdingRequestUrl(typeof input === 'string' || input instanceof URL ? String(input) : input?.url);
+    if (!url || holdingCaptures.size >= 8) return;
+    const token = holdingAccountCurrent();
+    const sequence = ++holdingSequence;
+    const at = Date.now();
+    const method = String(init?.method || input?.method || 'GET').toUpperCase();
+    let body;
+    try {
+      body = () => init?.body;
+      // Clone synchronously, before native fetch consumes a Request's stream.
+      if (init?.body === undefined && typeof input?.clone === 'function') {
+        const copy = input.clone();
+        body = () => copy.text();
+      }
+    } catch { return; }
+    const task = holdingDeadline(body).then((text) => rememberHoldingRequest(url, method, text, token, sequence, at))
+      .catch(() => {}).finally(() => holdingCaptures.delete(task));
+    holdingCaptures.add(task);
+  }
+
+  if (typeof nativeHoldingFetch === 'function') {
+    window.fetch = function gdhObserveHoldingFetch(input, init) {
+      try { captureHoldingRequest(input, init); } catch { /* preserve native request */ }
+      return nativeHoldingFetch.call(this, input, init);
+    };
+  }
+  if (window.XMLHttpRequest?.prototype) {
+    const requests = new WeakMap();
+    const proto = window.XMLHttpRequest.prototype;
+    const open = proto.open;
+    const send = proto.send;
+    proto.open = function(method, url, ...rest) {
+      requests.set(this, { method, url });
+      return open.call(this, method, url, ...rest);
+    };
+    proto.send = function(body) {
+      const request = requests.get(this);
+      try { if (request) captureHoldingRequest(request.url, { method: request.method, body }); } catch { /* native */ }
+      return send.call(this, body);
+    };
+  }
+
+  function sanitizeHoldingRows(rows, wallets, chain) {
+    if (!Array.isArray(rows) || rows.length > 1000) return null;
+    return rows.flatMap((row) => {
+      const wallet = normalizeTokenStatAddress(row?.wallet_address);
+      const address = normalizeTokenStatAddress(row?.token_address || row?.token_basic_stats?.address);
+      if (!wallets.has(wallet) || !address || (row?.chain && row.chain !== chain)) return [];
+      const clean = { token_address: address, symbol: String(row?.token_basic_stats?.symbol || row?.symbol || '').slice(0, 24) };
+      for (const field of ['balance', 'accu_amount', 'accu_cost', 'accu_fee']) {
+        const value = Number(row?.[field]);
+        clean[field] = Number.isFinite(value) && value >= 0 ? value : 0;
+      }
+      return [clean];
+    });
+  }
+
+  async function readHoldingScope(descriptor) {
+    if (descriptor.token !== holdingAccountCurrent()
+      || ![...descriptor.wallets.keys()].some((chain) => holdingScopes.get(chain) === descriptor)) return [];
+    if (holdingReads.has(descriptor)) return holdingReads.get(descriptor);
+    if (holdingReads.size >= 4) return [];
+    const controller = new AbortController();
+    const task = holdingDeadline(async () => {
+      const response = await nativeHoldingFetch.call(window, descriptor.url, {
+        method: descriptor.method, body: descriptor.body, credentials: 'include', redirect: 'error', signal: controller.signal,
+        headers: { Authorization: `Bearer ${descriptor.token}`, 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
+      });
+      const payload = await response.json();
+      if (!response.ok || payload?.code !== 0 || descriptor.token !== holdingAccountCurrent()) return [];
+      const hybrid = descriptor.method === 'POST';
+      const list = hybrid ? payload?.data?.list : [{ chain: [...descriptor.wallets.keys()][0], holdings: payload?.data?.holdings }];
+      if (!Array.isArray(list)) return [];
+      const results = [];
+      for (const [chain, wallets] of descriptor.wallets) {
+        if (holdingScopes.get(chain) !== descriptor) continue;
+        const groups = list.filter((group) => group?.chain === chain);
+        if (groups.length !== 1) continue;
+        const rows = sanitizeHoldingRows(groups[0].holdings, wallets, chain);
+        if (rows) results.push({ chain, rows, sequence: descriptor.sequence });
+      }
+      return results;
+    }, 10000, controller).catch(() => []).finally(() => {
+      if (holdingReads.get(descriptor) === task) holdingReads.delete(descriptor);
+    });
+    holdingReads.set(descriptor, task);
+    return task;
+  }
+
+  let holdingBridgeBusy = false;
+  document.addEventListener('gdh-holdings-request', async () => {
+    if (holdingBridgeBusy) return;
+    let request;
+    try { request = JSON.parse(document.documentElement?.getAttribute('data-gdh-holdings-request') || 'null'); } catch { return; }
+    if (!request || !/^[a-z0-9-]{1,80}$/.test(request.id) || (request.chain && !holdingChains.has(request.chain))) return;
+    holdingBridgeBusy = true;
+    const token = holdingAccountCurrent();
+    try {
+      await Promise.all([...holdingCaptures]);
+      const descriptors = [...new Set([...holdingScopes].filter(([chain, item]) =>
+        (!request.chain || request.chain === chain) && Date.now() - item.at < HOLDING_SCOPE_MAX_AGE).map(([, item]) => item))];
+      const results = token ? (await Promise.all(descriptors.map(readHoldingScope))).flat() : [];
+      const data = token === holdingAccountCurrent() && !holdingCaptures.size ? results.filter((item) =>
+        (!request.chain || item.chain === request.chain) && holdingScopes.get(item.chain)?.sequence === item.sequence)
+        .map(({ chain, rows }) => ({ chain, rows })) : [];
+      if (!document.documentElement) return;
+      document.documentElement.setAttribute('data-gdh-holdings-result', JSON.stringify({ id: request.id, ok: data.length > 0, data }));
+      document.dispatchEvent(new Event('gdh-holdings-result'));
+      document.documentElement.removeAttribute('data-gdh-holdings-result');
+    } finally { holdingBridgeBusy = false; }
+  });
+
   function rememberTokenStatSubscription(socket, data) {
     if (typeof data !== 'string' || !data.includes('token_stat')) return;
     let message;
@@ -128,8 +306,11 @@
       for (const rawAddress of addresses) {
         const address = normalizeTokenStatAddress(rawAddress);
         if (!address) continue;
-        if (message.action === 'unsubscribe') chains.delete(address);
-        else if (message.action === 'subscribe' && chain) chains.set(address, chain);
+        const subscribed = chains.get(address) || new Set();
+        if (message.action === 'unsubscribe') subscribed.delete(chain);
+        else if (message.action === 'subscribe' && chain) subscribed.add(chain);
+        if (subscribed.size) chains.set(address, subscribed);
+        else chains.delete(address);
       }
     }
     tokenStatChains.set(socket, chains);
@@ -143,7 +324,10 @@
     const chains = tokenStatChains.get(socket);
     const items = message.data.slice(0, 200).map((raw) => {
       const address = normalizeTokenStatAddress(raw?.a || raw?.address);
-      const chain = String(raw?.c || raw?.chain || chains?.get(address) || '').trim().toLowerCase();
+      const subscribed = chains?.get(address);
+      // A shared EVM address is not a chain identity. Ambiguous untagged ticks are ignored.
+      const inferredChain = subscribed?.size === 1 ? [...subscribed][0] : '';
+      const chain = String(raw?.c || raw?.chain || inferredChain).trim().toLowerCase();
       const price = Number(raw?.p ?? raw?.price);
       const price5m = Number(raw?.p5m ?? raw?.price_5m);
       const pct5m = Number(raw?.pcp5m ?? raw?.price_change_percent5m);

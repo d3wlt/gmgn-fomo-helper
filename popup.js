@@ -128,12 +128,17 @@ function renderGmgnHoldingSyncState(state) {
     gmgnHoldingSyncStatus.className = 'sync-status is-warn';
     return;
   }
-  const labels = { sol: 'SOL', bsc: 'BSC', base: 'Base' };
+  const labels = { sol: 'SOL', bsc: 'BSC', base: 'Base', robinhood: 'Robinhood' };
   const enabled = (Array.isArray(state.enabledChains) ? state.enabledChains : [])
     .map((chain) => labels[chain] || chain).join(', ');
   gmgnHoldingSyncStatus.textContent = enabled
     ? `GMGN app setting synced: enabled for ${enabled}`
-    : 'GMGN app setting synced: position price alerts are disabled';
+    : state.robinhoodFallback === true
+      ? 'GMGN app setting synced: native chains disabled'
+      : 'GMGN app setting synced: position price alerts are disabled';
+  if (state.robinhoodFallback === true) {
+    gmgnHoldingSyncStatus.textContent += '. Robinhood uses the extension toggle (no native app setting); fresh holdings confirmation is required.';
+  }
   gmgnHoldingSyncStatus.className = 'sync-status is-ok';
 }
 

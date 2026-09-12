@@ -4275,8 +4275,11 @@
   }
 
   function holdingSignalAllowed(chain) {
+    if (settings.enableHoldingSurge === false) return false;
     if (!gmgnHoldingSignalConfig.loaded) return true;
-    return gmgnHoldingSignalConfig.byChain.get(String(chain || '').toLowerCase()) === true;
+    const normalized = String(chain || '').toLowerCase();
+    if (normalized === 'robinhood' && !gmgnHoldingSignalConfig.byChain.has(normalized)) return true;
+    return gmgnHoldingSignalConfig.byChain.get(normalized) === true;
   }
 
   function saveGmgnHoldingSignalSyncState(state) {
@@ -4348,6 +4351,7 @@
         saveGmgnHoldingSignalSyncState({
           synced: true,
           source: 'gmgn-app',
+          robinhoodFallback: !next.has('robinhood'),
           enabledChains: [...next].filter(([, enabled]) => enabled).map(([chain]) => chain),
           disabledChains: [...next].filter(([, enabled]) => !enabled).map(([chain]) => chain),
           attemptedAt: gmgnHoldingSignalConfig.at,
@@ -4492,84 +4496,75 @@
     return !prev || prev.symbol !== next.symbol || prev.cost !== next.cost;
   }
 
-  function latestHoldingApiUrl(chain) {
-    try {
-      const entries = performance.getEntriesByType('resource');
-      for (let i = entries.length - 1; i >= 0; i -= 1) {
-        const raw = String(entries[i]?.name || '');
-        if (!raw.includes('/td/api/v1/wallets/holdings?')) continue;
-        const url = new URL(raw);
-        if (url.origin !== location.origin || url.pathname !== '/td/api/v1/wallets/holdings') continue;
-        if (String(url.searchParams.get('chain') || '').toLowerCase() !== chain) continue;
-        if (!url.searchParams.getAll('wallet_addresses').length) continue;
-        return url;
-      }
-    } catch {
-    }
-    return null;
+  function requestHoldingSnapshot() {
+    return new Promise((resolve) => {
+      if (!document.documentElement) return resolve({ ok: false });
+      const id = `h-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      const finish = (result) => {
+        window.clearTimeout(timer);
+        document.removeEventListener('gdh-holdings-result', onResult);
+        resolve(result);
+      };
+      const onResult = () => {
+        try {
+          const result = JSON.parse(document.documentElement.getAttribute('data-gdh-holdings-result') || 'null');
+          if (result?.id === id) finish(result);
+        } catch { /* wait for a matching sanitized result */ }
+      };
+      const timer = window.setTimeout(() => finish({ ok: false }), 22000);
+      document.addEventListener('gdh-holdings-result', onResult);
+      document.documentElement.setAttribute('data-gdh-holdings-request', JSON.stringify({ id, chain: '' }));
+      document.dispatchEvent(new Event('gdh-holdings-request'));
+      document.documentElement.removeAttribute('data-gdh-holdings-request');
+    });
   }
 
   async function syncHoldingWatchFromApi(targetChain = '', force = false, expectedKey = '') {
-    if (!isTabVisibleForHolding()) return;
-    const chain = String(targetChain || currentChain() || '').trim().toLowerCase();
-    if (!chain) return { ok: false, reason: 'missing-chain', present: false };
-    if (holdingApiInflight.has(chain)) {
-      const inflight = await holdingApiInflight.get(chain);
-      return { ...inflight, present: expectedKey ? inflight?.seen?.has(expectedKey) === true : null };
+    if (settings.enableHoldingSurge === false || !isTabVisibleForHolding()) return { ok: false, present: false };
+    // One multichain read coalesces poll + alert confirmation without guessing the fusion page's chain.
+    const cacheKey = 'multichain';
+    let task = holdingApiInflight.get(cacheKey);
+    if (!task && !force && Date.now() - (holdingApiSyncedAt.get(cacheKey) || 0) < HOLDING_API_TTL_MS) {
+      return { ok: false, reason: 'throttled', present: false };
     }
-    if (!force && Date.now() - (holdingApiSyncedAt.get(chain) || 0) < HOLDING_API_TTL_MS) {
-      return { ok: true, reason: 'fresh', present: expectedKey ? holdingWatchMap.has(expectedKey) : null };
-    }
-    const url = latestHoldingApiUrl(chain);
-    const token = gmgnAccessToken();
-    if (!url || !token) return { ok: false, reason: !url ? 'missing-url' : 'missing-token', present: false };
-    holdingApiSyncedAt.set(chain, Date.now());
-    const task = (async () => {
-      try {
-        const response = await fetch(url.toString(), {
-          credentials: 'include',
-          headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' },
-        });
-        const body = await response.json().catch(() => null);
-        const rows = body?.data?.holdings;
-        if (!response.ok || body?.code !== 0 || !Array.isArray(rows)) {
-          return { ok: false, reason: 'bad-response', seen: new Set(), authoritative: false };
-        }
-        const grouped = new Map();
-        for (const row of rows) {
-          const address = normalizeWalletAddress(String(row?.token_address || row?.token_basic_stats?.address || ''));
-          if (!address) continue;
-          const { balance, average } = holdingCostFromApi(row);
-          if (!(balance > 0)) continue;
-          const key = holdingKey(chain, address);
-          const hit = grouped.get(key) || { chain, address, symbol: '', weightedCost: 0, balance: 0 };
-          hit.symbol = hit.symbol || String(row?.token_basic_stats?.symbol || row?.symbol || '').slice(0, 24);
-          hit.balance += balance;
-          if (average > 0) hit.weightedCost += average * balance;
-          grouped.set(key, hit);
-        }
+    if (!task) {
+      holdingApiSyncedAt.set(cacheKey, Date.now());
+      task = (async () => {
+        const result = await requestHoldingSnapshot();
         const seen = new Set();
-        for (const hit of grouped.values()) {
-          const cost = hit.balance > 0 && hit.weightedCost > 0 ? hit.weightedCost / hit.balance : 0;
-          putHolding({ chain, address: hit.address, symbol: hit.symbol, cost, at: Date.now() });
-          seen.add(holdingKey(chain, hit.address));
-        }
-        const authoritative = rows.length < 100;
-        if (authoritative) {
-          for (const [key, item] of [...holdingWatchMap]) {
-            if (item.chain !== chain || seen.has(key)) continue;
-            holdingWatchMap.delete(key);
-            holdingAlertedAt.delete(key);
-            holdingAlertLevel.delete(key);
+        if (!result?.ok || !Array.isArray(result.data)) return { ok: false, seen };
+        if (settings.enableHoldingSurge === false || !isTabVisibleForHolding()) return { ok: false, seen };
+        for (const group of result.data) {
+          const chain = String(group?.chain || '');
+          if (!['sol', 'bsc', 'base', 'robinhood'].includes(chain) || !Array.isArray(group.rows)) continue;
+          const grouped = new Map();
+          for (const row of group.rows.slice(0, 1000)) {
+            const address = normalizeWalletAddress(String(row?.token_address || ''));
+            if (!address) continue;
+            const { balance, average } = holdingCostFromApi(row);
+            if (!(balance > 0)) continue;
+            const key = holdingKey(chain, address);
+            const hit = grouped.get(key) || { address, symbol: '', weightedCost: 0, balance: 0, completeCost: true };
+            hit.symbol = hit.symbol || String(row?.symbol || '').slice(0, 24);
+            hit.balance += balance;
+            if (!(average > 0)) hit.completeCost = false;
+            hit.weightedCost += average * balance;
+            grouped.set(key, hit);
           }
+          for (const [key, hit] of grouped) {
+            // Missing cost must not reuse another wallet scope's old basis.
+            if (!hit.completeCost || !(hit.weightedCost > 0)) continue;
+            putHolding({ chain, address: hit.address, symbol: hit.symbol, cost: hit.weightedCost / hit.balance, at: Date.now() });
+            seen.add(key);
+          }
+          // Native filters/pagination and wallet selections are not a chain-wide inventory.
+          // Never purge unrelated positions; every alert still requires positive fresh confirmation.
+          scheduleHoldingSave(chain, false);
         }
-        scheduleHoldingSave(chain, authoritative);
-        return { ok: true, seen, authoritative };
-      } catch {
-        return { ok: false, reason: 'fetch-failed', seen: new Set(), authoritative: false };
-      }
-    })().finally(() => holdingApiInflight.delete(chain));
-    holdingApiInflight.set(chain, task);
+        return { ok: true, seen, authoritative: false };
+      })().catch(() => ({ ok: false, seen: new Set() })).finally(() => holdingApiInflight.delete(cacheKey));
+      holdingApiInflight.set(cacheKey, task);
+    }
     const result = await task;
     return { ...result, present: expectedKey ? result.seen?.has(expectedKey) === true : null };
   }
@@ -4648,6 +4643,7 @@
       return;
     }
     if (!(await confirmHoldingStillOwned(chain, key))) return;
+    if (settings.enableHoldingSurge === false || !isTabVisibleForHolding() || !holdingSignalAllowed(chain)) return;
     const confirmedMeta = holdingWatchMap.get(key);
     const confirmedPct = holdingCostChange(price, confirmedMeta?.cost);
     const confirmedDecision = holdingSurgeDecision(
