@@ -1,6 +1,6 @@
 # better gmgn
 
-An independent private copy of the Chrome MV3 extension “better gmgn.” Version 0.53.11 is based on upstream version 0.46.27 and adds trading-oriented interface enhancements to GMGN.ai and DeBot. FOMO Following cards expose GMGN's real native QuickBuy on hover, using its Following wallet/amount settings. Clicking it can execute a trade through GMGN; the helper never submits trades automatically or implements its own trading API. The adapter validates chain/token identity and native context and fails closed if the supported native component contract is unavailable.
+An independent private copy of the Chrome MV3 extension “better gmgn.” Version 0.53.13 is based on upstream version 0.46.27 and adds trading-oriented interface enhancements to GMGN.ai and DeBot. FOMO Following cards expose GMGN's real native QuickBuy on hover, using its Following wallet/amount settings. Clicking it can execute a trade through GMGN; the helper never submits trades automatically or implements its own trading API. The adapter validates chain/token identity and native context and fails closed if the supported native component contract is unavailable.
 
 This repository is not affiliated with GMGN, DeBot, FOMO, Pump, J7Tracker, or the original upstream author.
 
@@ -26,7 +26,7 @@ Chrome does not automatically update unpacked extensions. To update, download an
 - Insert account-filtered J7Tracker activity into GMGN and DeBot tracking: bounded history catch-up and live FOMO buys, sells, and narratives plus Pump.fun callouts and replies. Open `j7tracker.io` once while signed in to connect the same browser profile.
 - Interleave FOMO Following and J7/Pump activity chronologically with original native GMGN cards using one mapped scroll surface. No capped split pane. The native virtualizer index and fractional row heights are validated; unsupported layouts preserve native rows without injecting FOMO. Followed-user highlighting, username-first labels, compact badges and native token blocking are preserved.
 - Alert on held-token price surges after confirming the current balance and GMGN app notification setting.
-- Show 👥N beside tokens held by people you follow on FOMO, highlight those users in the FOMO Holders tab, and link Flap tax badges to the English tax page.
+- Show 👥N only on the open token page’s bottom-right FOMO button, with followed-holder names on hover. No token-list or tracker holder lookups; refreshes once per minute while visible. The FOMO Holders tab keeps its existing followed-user highlighting.
 - Hide the third-party Lightning Trade button.
 - Show FOMO data source, last successful refresh, partial coverage, and Following-only views on GMGN and DeBot.
 - Passively reuse native FOMO Alerts already received by an open signed-in FOMO tab, forwarding observed REST history and live activity into GMGN. The direct Following tracker makes no independent FOMO requests, sockets, subscriptions or reconnects.
