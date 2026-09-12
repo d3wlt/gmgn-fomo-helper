@@ -12,7 +12,7 @@
     const card = host.closest('.gdh-fomofeed');
     if (!card || !card.isConnected || card.dataset.gdhFomoStale === '1') return null;
     const chain = host.dataset.chain || '', address = host.dataset.address || '';
-    if (!['sol', 'eth', 'bsc', 'base'].includes(chain)) return null;
+    if (!['sol', 'eth', 'bsc', 'base', 'robinhood'].includes(chain)) return null;
     if (!(chain === 'sol' ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/ : /^0x[a-fA-F0-9]{40}$/).test(address)) return null;
     if (!host.dataset.eventKey || host.dataset.eventKey !== card.dataset.gdhFomoKey) return null;
     return { chain, address, symbol: host.dataset.symbol || '', logo: host.dataset.logo || '', key: host.dataset.eventKey };
@@ -31,7 +31,9 @@
       // Bailouts can share a host fiber across trees with an old .return pointer.
       // Walk the committed tree and retain its ACTUAL ancestry, not f.alternate.
       const stack = [{ fiber: top.stateNode.current, parent: null }];
-      for (let visited = 0; stack.length && visited < 20000; visited++) {
+      // Fusion/multichain pages can place the tracker beyond 20k fibers.
+      // Remain bounded and fail closed; never substitute stale .return ancestry.
+      for (let visited = 0; stack.length && visited < 100000; visited++) {
         const node = stack.pop(), current = node.fiber;
         if (current.stateNode === native) {
           for (let n = node; n; n = n.parent) route.push(n.fiber);

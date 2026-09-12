@@ -38,6 +38,8 @@ try {
   hostFiber.stateNode=native;
   const committedProvider={...provider,memoizedProps:{value:{account:'committed'}}};
   const committedRoot={child:committedProvider};committedProvider.child=hostFiber;
+  // A real Fusion page placed the tracker beyond the old 20k-node limit.
+  for(let i=0;i<25000;i++)committedRoot.child={type:'div',sibling:committedRoot.child};
   const oldRoot={stateNode:{current:committedRoot}};provider.return=oldRoot;
   window.committedProvider=committedProvider;
  });
@@ -50,5 +52,17 @@ try {
  await host.evaluate(e=>{e.dataset.address='bad'});await page.waitForTimeout(30);await page.mouse.move(700,500);await host.hover();assert.equal(await page.locator('[data-testid=quickbuy]').count(),0,'invalid address unavailable');
  assert.equal(await page.evaluate(()=>actions.length),3);
  await host.evaluate(e=>{e.dataset.address='0x2222222222222222222222222222222222222222';e.closest('.gdh-fomofeed').dataset.gdhFomoStale='1'});await page.mouse.move(700,500);await host.hover();assert.equal(await page.locator('[data-testid=quickbuy]').count(),0,'stale event unavailable');
- console.log('PASS native quick-buy adapter synthetic offline: no trade on mount; exact token/chain; live amount; one action per click; no navigation; untrusted input, stale context, invalid identity and stale event rejected. Native execution itself is not exercised.');
+ // Robinhood uses the native component with explicit identity, never BSC defaults.
+ await host.evaluate(e=>{e.closest('.gdh-fomofeed').dataset.gdhFomoStale='0';e.dataset.chain='robinhood';});
+ await page.mouse.move(700,500);await host.hover();await page.waitForSelector('[data-testid=quickbuy]');await page.waitForTimeout(400);
+ assert.equal(await page.evaluate(()=>actions.length),3,'Robinhood mount cannot trade');
+ assert.deepEqual(await page.evaluate(()=>mounts.at(-1)),{chain:'robinhood',address:'0x2222222222222222222222222222222222222222',symbol:'ONE',buyType:'follow'});
+ await page.locator('[data-testid=quickbuy]').click();
+ assert.deepEqual(await page.evaluate(()=>actions.at(-1)),{chain:'robinhood',address:'0x2222222222222222222222222222222222222222',amount:'0.08'});
+ await host.evaluate(e=>{e.dataset.chain='bsc'});await page.waitForTimeout(30);await page.mouse.move(700,500);await host.hover();await page.waitForSelector('[data-testid=quickbuy]');await page.waitForTimeout(400);
+ assert.equal(await page.evaluate(()=>mounts.at(-1).chain),'bsc','same EVM address cannot retain Robinhood context');
+ await host.evaluate(e=>{e.dataset.chain='unsupported'});await page.waitForTimeout(30);await page.mouse.move(700,500);await host.hover();
+ assert.equal(await page.locator('[data-testid=quickbuy]').count(),0,'unknown chain fails closed');
+ assert.equal(await page.evaluate(()=>actions.length),4);
+ console.log('PASS native quick-buy adapter synthetic offline: Robinhood exact identity and cross-chain rebinding; no trade on mount; exact token/chain; live amount; one action per click; no navigation; untrusted input, stale context, invalid identity and stale event rejected. Native execution itself is not exercised.');
 }finally{await browser.close();}
