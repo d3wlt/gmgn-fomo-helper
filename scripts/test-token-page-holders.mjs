@@ -7,7 +7,7 @@ const A='0x1111111111111111111111111111111111111111',B='0x2222222222222222222222
 const browser=await chromium.launch({headless:true});
 try{
  const page=await browser.newPage({viewport:{width:1280,height:900}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.route('**/*',r=>r.fulfill({contentType:'text/html',body:'<html><body><main>Offline fixture</main></body></html>'}));
+ await page.route('**/*',r=>r.fulfill({contentType:'text/html',body:'<html><body style="margin:0"><nav aria-label="Main navigation" style="display:flex;align-items:center;flex-wrap:wrap;min-height:36px"><a href="/">Trenches</a><a href="/perpetual">Perpetual</a></nav><div data-sentry-component="BaseInfoBar" style="display:flex;align-items:center;min-height:70px;max-width:100%"><div style="flex:1;min-width:0;overflow:auto">Token information</div></div><main>Offline fixture</main></body></html>'}));
  await page.goto('https://gmgn.ai/');
  await page.evaluate(()=>{
   let offset=0;const now=Date.now;Date.now=()=>now()+offset;window.advance=ms=>offset+=ms;
@@ -25,6 +25,22 @@ try{
  await route('/?chain=bsc');await pause();assert.equal(await page.evaluate(()=>holderCalls.length),0,'single-chain list also sends zero');
  await route('/robinhood/token/'+A);await page.waitForFunction(()=>document.querySelector('.gdh-fomo-launcher .gdh-marked')?.textContent==='👥2');
  assert.deepEqual(await page.evaluate(()=>holderCalls),[{tokens:[{address:A,networkId:4663}]}]);
+ assert.equal(await page.locator('[data-sentry-component="BaseInfoBar"] > .gdh-fomo-launcher:last-child').count(),1);
+ assert.equal(await page.locator('nav[aria-label="Main navigation"] > .gdh-notification-launcher:last-child').count(),1);
+ for(const width of [1280,768,390]) {
+  await page.setViewportSize({width,height:900});
+  for(const selector of ['.gdh-fomo-launcher','.gdh-notification-launcher']) {
+   assert.ok(await page.locator(selector).evaluate(el=>{const r=el.getBoundingClientRect();return getComputedStyle(el).position!=='fixed'&&r.left>=0&&r.right<=innerWidth&&r.top<160;}));
+  }
+ }
+ await page.locator('.gdh-fomo-launcher').click();await page.waitForSelector('.gdh-fomo-panel');
+ await page.locator('.gdh-notification-launcher').click();await page.waitForSelector('.gdh-notification-panel');
+ await page.locator('.gdh-notification-launcher').click();await page.waitForFunction(()=>!document.querySelector('.gdh-notification-panel'));
+ await page.evaluate(()=>{for(const selector of ['nav[aria-label="Main navigation"]','[data-sentry-component="BaseInfoBar"]']) {const el=document.querySelector(selector),replacement=el.cloneNode(true);replacement.querySelectorAll('.gdh-fomo-launcher,.gdh-notification-launcher').forEach(x=>x.remove());el.replaceWith(replacement);}});
+ await page.waitForFunction(()=>document.querySelectorAll('.gdh-fomo-launcher').length===1&&document.querySelectorAll('.gdh-notification-launcher').length===1);
+ await page.evaluate(()=>{window.savedHeader=document.querySelector('[data-sentry-component="BaseInfoBar"]');savedHeader.remove();});await pause();
+ assert.equal(await page.locator('.gdh-fomo-launcher').count(),0,'unknown header has no floating fallback');
+ await page.evaluate(()=>document.body.prepend(savedHeader));await page.waitForFunction(()=>document.querySelector('.gdh-fomo-launcher .gdh-marked')?.textContent==='👥2');
  assert.equal(await page.locator('.gdh-marked').count(),1);assert.match(await page.locator('.gdh-marked').getAttribute('title'),/alice_fixture/);
  await page.evaluate(()=>{for(let i=0;i<20;i++){const a=document.createElement('a');a.href='/bsc/token/0x3333333333333333333333333333333333333333';document.body.append(a);}});await pause();
  assert.equal(await page.evaluate(()=>holderCalls.length),1,'other cards never expand request');

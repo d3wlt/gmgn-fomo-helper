@@ -2429,15 +2429,19 @@
     };
     const arm = () => {
       window.clearTimeout(timer);
-      timer = window.setTimeout(dismiss, REMIND_CARD_MS);
+      timer = window.setTimeout(dismiss, info.kind === 'position-surge' ? 5000 : REMIND_CARD_MS);
     };
     close.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
       dismiss();
     });
-    card.addEventListener('mouseenter', () => window.clearTimeout(timer));
-    card.addEventListener('mouseleave', arm);
+    // Surge alerts have a fixed five-second lifetime, even under a stationary
+    // pointer. Other native reminders keep their existing hover pause behavior.
+    if (info.kind !== 'position-surge') {
+      card.addEventListener('mouseenter', () => window.clearTimeout(timer));
+      card.addEventListener('mouseleave', arm);
+    }
     card.addEventListener('click', () => {
       dismiss();
       if (info.href) gdhSpaNavigate(info.href);
@@ -2833,9 +2837,18 @@
     }
   }
 
+  function nativeLauncherAnchor(selector) {
+    if (location.hostname !== 'gmgn.ai') return null;
+    return [...document.querySelectorAll(selector)].find(el => {
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && getComputedStyle(el).visibility !== 'hidden';
+    }) || null;
+  }
+
   function ensureNotificationLauncher() {
     let btn = document.querySelector('.gdh-notification-launcher');
-    if (!currentTokenRoute()) {
+    const anchor = nativeLauncherAnchor('nav[aria-label="Main navigation"]');
+    if (!anchor) {
       btn?.remove();
       notificationPanelEl?.remove();
       notificationPanelEl = null;
@@ -2861,8 +2874,10 @@
         }
         scheduleScan();
       });
-      document.body.appendChild(btn);
     }
+    if (btn.parentElement !== anchor || anchor.lastElementChild !== btn) anchor.appendChild(btn);
+    btn.setAttribute('aria-label', 'Notification history');
+    btn.setAttribute('aria-expanded', String(notificationPanelOpen));
     btn.classList.toggle('is-active', notificationPanelOpen);
     const badge = btn.querySelector('.gdh-notification-launcher__badge');
     const unread = notificationUnreadCount();
@@ -4108,7 +4123,8 @@
 
   function ensureFomoLauncher() {
     let btn = document.querySelector('.gdh-fomo-launcher');
-    if (settings.enableFomoPanel === false || !currentTokenRoute()) {
+    const anchor = nativeLauncherAnchor('[data-sentry-component="BaseInfoBar"]');
+    if (settings.enableFomoPanel === false || !currentTokenRoute() || !anchor) {
       btn?.remove();
       return;
     }
@@ -4127,8 +4143,10 @@
         setFomoOpen(!settings.fomoPanelOpen);
         scheduleScan();
       });
-      document.body.appendChild(btn);
     }
+    if (btn.parentElement !== anchor || anchor.lastElementChild !== btn) anchor.appendChild(btn);
+    btn.setAttribute('aria-label', 'FOMO token panel');
+    btn.setAttribute('aria-expanded', String(settings.fomoPanelOpen === true));
     btn.classList.toggle('is-active', settings.fomoPanelOpen === true);
   }
 
@@ -4606,10 +4624,11 @@
       href: `/${chain}/token/${address}`,
       dir: 'up',
       bell: '🚀',
+      kind: 'position-surge',
       tagText: 'Position surge',
       symbol: confirmedMeta.symbol || fallbackSymbol || 'Position token',
       label: 'Cost / 5m',
-      value: `Cost ${confirmedPct >= 0 ? '+' : ''}${confirmedPct.toFixed(1)}% · 5m +${pct5m.toFixed(1)}%  ${formatPriceShort(price)}`,
+      value: `Cost ${confirmedPct >= 0 ? '+' : ''}${confirmedPct.toFixed(1)}% · 5m +${pct5m.toFixed(1)}%`,
       raw: '',
     });
   }

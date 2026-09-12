@@ -569,9 +569,10 @@ a[data-sentry-component="TrackerListItem"] > .gdh-star-button,
 
 
 .gdh-notification-launcher {
-  position: fixed;
-  right: 18px;
-  bottom: 126px;
+  position: relative;
+  flex: 0 0 auto;
+  align-self: center;
+  margin: 0 4px;
   z-index: 2147482900;
   width: 36px;
   height: 36px;
@@ -729,9 +730,10 @@ a[data-sentry-component="TrackerListItem"] > .gdh-star-button,
 }
 
 .gdh-fomo-launcher {
-  position: fixed;
-  right: 16px;
-  bottom: 84px;
+  position: relative;
+  flex: 0 0 auto;
+  align-self: center;
+  margin-left: 8px;
   z-index: 2147482900;
   padding: 6px 12px;
   border: 1px solid rgba(139, 147, 161, 0.4);
