@@ -2907,7 +2907,9 @@
     const n = Number(value);
     if (!Number.isFinite(n) || n === 0) return '';
     const abs = Math.abs(n);
-    const s = abs >= 1e6 ? `${(abs / 1e6).toFixed(1)}M`
+    const s = abs >= 999950000000 ? `${(abs / 1e12).toFixed(1)}T`
+      : abs >= 999950000 ? `${(abs / 1e9).toFixed(1)}B`
+      : abs >= 999950 ? `${(abs / 1e6).toFixed(1)}M`
       : abs >= 1e3 ? `${(abs / 1e3).toFixed(1)}K`
         : abs.toFixed(abs >= 10 ? 0 : 2);
     return `${n < 0 ? '-' : ''}$${s}`;
@@ -5185,11 +5187,7 @@
     };
     av.addEventListener('click', openProfile);
     name.addEventListener('click', openProfile);
-    const src = document.createElement('span');
-    src.className = 'gdh-fomofeed__src';
-    src.textContent = ev.source === 'fomo-followed' ? FOMO_FEED_MARKERS.followed.icon : profile.source;
-    src.title = ev.source === 'fomo-followed' ? FOMO_FEED_MARKERS.followed.label : profile.source;
-    who.append(av, name, src);
+    who.append(av, name);
 
     const sym = document.createElement('span');
     sym.className = 'gdh-fomofeed__tcell gdh-fomofeed__tsym';
