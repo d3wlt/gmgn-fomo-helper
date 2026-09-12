@@ -14,7 +14,7 @@ try {
   });
   await page.addStyleTag({path:new URL('styles.css',root).pathname});
   let source=fs.readFileSync(new URL('content.js',root),'utf8');
-  source=source.replace(/\}\)\(\);\s*$/, `window.__merged={render:(cards,events)=>{settings.enabled=true;lastFullScanAt=Infinity;fomoFeedLastPollAt=Infinity;fomoFollowedLastPollAt=Infinity;pumpFeedLastPollAt=Infinity;fomoFollowedEvents=events;return renderMergedTracker(cards,visibleTrackingFeedEvents(nativeTrackingFeedRows(cards)));}, sync:syncMergedTracker, scan:scanFomoFeed, state:()=>mergedTracker, destroy:teardownFomoFeed};})();`);
+  source=source.replace(/\}\)\(\);\s*$/, `window.__merged={render:(cards,events)=>{settings.enabled=true;lastFullScanAt=Infinity;fomoFeedLastPollAt=Infinity;fomoFollowedLastPollAt=Infinity;pumpFeedLastPollAt=Infinity;fomoFollowedEvents=events;return renderMergedTracker(cards,visibleTrackingFeedEvents(nativeTrackingFeedRows(cards)));}, sync:syncMergedTracker, scan:scanFomoFeed, state:()=>mergedTracker, destroy:()=>{settings.enabled=false;teardownFomoFeed();}};})();`);
   await page.addScriptTag({content:source});
   await page.waitForTimeout(100);
   await page.evaluate(()=>{
@@ -147,6 +147,8 @@ try {
   await page.evaluate(()=>window.recycle());
   assert.equal(await page.evaluate(()=>window.render()),true);
   await page.evaluate(()=>window.__merged.destroy());
+  // Keep the feature disabled while queued observer/scanner work drains.
+  await page.waitForTimeout(200);
   assert.equal(await page.locator('.gdh-merged-tracker').count(),0);
   assert.equal(await page.locator('#host > #viewport').count(),1);
   assert.equal(await page.locator('.native-wrap').evaluateAll(els=>els.every(el=>!el.style.translate)),true);
