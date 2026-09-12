@@ -1,6 +1,6 @@
 # GMGN FOMO Helper
 
-A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.18** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
+A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.19** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
 
 **J7Tracker and DeBot integrations have been removed.** No J7Tracker account, tab or companion service is required; the extension no longer integrates with DeBot. The native GMGN tracker and passive FOMO Following feed remain separate from that retired integration.
 
@@ -23,7 +23,7 @@ For an update, replace the files in your existing unpacked extension folder, sel
 - Interleaves passive FOMO Following activity with original native GMGN cards in one chronological panel and one scrollbar.
 - Handles fractional native row heights and asynchronous row recycling without rebuilding the panel during normal scrolling.
 - Preserves your reading position when new activity arrives below the top. Unsupported geometry or persistently stale index data fails closed instead of guessing native row positions.
-- Keeps original native GMGN row actions, token blocking and followed-user highlighting.
+- Keeps original native GMGN row actions and followed-user highlighting. Extension token blocking has been removed; callout-account blocklists remain.
 - FOMO cards can expose GMGN's **native QuickBuy** on hover, including Robinhood. It uses GMGN's Following wallet/amount settings and validates the current account, chain and token.
 
 **Clicking native QuickBuy can execute a real trade.** The helper does not submit trades automatically or implement its own trading API. Native controls stay unavailable if their supported context cannot be verified.
@@ -57,6 +57,8 @@ The token panel and holder count may make their own scoped requests using your b
 - Notification history opens from the bell at the end of GMGN's main navigation; the FOMO and notification launchers no longer float over page content. Unsupported or hidden native mount points do not get floating fallback buttons.
 - Hide the third-party Lightning Trade button.
 
+Special-wallet watch is removed entirely: no stars, colored wallet highlights, management bar, add-wallet watch checkbox or pinned watch activity. Existing saved watch settings are inert; watched developer tracking, holder rankings and the independent cross-chain native wallet-follow shortcut remain. Reload the extension and refresh GMGN to remove UI from the old running version.
+
 Open the native GMGN **Holding** panel to initialize the selected wallets. Surge monitoring needs a visible GMGN page and recent captured native request scopes. Expired scopes and ambiguous chain/account data fail closed. Manifesto pop-ups/list tabs, Flap tax badges, custom BSC RPC settings, J7Tracker/Pump activity and DeBot support are not included.
 
 ## Diagnostics
@@ -77,7 +79,7 @@ Requirements: Node.js 22+, Python 3 for the portable builder, or PowerShell for 
 npm ci
 npx playwright install chromium
 npm run verify
-python3 scripts/build-release.py --tag v0.53.18
+python3 scripts/build-release.py --tag v0.53.19
 ```
 
 On PowerShell:

@@ -4,7 +4,7 @@ GMGN FOMO Helper is an independent Chrome MV3 interface extension for GMGN.ai. T
 
 ## Core behavior
 
-- Highlights watched developers and special-watch wallets.
+- Highlights watched developers. Special-wallet watch/stars, colors and pinned activity have been retired.
 - Adds developer history, token-page followed-holder counts, passive native FOMO Following, token FOMO panels, and notification views.
 - Reads existing page and same-site API data without signing or submitting transactions.
 - Uses browser-local language detection and translation to add English translations below non-English FOMO narratives.

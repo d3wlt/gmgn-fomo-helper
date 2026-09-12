@@ -6,7 +6,7 @@ GMGN FOMO Helper runs only on the sites declared in `manifest.json`. It injects 
 
 The extension may store:
 
-- Feature settings, watched developer wallets, marked people, blocked accounts and tokens, special-watch metadata, and notification history.
+- Feature settings, watched developer wallets, marked people, blocked callout accounts, and notification history. Retired token-block and special-watch settings may remain in older local storage but are no longer used.
 - Cached token, holder, performance, FOMO, and display data.
 - A mirror of the FOMO access and refresh session already present in a signed-in FOMO page. These credentials are used only with FOMO's own API.
 - Diagnostic timestamps and status values needed for session renewal and synchronization.

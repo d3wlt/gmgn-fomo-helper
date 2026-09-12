@@ -2,6 +2,15 @@
 
 Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
 
+## 0.53.19 - 2026-09-12
+
+- Remove special-wallet watch entirely: stars across tracking/wallet/address views, colored highlights, management UI, add-wallet watch preferences and pinned activity. Legacy saved settings are inert; watched developers, callout blocklists, holder rankings and native cross-chain wallet following remain.
+- Keep notification history anchored beside its bell and clear history without a confirmation dialog.
+- Remove tracker token blocking: red icon, management list, and saved-token filtering. Callout account blocking is unchanged.
+
+- Simplify healthy status to FOMO connected; retain partial-coverage detail on hover and diagnostics. Show red recovery guidance for disconnected/setup states.
+- Position the status badge above the native bottom toolbar and update placement on resize.
+
 ## 0.53.18 - 2026-09-12
 
 - Remove the redundant followed star from compact FOMO rows to reclaim name space. Format large FOMO values with B/T suffixes, including rounding-boundary promotion.
