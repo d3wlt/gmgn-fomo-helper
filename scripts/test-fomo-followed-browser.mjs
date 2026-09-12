@@ -259,7 +259,11 @@ try {
   reports.push({scenario:'blocked-token filter remains effective',...await deliver(same,0)});
   await page.evaluate(()=>window.__direct.settings({blockedTokens:[]}));
   const nativeEvents=same.slice(0,3).map((e,i)=>({...e,tx:i<2?'real-native-hash':'distinct-hash',type:i===1?'thesis':'buy',commentId:i===1?'native-thesis':undefined}));
-  await page.evaluate(()=>Object.assign(document.querySelector('[data-sentry-component="TrackerListItem"]').dataset, {gdhTrackTx:'real-native-hash',gdhTrackAddr:'0x3333333333333333333333333333333333333333',gdhTrackChain:'eth',gdhTrackSide:'buy'}));
+  await page.evaluate(()=>{
+    const card=document.querySelector('[data-sentry-component="TrackerListItem"]');
+    Object.assign(card.__reactFiber$fixture.memoizedProps.record,{transaction_hash:'real-native-hash',token_address:'0x3333333333333333333333333333333333333333',chain:'eth',side:'buy'});
+    window.__scanNativeFixture();
+  });
   reports.push({scenario:'exact native transaction dedup preserves thesis and other swaps',...await deliver(nativeEvents,2)});
   const legs = [
     {...same[0],swapId:'leg-token',tx:'real-native-hash',addr:'0x4444444444444444444444444444444444444444'},
@@ -267,8 +271,38 @@ try {
     {...same[0],swapId:'leg-chain',tx:'real-native-hash',chain:'base'},
   ];
   reports.push({scenario:'same transaction distinct token side and chain legs survive',...await deliver(legs,3)});
-  await page.evaluate(()=>delete document.querySelector('[data-sentry-component="TrackerListItem"]').dataset.gdhTrackChain);
+  await page.evaluate(()=>{
+    delete document.querySelector('[data-sentry-component="TrackerListItem"]').__reactFiber$fixture.memoizedProps.record.chain;
+    window.__scanNativeFixture();
+  });
   reports.push({scenario:'missing native metadata cannot prove a duplicate',...await deliver(nativeEvents,3)});
+  // A complete native index contains trades outside the mounted pool. Scroll
+  // recycling must not toggle duplicate suppression or remove the other cards.
+  await page.evaluate(()=>{
+    const {records}=window.__mountNativeFixture({count:80,height:64.5});
+    Object.assign(records[60],{transaction_hash:'offscreen-native-hash',token_address:'0x3333333333333333333333333333333333333333'});
+    const cards=[...document.querySelectorAll('[data-sentry-component="TrackerListItem"]')];
+    cards.slice(12).forEach(c=>c.parentElement.remove());
+    window.__scanNativeFixture();
+    window.dedupRecords=records;
+  });
+  const offscreen=[{...nativeEvents[0],tx:'offscreen-native-hash'},nativeEvents[1]];
+  await deliver(offscreen,1);
+  await page.evaluate(()=>{window.dedupSurface=document.querySelector('.gdh-merged-tracker');window.dedupCard=document.querySelector('.gdh-fomofeed');});
+  for (const start of [56,0,56,0]) {
+    await page.evaluate(start=>{
+      [...document.querySelectorAll('[data-sentry-component="TrackerListItem"]')].forEach((c,i)=>{
+        c.__reactFiber$fixture.memoizedProps.record=window.dedupRecords[start+i];
+        c.parentElement.style.top=`${(start+i)*64.5}px`;
+      });
+      window.__scanNativeFixture();
+    },start);
+    await page.waitForTimeout(160);
+    assert.equal(await page.locator('.gdh-fomofeed').count(),1,'dedup is independent of mounted pool');
+    assert.equal(await page.evaluate(()=>document.querySelector('.gdh-fomofeed')===window.dedupCard),true);
+    assert.equal(await page.evaluate(()=>document.querySelector('.gdh-merged-tracker')===window.dedupSurface),true);
+  }
+  reports.push({scenario:'complete native identities suppress off-screen duplicates through pool recycling without card churn',passed:true});
   await page.evaluate(()=>{Object.defineProperty(document,'visibilityState',{configurable:true,get:()=> 'hidden'});document.dispatchEvent(new Event('visibilitychange'));window.__fixture.pending=[];window.__direct.poll();window.__fixture.pending.shift()({ok:true,events:[{key:'hidden',eventId:'hidden',type:'buy',userId:'alice',ts:Date.now(),symbol:'HIDDEN'}]});});
   await page.waitForTimeout(50);
   assert.equal(await page.getByText('HIDDEN',{exact:true}).count(),0);

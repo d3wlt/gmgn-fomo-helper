@@ -12,12 +12,16 @@ export async function installNativeBridge(page) {
       const viewport=document.createElement('div');viewport.style.cssText='height:600px;overflow:auto';
       const spacer=document.createElement('div');spacer.style.cssText=`position:relative;height:${count*height}px`;
       const records=Array.from({length:count},(_,i)=>({token_address:'0x8888888888888888888888888888888888888888',maker:'synthetic-maker',side:'buy',chain:'eth',timestamp:untimed?0:now-i*10000,base_symbol:'NATIVE'}));
+      const root={current:null}, rootFiber={stateNode:root}, list={memoizedProps:{items:records},return:rootFiber};
+      root.current=rootFiber;rootFiber.child=list;let previous=null;
       for(let i=0;i<count;i++) {
         const wrap=document.createElement('div');
         if(mode==='fixed')wrap.style.cssText=`position:absolute;top:${i*height}px;height:${height}px;width:100%`;
         const card=document.createElement('div');card.dataset.sentryComponent='TrackerListItem';card.style.height=`${height}px`;
         card.innerHTML='<span data-testid="follow-tracking-row-symbol">NATIVE</span><span data-testid="follow-tracking-row-maker">synthetic maker</span>';
-        card.__reactFiber$fixture={memoizedProps:{record:records[i]},return:{memoizedProps:{items:records}}};
+        card.__reactFiber$fixture={stateNode:card,memoizedProps:{record:records[i]},return:list};
+        if(previous)previous.sibling=card.__reactFiber$fixture;else list.child=card.__reactFiber$fixture;
+        previous=card.__reactFiber$fixture;
         wrap.append(card);spacer.append(wrap);
       }
       viewport.append(spacer);host.append(viewport);document.body.append(host);

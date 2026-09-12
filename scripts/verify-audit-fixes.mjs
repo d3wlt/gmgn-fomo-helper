@@ -563,10 +563,15 @@ await test('The page bridge publishes and clears native trade fingerprints', () 
 
 await test('The page bridge recognizes only complete trade records', () => {
   const fn = extractFunction(bridge, 'readTrackerRecord');
-  const run = (record) => evaluate([fn], `(() => {
-    const element = {};
-    element['__reactFiber$test'] = { memoizedProps: { record: ${JSON.stringify(record)} } };
-    return readTrackerRecord(element);
+  const resolver = extractFunction(bridge, 'trackerRoute');
+  const run = (record) => evaluate([resolver, fn], `(() => {
+    globalThis.HTMLElement = class {};
+    const element = new HTMLElement(), root = {current:null}, rootFiber = {stateNode:root};
+    const host = {stateNode:element, memoizedProps:{record:${JSON.stringify(record)}}, return:rootFiber};
+    root.current=rootFiber;rootFiber.child=host;element['__reactFiber$test']=host;
+    const result=readTrackerRecord(element,new Map());
+    if(result)delete result.trackerRoute;
+    return result;
   })()`);
   assert.equal(run({ base_address: '0xdead', symbol: 'NOT_A_TRADE' }), null);
   const result = run({
@@ -587,7 +592,7 @@ await test('Tracking supports card, table, and no-testid layouts', () => {
   assert.ok(bridge.includes("row.firstElementChild"));
   assert.match(bridge, /querySelectorAll\(TRACKER_TABLE_ITEM_SELECTOR\)[\s\S]*trackerSeen\.add\(candidate\)/);
   assert.ok(bridge.includes('scanUnmarkedTrackerRows'));
-  assert.match(bridge, /if \(!trackerSeen\.size\) scanUnmarkedTrackerRows\(trackerSeen, trackerData\)/);
+  assert.match(bridge, /if \(!trackerSeen\.size\) scanUnmarkedTrackerRows\(trackerSeen, trackerData, trackerRoots\)/);
   assert.match(bridge, /value\.maker[\s\S]*side === 'buy'[\s\S]*timestamp > 0/);
 });
 

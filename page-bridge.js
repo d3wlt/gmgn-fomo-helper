@@ -706,17 +706,53 @@
   }
 
 
-  function readTrackerRecord(element) {
-    const fiberKey = Object.keys(element).find((key) => key.startsWith('__reactFiber$'));
-    if (!fiberKey) return null;
+  // One committed host/ancestry index per root per scan. DOM expandos and
+  // .return can still point at the previous tree, including shared bailout hosts.
+  // Use them ONLY to locate the root; never read their props as a fallback.
+  function trackerRoute(element, roots) {
+    const key = Object.keys(element).find(k => k.startsWith('__reactFiber$'));
+    let top = key && element[key];
+    const ancestors = new Set();
+    for (let n = 0; top?.return && n < 200; n++) {
+      if (ancestors.has(top)) return null;
+      ancestors.add(top);
+      top = top.return;
+    }
+    const root = !top?.return && top?.stateNode;
+    if (!root?.current) return null;
+    if (!roots.has(root)) {
+      const hosts = new Map(), seen = new Set();
+      const stack = [{ fiber: root.current, parent: null }];
+      let valid = true;
+      while (stack.length) {
+        const node = stack.pop(), fiber = node.fiber;
+        if (seen.has(fiber) || seen.size >= 100000) { valid = false; break; }
+        seen.add(fiber);
+        if (fiber.stateNode instanceof HTMLElement) hosts.set(fiber.stateNode, node);
+        if (fiber.sibling) stack.push({ fiber: fiber.sibling, parent: node.parent });
+        if (fiber.child) stack.push({ fiber: fiber.child, parent: node });
+      }
+      roots.set(root, valid ? hosts : null);
+    }
+    const route = [];
+    for (let node = roots.get(root)?.get(element); node && route.length < 18; node = node.parent) {
+      route.push(node.fiber);
+    }
+    return route.length ? route : null;
+  }
+
+  function readTrackerRecord(element, roots) {
+    const route = trackerRoute(element, roots);
+    if (!route) return null;
     const pick = (value, depth) => {
-      if (!value || typeof value !== 'object' || depth > 4) return null;
+      // A parent list is not a row identity (especially repeated-token trades).
+      if (!value || typeof value !== 'object' || Array.isArray(value) || depth > 4) return null;
       const address = value.token_address || value.base_address || value.base_token?.address;
       const maker = value.maker || value.maker_info_address || value.maker_info?.address;
       const side = String(value.side || '').trim().toLowerCase();
       const timestamp = Number(value.timestamp);
       if (typeof address === 'string' && address && typeof maker === 'string' && maker
-        && (side === 'buy' || side === 'sell') && timestamp > 0) return value;
+        && (side === 'buy' || side === 'sell' || side === 'add' || side === 'remove') && timestamp > 0) return value;
       let keys;
       try { keys = Object.keys(value); } catch { return null; }
       for (const key of keys.slice(0, 50)) {
@@ -730,14 +766,11 @@
       }
       return null;
     };
-    let fiber = element[fiberKey];
-    for (let level = 0; fiber && level < 16; level += 1) {
-      for (const node of [fiber, fiber.alternate]) {
-        if (!node) continue;
-        for (const props of [node.memoizedProps, node.pendingProps]) {
-          const hit = pick(props, 0);
+    for (const fiber of route.slice(0, 16)) {
+          const hit = pick(fiber.memoizedProps, 0);
           if (hit) {
             return {
+              trackerRoute: route,
               address: String(hit.token_address || hit.base_address || hit.base_token?.address || '').slice(0, 64),
               symbol: String(hit.base_symbol || hit.base_token?.symbol || '').slice(0, 24),
               chain: String(hit.chain || '').slice(0, 16),
@@ -759,20 +792,16 @@
               })(),
             };
           }
-        }
-      }
-      fiber = fiber.return;
     }
     return null;
   }
 
   // Export only an observed, ordered native index; never synthesize native trades.
-  function publishTrackerIndex(element, data) {
+  function publishTrackerIndex(element, data, published) {
     let wrap = element.parentElement;
     for (let n = 0; wrap && n < 4; n++, wrap = wrap.parentElement) {
       if (wrap.style.position !== 'absolute') continue;
-      const key = Object.keys(element).find(k => k.startsWith('__reactFiber$'));
-      let fiber = key && element[key];
+      const route = data.trackerRoute || [];
       const seen = new Set();
       const inspect = (value, depth) => {
         if (!value || typeof value !== 'object' || depth > 3 || seen.has(value)) return null;
@@ -783,7 +812,11 @@
             return t > 1.4e12 && t < 4.1e12 ? Math.round(t) : t > 1.4e9 && t < 4.1e9 ? Math.round(t * 1000) : 0;
           });
           if (stamps.every((t, i) => t && (!i || stamps[i - 1] >= t))
-            && value.some((v, i) => stamps[i] === data.ts && (v.token_address || v.base_address || v.base_token?.address) === data.address)) return stamps;
+            && value.some((v, i) => stamps[i] === data.ts && (v.token_address || v.base_address || v.base_token?.address) === data.address)) return { stamps, rows:value.map((v,i) => ({
+              ts:stamps[i], tx:String(v.transaction_hash || v.tx_hash || '').trim().slice(0,180),
+              addr:String(v.token_address || v.base_address || v.base_token?.address || '').slice(0,64),
+              chain:String(v.chain || '').slice(0,16), side:String(v.side || '').slice(0,12),
+            })) };
         }
         for (const k of Object.keys(value).slice(0, 50)) {
           if (['_owner','return','child','sibling','alternate','stateNode'].includes(k)) continue;
@@ -792,10 +825,14 @@
         }
         return null;
       };
-      for (let n = 0; fiber && n < 18; n++, fiber = fiber.return) {
-        const stamps = inspect(fiber.memoizedProps, 0);
-        if (stamps) {
-          setAttribute(wrap.parentElement, 'data-gdh-native-index', JSON.stringify(stamps));
+      for (const fiber of route) {
+        const index = inspect(fiber.memoizedProps, 0);
+        if (index) {
+          published.add(wrap.parentElement);
+          setAttribute(wrap.parentElement, 'data-gdh-native-index', JSON.stringify(index.stamps));
+          // Dedup must cover native history, not whichever recycled rows happen
+          // to be mounted. Publish the matching bounded identity snapshot.
+          setAttribute(wrap.parentElement, 'data-gdh-native-rows', JSON.stringify(index.rows));
           return;
         }
       }
@@ -803,9 +840,9 @@
     }
   }
 
-  function scanTrackerCard(element, suppliedData = null) {
-    const data = suppliedData || readTrackerRecord(element);
-    if (data?.ts) publishTrackerIndex(element, data);
+  function scanTrackerCard(element, roots, published, suppliedData = null) {
+    const data = suppliedData || readTrackerRecord(element, roots);
+    if (data?.ts) publishTrackerIndex(element, data, published);
     if (data && data.address) {
         setAttribute(element, 'data-gdh-track-addr', data.address);
       if (data.symbol) setAttribute(element, 'data-gdh-track-symbol', data.symbol);
@@ -838,7 +875,7 @@
   }
 
 
-  function scanUnmarkedTrackerRows(trackerSeen, trackerData) {
+  function scanUnmarkedTrackerRows(trackerSeen, trackerData, roots) {
     const scoped = document.querySelectorAll(
       '.virtual-list-container [data-index], .virtual-list-container [data-item-index]',
     );
@@ -859,7 +896,7 @@
       ].filter((item, index, list) => item instanceof HTMLElement && list.indexOf(item) === index);
       let data = null;
       for (const candidate of candidates) {
-        data = readTrackerRecord(candidate);
+        data = readTrackerRecord(candidate, roots);
         if (data) break;
       }
       if (!data) continue;
@@ -962,8 +999,18 @@
         el = el.parentElement;
       }
     });
-    if (!trackerSeen.size) scanUnmarkedTrackerRows(trackerSeen, trackerData);
-    trackerSeen.forEach((element) => scanTrackerCard(element, trackerData.get(element)));
+    const trackerRoots = new Map();
+    const published = new Set();
+    if (!trackerSeen.size) scanUnmarkedTrackerRows(trackerSeen, trackerData, trackerRoots);
+    document.querySelectorAll('[data-gdh-track-addr], [data-gdh-track-ts]').forEach(el => trackerSeen.add(el));
+    trackerSeen.forEach((element) => scanTrackerCard(element, trackerRoots, published, trackerData.get(element)));
+    // Clear only snapshots no committed row established this scan. Keep unchanged
+    // attributes stable and do not let an unresolved pool row erase a valid index.
+    document.querySelectorAll('[data-gdh-native-index], [data-gdh-native-rows]').forEach(el => {
+      if (published.has(el)) return;
+      el.removeAttribute('data-gdh-native-index');
+      el.removeAttribute('data-gdh-native-rows');
+    });
     document.querySelectorAll(HOLDER_ROW_SELECTOR).forEach(scanHolderRow);
     document.querySelectorAll(CARD_SELECTOR).forEach(scanCard);
     document.querySelectorAll(CALLOUT_SELECTOR).forEach((element) => {

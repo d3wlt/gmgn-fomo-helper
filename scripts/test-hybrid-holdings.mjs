@@ -278,6 +278,9 @@ test('actual surge handler rejects sold token, respects chain/master changes dur
   t.route(async () => response(payload([group('robinhood')])));
   await t.h.handle(update(1.5)); assert.equal(t.alerts.length, 1);
   assert.equal(t.alerts[0].href, `/robinhood/token/${ca}`);
+  assert.equal(t.alerts[0].kind, 'position-surge');
+  assert.match(t.alerts[0].value, /^Cost \+[\d.]+% · 5m \+[\d.]+%$/);
+  assert.ok(!t.alerts[0].value.includes('$'), 'surge display omits token price');
   t.settings.enableHoldingSurge = false;
   const count = t.helperCalls().length;
   await t.h.handle(update(2)); await t.h.sync('', true);

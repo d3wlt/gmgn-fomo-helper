@@ -4786,7 +4786,8 @@
   }
 
   const FOMO_FEED_POLL_MS = 5000;
-  const FOMO_FEED_RENDER_CAP = 40;
+  // The passive source already bounds its snapshot. A second head-only render
+  // cap evicts still-readable cards on every burst and cannot represent history.
   const FOMO_FEED_CHAIN_COLORS = {
     sol: '#7b44f2', bsc: '#eab204', base: '#3073ff', eth: '#4d84f7', robinhood: '#9fc700',
     stable: '#007b4f', arc: '#5c8de5', xlayer: '#4a4a4a', hyperevm: '#55c6ab',
@@ -4869,6 +4870,22 @@
   }
 
   function nativeTrackingFeedRows(cards) {
+    // Complete bridge identities stay stable while the native virtualizer
+    // recycles its pool. A visible-only duplicate filter makes FOMO rows vanish
+    // and reappear (and changes the insertion map) merely because of scrolling.
+    for (const card of cards) {
+      const spacer = card.closest('[data-gdh-native-index]');
+      if (!spacer) continue;
+      try {
+        const stamps = JSON.parse(spacer.getAttribute('data-gdh-native-index'));
+        const rows = JSON.parse(spacer.getAttribute('data-gdh-native-rows'));
+        if (Array.isArray(stamps) && Array.isArray(rows) && rows.length === stamps.length && rows.length <= 10000
+          && rows.every((row,i) => row && row.ts === stamps[i])) return rows.map(row => ({
+            tx:trackingFeedNormalizedTx(row.tx), addr:trackingFeedNormalizedAddress(row.addr),
+            chain:String(row.chain || '').trim().toLowerCase(), side:String(row.side || '').trim().toLowerCase(), ts:row.ts,
+          }));
+      } catch { /* Older bridge snapshots retain their conservative fallback. */ }
+    }
     return cards.map((card) => ({
       tx: trackingFeedNormalizedTx(card.getAttribute('data-gdh-track-tx')),
       addr: trackingFeedNormalizedAddress(card.getAttribute('data-gdh-track-addr')),
@@ -4921,7 +4938,7 @@
       if (seen.has(identity)) return false;
       seen.add(identity);
       return !nativeRows.some((row) => trackingFeedIsNativeDuplicate(ev, row));
-    }).slice(0, FOMO_FEED_RENDER_CAP);
+    });
   }
 
   let trackingFeedRaf = 0;
@@ -5088,8 +5105,8 @@
 
   // Snapshot only fields that affect card content/behavior. Unchanged polls keep
   // their DOM; enrichment replaces one row without replaying its entry animation.
-  function fomoFeedCardSignature(ev) {
-    return JSON.stringify([isTrackerTableMode(), ...[
+  function fomoFeedCardSignature(ev, tableMode = isTrackerTableMode()) {
+    return JSON.stringify([tableMode, ...[
       'source', 'dataSource', 'type', 'stale', 'name', 'handle', 'userId', 'avatar',
       'symbol', 'img', 'chain', 'addr', 'usd', 'mc', 'mcSource', 'comment', 'position', 'profileUrl',
     ].map(key => ev[key] ?? null)]);
@@ -5197,7 +5214,7 @@
     }
   }
 
-  function buildFomoFeedCard(ev) {
+  function buildFomoFeedCard(ev, tableMode = isTrackerTableMode()) {
     const tag = FOMO_FEED_TAGS[ev.type] || { label: 'fomo', cls: '' };
     const profile = trackingFeedProfileMeta(ev);
     const card = document.createElement('div');
@@ -5205,7 +5222,7 @@
     card.dataset.gdhFomoKey = ev.key;
     card.dataset.gdhFeedSource = ev.source || 'fomo';
     card.dataset.gdhFomoStale = ev.stale ? '1' : '0';
-    card.dataset.gdhFomoSignature = fomoFeedCardSignature(ev);
+    card.dataset.gdhFomoSignature = fomoFeedCardSignature(ev, tableMode);
 
     if (ev.chain) {
       const stripe = document.createElement('span');
@@ -5214,7 +5231,7 @@
       card.appendChild(stripe);
     }
 
-    if (isTrackerTableMode()) {
+    if (tableMode) {
       card.classList.add('is-table');
       buildFomoFeedTableRow(ev, card, tag);
       attachFomoFeedCardBehavior(ev, card);
@@ -5351,20 +5368,21 @@
     }
   }
 
-  function fomoFeedCardFor(ev) {
+  function fomoFeedCardFor(ev, tableMode = isTrackerTableMode()) {
     let el = fomoFeedCards.get(ev.key);
-    if (el instanceof HTMLElement && el.dataset.gdhFomoSignature !== fomoFeedCardSignature(ev)) {
-      const replacement = buildFomoFeedCard(ev);
+    if (el instanceof HTMLElement && el.dataset.gdhFomoSignature !== fomoFeedCardSignature(ev, tableMode)) {
+      const replacement = buildFomoFeedCard(ev, tableMode);
+      mergedTracker?.resize.unobserve(el);
       if (el.isConnected) el.replaceWith(replacement);
       el = replacement;
       fomoFeedCards.set(ev.key, el);
     }
     if (!el || !(el instanceof HTMLElement)) {
-      el = buildFomoFeedCard(ev);
+      el = buildFomoFeedCard(ev, tableMode);
       fomoFeedCards.set(ev.key, el);
     }
     el.querySelectorAll('.gdh-fomofeed__time, .gdh-fomofeed__ttime').forEach((timeEl) => {
-      timeEl.dataset.gdhFomoTs = String(ev.ts);
+      if (timeEl.dataset.gdhFomoTs !== String(ev.ts)) timeEl.dataset.gdhFomoTs = String(ev.ts);
     });
     refreshFomoFeedTimes(el);
     return el;
@@ -5522,6 +5540,15 @@
 
   let mergedTracker = null;
 
+  // Restore React-owned parentage before native layout handlers unmount the
+  // recycler. Waiting for a mutation observer is too late for removeChild.
+  window.addEventListener('click', event => {
+    if (event.target instanceof Element && event.target.closest('[data-icon="IconLayoutcard16pxRegular"], [data-icon="IconLayoutlist16pxRegular"]')) {
+      teardownFomoFeed();
+      scheduleTrackingFeedRender();
+    }
+  }, true);
+
   function destroyMergedTracker() {
     const m = mergedTracker;
     if (!m) return;
@@ -5541,7 +5568,13 @@
   function syncMergedTracker() {
     const m = mergedTracker;
     if (!m || !m.surface.isConnected) return;
-    const y = m.surface.scrollTop;
+    // The pinned absolute native viewport participates in CSS scroll overflow.
+    // If its old top survives a shrinking snapshot (especially an evicted FOMO
+    // anchor), it fabricates blank history below the real merged extent.
+    const maxY = Math.max(0, Number.parseFloat(m.extent.style.height) - m.surface.clientHeight) || 0;
+    const y = Math.min(m.surface.scrollTop, maxY);
+    m.viewport.style.top = `${y}px`;
+    if (m.surface.scrollTop > maxY + .5) m.surface.scrollTop = y;
     // Invert the insertion map. While traversing an inserted run, pin the host
     // at its native boundary instead of asking it for a nonexistent native index.
     let nativeY = y;
@@ -5552,14 +5585,14 @@
       added += slot.height;
       nativeY = y - added;
     }
-    m.viewport.style.top = `${y}px`;
     m.viewport.style.height = `${m.surface.clientHeight}px`;
-    m.viewport.scrollTop = Math.max(0, nativeY);
+    // Translated pool rows may enlarge native scrollHeight too; the complete
+    // native index, not that transient visual overflow, owns native coordinates.
+    m.viewport.scrollTop = Math.max(0, Math.min(nativeY, m.stamps.length * m.h - m.surface.clientHeight));
     const delta = y - m.viewport.scrollTop;
     for (const el of [...fomoFeedShifted.keys()]) if (!el.isConnected) fomoFeedShifted.delete(el);
-    for (const card of trackerCards()) {
-      const row = fomoFeedFixedRow(card);
-      if (!row || row.wrap.parentElement !== m.spacer) continue;
+    const rows = trackerCards().map(fomoFeedFixedRow).filter(row => row && row.wrap.parentElement === m.spacer);
+    for (const row of rows) {
       const before = m.slots.reduce((sum, slot) => sum + (slot.at <= row.top + .25 ? slot.height : 0), 0);
       // Blocking still hides native cards. Keep their index-sized gap here:
       // partial visible-only compaction would overlap the interleaved rows.
@@ -5585,6 +5618,10 @@
     return true;
   }
 
+  function mergedNativeIdentity(row) {
+    return row?.tx ? JSON.stringify([row.tx, row.addr, row.chain, row.side, row.ts]) : '';
+  }
+
   function mergedTrackerAnchor(m) {
     if (!m?.stamps || m.surface.scrollTop <= 1) return null;
     const y = m.surface.scrollTop;
@@ -5595,7 +5632,7 @@
       added += slot.height;
     }
     const index = Math.min(m.stamps.length - 1, Math.floor((y-added)/m.h));
-    return { index, offset:y-added-index*m.h, stamps:m.stamps };
+    return { index, offset:y-added-index*m.h, stamps:m.stamps, nativeKey:mergedNativeIdentity(m.nativeRows?.[index]) };
   }
 
   function renderMergedTracker(cards, events) {
@@ -5659,8 +5696,8 @@
         scheduleTrackingFeedRender();
         syncMergedTracker();
       });
-      observer.observe(spacer, { childList:true, subtree:true, attributes:true, attributeFilter:['style','data-gdh-native-index','data-gdh-track-ts','data-gdh-token-blocked'] });
-      const resize = new ResizeObserver(syncMergedTracker);
+      observer.observe(spacer, { childList:true, subtree:true, attributes:true, attributeFilter:['style','data-gdh-native-index','data-gdh-native-rows','data-gdh-track-ts','data-gdh-token-blocked'] });
+      const resize = new ResizeObserver(() => { syncMergedTracker(); scheduleTrackingFeedRender(); });
       resize.observe(surface);
       mergedTracker = { surface, extent, viewport, spacer, originalStyle, observer, resize, slots:[], index:'', geometry:new WeakMap(), h };
       surface.addEventListener('scroll', syncMergedTracker, { passive:true });
@@ -5677,25 +5714,39 @@
     m.pendingTimer = 0;
     m.pendingSince = 0;
     m.stamps = stamps;
+    m.nativeRows = null;
+    try {
+      const rows = JSON.parse(spacer.getAttribute('data-gdh-native-rows'));
+      if (Array.isArray(rows) && rows.length === stamps.length && rows.every((row,i) => row?.ts === stamps[i])) m.nativeRows = rows;
+    } catch { /* Timestamp overlap remains the fallback for older bridges. */ }
     m.h = h;
     m.index = spacer.getAttribute('data-gdh-native-index');
     const wanted = new Set(events.map(ev => ev.key));
-    for (const [key, el] of fomoFeedCards) if (!wanted.has(key)) { el.remove(); fomoFeedCards.delete(key); }
+    for (const [key, el] of fomoFeedCards) if (!wanted.has(key)) { m.resize.unobserve(el); el.remove(); fomoFeedCards.delete(key); }
     m.slots = [];
     let added = 0;
-    for (const ev of [...events].sort((a,b) => b.ts - a.ts)) {
+    const tableMode = isTrackerTableMode();
+    // Batch DOM writes, then all height reads, then placement writes. Reading
+    // native mode/geometry between every card used to force O(events) layouts,
+    // delaying the native recycling/stamp handoff past otherwise idle frames.
+    const entries = [...events].sort((a,b) => b.ts - a.ts).map(ev => {
       let index = stamps.findIndex(ts => ts < ev.ts);
       if (index < 0) index = stamps.length;
-      const at = index * h;
-      const el = fomoFeedCardFor(ev);
+      const el = fomoFeedCardFor(ev, tableMode);
       if (el.parentElement !== m.extent) m.extent.append(el);
+      m.resize.observe(el);
       el.style.position = 'absolute';
       el.style.width = '100%';
-      el.style.top = `${at + added}px`;
-      const height = el.offsetHeight;
+      return { ev, el, at:index * h };
+    });
+    const heights = entries.map(({el}) => el.getBoundingClientRect().height);
+    entries.forEach(({ev, el, at},i) => {
+      const height = heights[i];
+      const top = `${at + added}px`;
+      if (el.style.top !== top) el.style.top = top;
       m.slots.push({ key:ev.key, at, top:at + added, height });
       added += height;
-    }
+    });
     m.extent.style.height = `${stamps.length * h + added}px`;
     if (anchor?.key) {
       const slot = m.slots.find(slot => slot.key === anchor.key);
@@ -5705,7 +5756,13 @@
       // timestamps need not be unique. Ambiguous/evicted anchors stay put.
       const candidates = [];
       let comparisons = 0;
-      for (let index = 0; index < stamps.length; index++) {
+      if (anchor.nativeKey && m.nativeRows) {
+        m.nativeRows.forEach((row,index) => { if (mergedNativeIdentity(row) === anchor.nativeKey) candidates.push(index); });
+      }
+      // An actual native identity outranks ambiguous same-second timestamps.
+      // If that identity was evicted or has several legs, never pick a random
+      // timestamp neighbour as a substitute.
+      for (let index = 0; !(anchor.nativeKey && m.nativeRows) && index < stamps.length; index++) {
         if (stamps[index] !== anchor.stamps[anchor.index]) continue;
         const shift = index - anchor.index;
         const from = Math.max(0, -shift), to = Math.min(anchor.stamps.length, stamps.length-shift);
