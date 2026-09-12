@@ -5516,7 +5516,10 @@
       return true;
     }
     state.amount = next;
-    el.style.translate = `0px ${next}px`;
+    // React can recycle a wrapper in place, including replacing its style.
+    // Avoid writing identical styles: our geometry observer also sees translate.
+    const translate = `0px ${next}px`;
+    if (el.style.translate !== translate) el.style.translate = translate;
     return true;
   }
 
@@ -5599,7 +5602,7 @@
           const wrapRect = wrap.getBoundingClientRect();
           const parentRect = parent.getBoundingClientRect();
           top = wrapRect.top - parentRect.top - parent.clientTop + parent.scrollTop
-            - Number(state?.amount || 0);
+            - (state && wrap.style.translate === `0px ${state.amount}px` ? state.amount : 0);
         }
         if (!Number.isFinite(top)) top = Number.parseFloat(wrap.style.top);
         // Native rows may be fractional CSS pixels (e.g. 64.5px); offsetHeight
@@ -5678,6 +5681,8 @@
     mergedTracker = null;
     m.observer.disconnect();
     m.resize.disconnect();
+    clearTimeout(m.pendingTimer);
+    m.viewport.removeEventListener('wheel', m.onWheel);
     m.viewport.style.cssText = m.originalStyle;
     if (m.viewport.parentElement === m.surface) {
       m.surface.before(m.viewport);
@@ -5715,9 +5720,40 @@
     }
   }
 
+  // The bridge stamps committed rows asynchronously after React reuses them.
+  // Retain only an already validated adapter during that bounded handoff; a
+  // genuinely unknown geometry/index must never bootstrap from visible samples.
+  function deferMergedTrackerValidation(spacer) {
+    const m = mergedTracker;
+    if (!m || m.spacer !== spacer || !m.surface.isConnected || !spacer.isConnected) return false;
+    if (!m.pendingSince) {
+      m.pendingSince = performance.now();
+      m.pendingTimer = setTimeout(() => {
+        m.pendingTimer = 0;
+        if (mergedTracker === m) scanFomoFeed();
+      }, 1500);
+    }
+    if (performance.now() - m.pendingSince >= 1500) return false;
+    syncMergedTracker();
+    return true;
+  }
+
+  function mergedTrackerAnchor(m) {
+    if (!m?.stamps || m.surface.scrollTop <= 1) return null;
+    const y = m.surface.scrollTop;
+    let added = 0;
+    for (const slot of m.slots) {
+      if (y < slot.top) break;
+      if (y < slot.top + slot.height) return { key:slot.key, offset:y-slot.top };
+      added += slot.height;
+    }
+    const index = Math.min(m.stamps.length - 1, Math.floor((y-added)/m.h));
+    return { index, offset:y-added-index*m.h, stamps:m.stamps };
+  }
+
   function renderMergedTracker(cards, events) {
     const first = cards.map(fomoFeedFixedRow).find(Boolean);
-    if (!first) return false;
+    if (!first) return deferMergedTrackerValidation(mergedTracker?.spacer);
     const spacer = first.wrap.parentElement;
     let stamps;
     try { stamps = JSON.parse(spacer.getAttribute('data-gdh-native-index')); } catch { return false; }
@@ -5726,12 +5762,16 @@
     if (!Array.isArray(stamps) || !stamps.length || stamps.length > 10000
       || !stamps.every((t, i) => Number.isFinite(t) && t > 0 && (!i || stamps[i - 1] >= t))) return false;
     const h = first.h;
+    let pending = false;
+    if (mergedTracker?.spacer === spacer && Math.abs(mergedTracker.h - h) > .5) return false;
     for (const card of cards) {
       const row = fomoFeedFixedRow(card);
       if (!row || row.wrap.parentElement !== spacer || Math.abs(row.h - h) > .5) return false;
       const index = Math.round(row.top / h);
-      if (Math.abs(index * h - row.top) > .5 || stamps[index] !== Number(card.dataset.gdhTrackTs)) return false;
+      if (Math.abs(index * h - row.top) > .5 || index < 0) return false;
+      if (stamps[index] !== Number(card.dataset.gdhTrackTs)) pending = true;
     }
+    if (pending) return deferMergedTrackerValidation(spacer);
     if (mergedTracker && (mergedTracker.spacer !== spacer || !mergedTracker.surface.isConnected)) destroyMergedTracker();
     if (!mergedTracker) {
       let viewport = spacer.parentElement;
@@ -5749,25 +5789,42 @@
       extent.className = 'gdh-merged-tracker__extent';
       surface.append(extent);
       viewport.style.cssText += ';position:absolute;left:0;top:0;width:100%;overflow:hidden;overflow-anchor:none;min-height:0;';
-      const observer = new MutationObserver(() => {
-        // Native recycling/arrival is independent of the throttled page scanner.
-        if (mergedTracker?.spacer === spacer) {
-          if (spacer.getAttribute('data-gdh-native-index') !== mergedTracker.index) scheduleJ7FeedRender();
-          syncMergedTracker();
-        }
+      const observer = new MutationObserver(records => {
+        // Observe in-place pool reuse, not just child replacement. Ignore our
+        // own translate writes so observing style cannot create a render loop.
+        if (mergedTracker?.spacer !== spacer) return;
+        const changed = records.map(record => {
+          if (record.attributeName !== 'style') return true;
+          const el = record.target;
+          const geometry = `${el.style.transform}|${el.style.top}|${el.style.height}|${el.style.position}`;
+          const previous = mergedTracker.geometry.get(el);
+          mergedTracker.geometry.set(el, geometry);
+          const shift = fomoFeedShifted.get(el);
+          return previous !== geometry || (shift && el.style.translate !== `0px ${shift.amount}px`);
+        }).some(Boolean);
+        if (!changed) return;
+        scheduleJ7FeedRender();
+        syncMergedTracker();
       });
-      observer.observe(spacer, { childList:true, subtree:true, attributes:true, attributeFilter:['data-gdh-native-index','data-gdh-track-ts','data-gdh-token-blocked'] });
+      observer.observe(spacer, { childList:true, subtree:true, attributes:true, attributeFilter:['style','data-gdh-native-index','data-gdh-track-ts','data-gdh-token-blocked'] });
       const resize = new ResizeObserver(syncMergedTracker);
       resize.observe(surface);
-      mergedTracker = { surface, extent, viewport, spacer, originalStyle, observer, resize, slots:[], index:'' };
+      mergedTracker = { surface, extent, viewport, spacer, originalStyle, observer, resize, slots:[], index:'', geometry:new WeakMap(), h };
       surface.addEventListener('scroll', syncMergedTracker, { passive:true });
-      viewport.addEventListener('wheel', event => {
+      mergedTracker.onWheel = event => {
         if (mergedTracker?.viewport !== viewport) return;
         event.preventDefault();
         surface.scrollTop += event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? surface.clientHeight : 1);
-      }, { passive:false });
+      };
+      viewport.addEventListener('wheel', mergedTracker.onWheel, { passive:false });
     }
     const m = mergedTracker;
+    const anchor = mergedTrackerAnchor(m);
+    clearTimeout(m.pendingTimer);
+    m.pendingTimer = 0;
+    m.pendingSince = 0;
+    m.stamps = stamps;
+    m.h = h;
     m.index = spacer.getAttribute('data-gdh-native-index');
     const wanted = new Set(events.map(ev => ev.key));
     for (const [key, el] of fomoFeedCards) if (!wanted.has(key)) { el.remove(); fomoFeedCards.delete(key); }
@@ -5783,10 +5840,31 @@
       el.style.width = '100%';
       el.style.top = `${at + added}px`;
       const height = el.offsetHeight;
-      m.slots.push({ at, top:at + added, height });
+      m.slots.push({ key:ev.key, at, top:at + added, height });
       added += height;
     }
     m.extent.style.height = `${stamps.length * h + added}px`;
+    if (anchor?.key) {
+      const slot = m.slots.find(slot => slot.key === anchor.key);
+      if (slot) m.surface.scrollTop = slot.top + Math.min(anchor.offset, slot.height);
+    } else if (anchor) {
+      // Match a contiguous overlap rather than indexOf(timestamp): native
+      // timestamps need not be unique. Ambiguous/evicted anchors stay put.
+      const candidates = [];
+      let comparisons = 0;
+      for (let index = 0; index < stamps.length; index++) {
+        if (stamps[index] !== anchor.stamps[anchor.index]) continue;
+        const shift = index - anchor.index;
+        const from = Math.max(0, -shift), to = Math.min(anchor.stamps.length, stamps.length-shift);
+        if (to-from >= Math.min(3, anchor.stamps.length)
+          && anchor.stamps.slice(from,to).every((ts,i) => ++comparisons <= 30000 && stamps[from+i+shift] === ts)) candidates.push(index);
+        if (comparisons > 30000 || candidates.length > 1) break;
+      }
+      if (comparisons <= 30000 && candidates.length === 1) {
+        const at = candidates[0] * h;
+        m.surface.scrollTop = at + anchor.offset + m.slots.reduce((sum,slot) => sum+(slot.at<=at+.25 ? slot.height : 0),0);
+      }
+    }
     syncMergedTracker();
     return true;
   }

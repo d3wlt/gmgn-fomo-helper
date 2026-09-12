@@ -453,7 +453,7 @@ await test('Feed offsets preserve GMGN virtual-list transforms', () => {
         getBoundingClientRect: () => ({ top: 100 }),
       });
       const wrap = Object.assign(new RowElement(), {
-        style: { position: 'absolute', top: '0px', transform: 'translateY(192px)' },
+        style: { position: 'absolute', top: '0px', transform: 'translateY(192px)', translate: '0px 66px' },
         offsetHeight: 64.5,
         parentElement: parent,
         getBoundingClientRect: () => ({ top: 358 }),
