@@ -5615,8 +5615,14 @@
       const row = fomoFeedFixedRow(card);
       if (!row || row.wrap.parentElement !== spacer || Math.abs(row.h - h) > .5) return false;
       const index = Math.round(row.top / h);
-      if (Math.abs(index * h - row.top) > .5 || index < 0) return false;
-      if (stamps[index] !== Number(card.dataset.gdhTrackTs)) pending = true;
+      if (Math.abs(index * h - row.top) > .5 || index < 0 || index >= stamps.length) return false;
+      // GMGN may leave overscan metadata stale indefinitely. Its complete index
+      // still owns those slots; validate card stamps when the native slot enters
+      // the viewport, not while an off-screen recycled row is parked in the pool.
+      const viewport = mergedTracker?.spacer === spacer ? mergedTracker.viewport : spacer.parentElement;
+      const inNativeViewport = row.top + h > viewport.scrollTop
+        && row.top < viewport.scrollTop + viewport.clientHeight;
+      if (inNativeViewport && stamps[index] !== Number(card.dataset.gdhTrackTs)) pending = true;
     }
     if (pending) return deferMergedTrackerValidation(spacer);
     if (mergedTracker && (mergedTracker.spacer !== spacer || !mergedTracker.surface.isConnected)) destroyMergedTracker();

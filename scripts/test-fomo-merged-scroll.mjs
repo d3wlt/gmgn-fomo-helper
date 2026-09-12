@@ -57,6 +57,11 @@ try {
   assert.equal(await page.locator('.gdh-fomofeed-lane').count(),0);
   const seenNative=new Set(),seenFomo=new Set();
   await page.evaluate(()=>{window.originalSurface=document.querySelector('.gdh-merged-tracker');window.originalButtons=[...document.querySelectorAll('[data-sentry-component="TrackerListItem"]')];});
+  // Native overscan rows can retain stale stamps beyond the handoff deadline.
+  await page.evaluate(()=>{window.overscan=document.querySelector('.native-wrap:last-child').firstChild;window.savedOverscanStamp=window.overscan.dataset.gdhTrackTs;window.overscan.dataset.gdhTrackTs='1';window.__merged.scan();});
+  await page.waitForTimeout(1700);
+  assert.equal(await page.evaluate(()=>document.querySelector('.gdh-merged-tracker')===window.originalSurface),true,'off-screen metadata cannot tear down the surface');
+  await page.evaluate(()=>{window.overscan.dataset.gdhTrackTs=window.savedOverscanStamp;});
   for(const y of [...Array.from({length:32},(_,i)=>i*300),...Array.from({length:32},(_,i)=>(31-i)*300)]) {
     assert.equal(await page.locator('.gdh-merged-tracker').count(),1,`surface retained at ${y}; errors ${errors}`);
     await page.evaluate(y=>{document.querySelector('.gdh-merged-tracker').scrollTop=y;window.__merged.sync();},y);
