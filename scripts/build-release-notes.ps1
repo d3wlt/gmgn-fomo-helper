@@ -20,8 +20,11 @@ if (-not (Test-Path -LiteralPath $sourcePath)) {
 }
 
 $content = [IO.File]::ReadAllText($sourcePath, [Text.Encoding]::UTF8).Trim()
+$title = ($content -split "`r?`n")[0]
+if ($title -ne "# GMGN FOMO Helper $Tag" -and $title -ne "# better gmgn $Tag") {
+  throw "Release-note title does not match product and tag: $Tag"
+}
 $requiredSections = @(
-  '# better gmgn',
   '## Highlights',
   '## Installation',
   '## Usage',

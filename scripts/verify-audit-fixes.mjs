@@ -1267,7 +1267,7 @@ await test('Maintained sources are English-only and the release surface is ZIP-o
   assert.match(manifest.version, /^\d+\.\d+\.\d+(?:\.\d+)?$/);
   assert.ok(popupHtml.startsWith('<!doctype html>\n<html lang="en">\n'));
   assert.ok(readme.replaceAll('**', '').includes(`Version ${manifest.version}`));
-  assert.ok(releaseNote.startsWith(`# better gmgn v${manifest.version}\n`));
+  assert.ok([`# GMGN FOMO Helper v${manifest.version}\n`, `# better gmgn v${manifest.version}\n`].some(title => releaseNote.startsWith(title)));
   assert.ok(fs.existsSync(path.join(root, 'release-notes', `v${manifest.version}.md`)), 'current release note exists alongside historical notes');
   assert.ok(releaseBuild.includes('gmgn-fomo-helper-v$version.zip'));
   assert.ok(releaseBuild.includes('"$zipPath.sha256"'));

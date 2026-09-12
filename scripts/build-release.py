@@ -19,10 +19,9 @@ def build(tag=None):
         raise ValueError("Tag and manifest version differ")
     note = ROOT / "release-notes" / f"v{version}.md"
     note_content = note.read_text()
-    if not note_content.startswith(f"# better gmgn v{version}\n"):
+    if not note_content.startswith((f"# GMGN FOMO Helper v{version}\n", f"# better gmgn v{version}\n")):
         raise ValueError("Missing or mismatched release notes")
     required_sections = (
-        "# better gmgn",
         "## Highlights",
         "## Installation",
         "## Usage",
