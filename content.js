@@ -98,7 +98,6 @@
     showDevTooltip: true,
     enableDevBookmark: true,
     enableCalloutBlacklist: true,
-    enableSpecialWallet: true,
     enableRemindAlert: true,
     enableFomoPanel: true,
     fomoPanelFolded: false,
@@ -109,11 +108,9 @@
     holdingSurgeThreshold: 20,
     holdingSurgeCooldown: 60,
     holdingWatchList: [],
-    addWalletStarPref: { on: false, color: '#f5b83d', pin: false },
     hideLightningTrade: true,
     watchedDevs: [],
     blockedCallers: [],
-    blockedTokens: [],
     mergeFomoHolders: true,
     markedHolders: [
       { address: '0x38e47fece3ea323e864c65410f6458c820eaa897', name: 'Cow' },
@@ -127,7 +124,6 @@
     enableFomoFeed: true,
     fomoFeedChainOnly: false,
     fomoFeedTypes: { buy: true, sell: true, thesis: true },
-    specialWallets: [],
     highlightColor: '#f5b83d',
   };
 
@@ -135,16 +131,6 @@
   let watchedMap = new Map();
   let blockedWallets = new Set();
   let blockedHandles = new Set();
-  const SPECIAL_COLOR_PALETTE = [
-    '#f5b83d',
-    '#ef5350',
-    '#43c07a',
-    '#4c9ffe',
-    '#b48ae0',
-    '#ed6ba4',
-    '#3ec6c6',
-  ];
-  let specialWalletMap = new Map();
   let scanScheduled = false;
   let scrollScanTimer = 0;
   let calloutToastTimer = 0;
@@ -273,11 +259,6 @@
     return EVM_ADDR_RE.test(v) ? v.toLowerCase() : '';
   }
 
-  function walletAddressFromHref(href) {
-    const seg = String(href || '').match(/\/address\/([^/?#]+)/)?.[1] || '';
-    return normalizeWalletAddress(seg);
-  }
-
   function normalizeHandle(value) {
     return typeof value === 'string' ? value.trim().replace(/^@/, '').toLowerCase() : '';
   }
@@ -315,28 +296,6 @@
     const callers = getBlockedCallers();
     blockedWallets = new Set(callers.map((item) => item.wallet).filter(Boolean));
     blockedHandles = new Set(callers.map((item) => item.handle).filter(Boolean));
-  }
-
-  function normalizeSpecialColor(color) {
-    if (color === 'rainbow') return 'rainbow';
-    if (/^#[0-9a-fA-F]{6}$/.test(String(color || ''))) return String(color).toLowerCase();
-    return SPECIAL_COLOR_PALETTE[0];
-  }
-
-  function rebuildSpecialWalletSet() {
-    specialWalletMap = new Map(
-      (Array.isArray(settings.specialWallets) ? settings.specialWallets : [])
-        .map((item) => {
-          const address = normalizeWalletAddress(item?.address);
-          if (!address) return null;
-          return [address, {
-            label: String(item?.label || ''),
-            color: normalizeSpecialColor(item?.color),
-            pin: item?.pin === true,
-          }];
-        })
-        .filter(Boolean),
-    );
   }
 
   function formatCount(value) {
@@ -1148,56 +1107,6 @@
     return el;
   }
 
-  let blockedTokenSet = new Set();
-
-  function getBlockedTokens() {
-    return (Array.isArray(settings.blockedTokens) ? settings.blockedTokens : [])
-      .filter((item) => item && typeof item.address === 'string');
-  }
-
-  function rebuildBlockedTokenIndex() {
-    blockedTokenSet = new Set(getBlockedTokens().map((item) => item.address.toLowerCase()));
-  }
-
-  function isTokenBlocked(address) {
-    return Boolean(address && blockedTokenSet.has(String(address).toLowerCase()));
-  }
-
-  function persistBlockedTokens(next, message) {
-    const previous = getBlockedTokens();
-    settings.blockedTokens = next;
-    rebuildBlockedTokenIndex();
-    scanSpecialWallets();
-
-    chrome.storage.local.set({ blockedTokens: next }, () => {
-      const error = chrome.runtime?.lastError;
-      if (error) {
-        settings.blockedTokens = previous;
-        rebuildBlockedTokenIndex();
-        scanSpecialWallets();
-        return;
-      }
-      showTrackToast(message);
-    });
-  }
-
-  function toggleBlockedToken(address, symbol) {
-    if (!address) return;
-    const key = String(address).toLowerCase();
-    const list = getBlockedTokens();
-    if (blockedTokenSet.has(key)) {
-      persistBlockedTokens(
-        list.filter((item) => item.address.toLowerCase() !== key),
-        `Restored tracking activity for ${symbol || 'this token'}`,
-      );
-      return;
-    }
-    persistBlockedTokens(
-      [{ address: key, symbol: String(symbol || '').slice(0, 24), at: Date.now() }, ...list].slice(0, 300),
-      `Blocked ${symbol || 'this token'}; restore it from the 🚫 list`,
-    );
-  }
-
   let trackToastTimer = 0;
   function showTrackToast(text) {
     const panel = document.querySelector('[data-sentry-component="WalletTrack"]');
@@ -1226,78 +1135,12 @@
     return null;
   }
 
-  function markBlockedHosts(card, blocked) {
-    let el = card;
-    for (let level = 0; level < 6 && el instanceof HTMLElement; level += 1) {
-      if (blocked) el.dataset.gdhTokenBlocked = '1';
-      else delete el.dataset.gdhTokenBlocked;
-      if ((el.style.position || '') === 'absolute') break;
-      const parent = el.parentElement;
-      if (!parent) break;
-      if (parent.querySelectorAll(TRACKER_ITEM_SELECTOR).length > 1) break;
-      el = parent;
-    }
-  }
-
-  function ensureTokenBlockButton(card, address, symbol) {
-    let button = card.querySelector('.gdh-tokenblock');
-    if (!button) {
-      button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'gdh-tokenblock';
-      let holdTimer = 0;
-      const cancelHold = () => {
-        window.clearTimeout(holdTimer);
-        holdTimer = 0;
-        button.classList.remove('is-holding');
-      };
-      button.addEventListener('pointerdown', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (isTokenBlocked(button.dataset.gdhTbAddr || '')) return;
-        button.classList.add('is-holding');
-        holdTimer = window.setTimeout(() => {
-          cancelHold();
-          button.dataset.gdhTbFiredAt = String(Date.now());
-          toggleBlockedToken(button.dataset.gdhTbAddr || '', button.dataset.gdhTbSymbol || '');
-        }, 1000);
-      });
-      ['pointerup', 'pointerleave', 'pointercancel'].forEach((type) => {
-        button.addEventListener(type, cancelHold);
-      });
-      button.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (Date.now() - Number(button.dataset.gdhTbFiredAt || 0) < 500) return;
-        if (isTokenBlocked(button.dataset.gdhTbAddr || '')) {
-          toggleBlockedToken(button.dataset.gdhTbAddr || '', button.dataset.gdhTbSymbol || '');
-        }
-      });
-      const symbolRow = card.querySelector(TRACKER_SYMBOL_CELL);
-      const nameNode = symbolRow ? null : findTrackerSymbolNode(card, symbol);
-      if (symbolRow) symbolRow.appendChild(button);
-      else if (nameNode) nameNode.insertAdjacentElement('afterend', button);
-      else {
-        const fallback = findCardActionContainer(card);
-        if (fallback) fallback.appendChild(button);
-        else card.appendChild(button);
-      }
-    }
-    button.dataset.gdhTbAddr = address;
-    button.dataset.gdhTbSymbol = symbol || '';
-    const blocked = isTokenBlocked(address);
-    button.textContent = blocked ? '🔔' : '🚫';
-    button.title = blocked
-      ? `Select to restore ${symbol || 'this token'} in tracking`
-      : `Hold for one second to hide ${symbol || 'this token'} from tracking`;
-    button.classList.toggle('is-blocked', blocked);
-  }
-
   const TRACKER_ITEM_SELECTOR = '[data-sentry-component="TrackerListItem"]';
   const TRACKER_TABLE_ITEM_SELECTOR = '[data-sentry-component="TrackingBody"] [data-sentry-component="TableItem"][href*="/token/"]';
   const TRACKER_DATA_SELECTOR = '[data-gdh-track-addr][data-gdh-track-ts]';
   const TRACKER_SYMBOL_CELL = '[data-testid="follow-tracking-row-symbol"]';
   const TRACKER_MAKER_CELL = '[data-testid="follow-tracking-row-maker"]';
+  const TRACK_TAB_CELL = '[data-testid="follow-tracking-wallet-tab"], [data-testid="follow-tracking-tab"]';
   const TRACKER_TABLE_HEADER = '[data-testid="follow-tracking-table-header"]';
   function isTrackerTableMode() {
     if (document.querySelector(`${TRACKER_TABLE_HEADER}, ${TRACKER_TABLE_ITEM_SELECTOR}`)) return true;
@@ -1321,388 +1164,6 @@
     });
     return [...found];
   }
-  const WALLET_TABLE_SELECTOR = '[data-sentry-component="WalletTable"]';
-  const TRACK_TAB_CELL = '[data-testid="follow-tracking-wallet-tab"], [data-testid="follow-tracking-tab"]';
-
-  function walletTableScopes() {
-    const scopes = new Set();
-    document.querySelectorAll(WALLET_TABLE_SELECTOR).forEach((el) => scopes.add(el));
-    document.querySelectorAll(TRACK_TAB_CELL).forEach((tab) => {
-      let el = tab.parentElement;
-      for (let level = 0; level < 8 && el instanceof HTMLElement; level += 1) {
-        if (el.querySelector('a[href*="/address/"]')) return void scopes.add(el);
-        el = el.parentElement;
-      }
-    });
-    return [...scopes];
-  }
-
-  function extractRowWalletAddress(scope) {
-    const link = scope.querySelector('a[href*="/address/"]');
-    const fromHref = walletAddressFromHref(link?.getAttribute('href'));
-    if (fromHref) return fromHref;
-    return normalizeWalletAddress(scope.dataset?.gdhTrackMaker || '');
-  }
-
-  function extractRowWalletLabel(scope) {
-    const link = scope.querySelector('a[href*="/address/"]');
-    const text = String(link?.textContent || '').trim();
-    return (text || scope.dataset?.gdhTrackNick || '').slice(0, 32);
-  }
-
-  function isSpecialWallet(address) {
-    return Boolean(address && specialWalletMap.has(address));
-  }
-
-  function specialWalletColor(address) {
-    return specialWalletMap.get(address)?.color || SPECIAL_COLOR_PALETTE[0];
-  }
-
-  function hexToRgba(hex, alpha) {
-    const m = String(hex).match(/^#([0-9a-fA-F]{6})$/);
-    if (!m) return `rgba(245, 184, 61, ${alpha})`;
-    const n = parseInt(m[1], 16);
-    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
-  }
-
-  function persistSpecialWallets(next) {
-    const previous = Array.isArray(settings.specialWallets) ? settings.specialWallets : [];
-    settings.specialWallets = next;
-    rebuildSpecialWalletSet();
-    scanSpecialWallets();
-    chrome.storage.local.set({ specialWallets: next }, () => {
-      const error = chrome.runtime?.lastError;
-      if (error) {
-        settings.specialWallets = previous;
-        rebuildSpecialWalletSet();
-        scanSpecialWallets();
-      }
-    });
-  }
-
-  function toggleSpecialWallet(address, label) {
-    if (!address) return;
-    const current = Array.isArray(settings.specialWallets) ? settings.specialWallets : [];
-    const exists = current.some((item) => normalizeWalletAddress(item?.address) === address);
-    const next = exists
-      ? current.filter((item) => normalizeWalletAddress(item?.address) !== address)
-      : [...current, { address, label: label || '', color: SPECIAL_COLOR_PALETTE[0] }];
-    persistSpecialWallets(next);
-  }
-
-  function setSpecialWalletColor(address, color) {
-    if (!address || !specialWalletMap.has(address)) return;
-    if (color !== 'rainbow' && !/^#[0-9a-fA-F]{6}$/.test(String(color || ''))) return;
-    const next = (Array.isArray(settings.specialWallets) ? settings.specialWallets : [])
-      .map((item) => (
-        normalizeWalletAddress(item?.address) === address
-          ? { ...item, color: normalizeSpecialColor(color) }
-          : item
-      ));
-    persistSpecialWallets(next);
-  }
-
-  function setSpecialWalletPin(address, pin) {
-    if (!address || !specialWalletMap.has(address)) return;
-    const next = (Array.isArray(settings.specialWallets) ? settings.specialWallets : [])
-      .map((item) => (
-        normalizeWalletAddress(item?.address) === address ? { ...item, pin: pin === true } : item
-      ));
-    persistSpecialWallets(next);
-  }
-
-  function addSpecialWallet(address, label, color, pin) {
-    const normalized = normalizeWalletAddress(address);
-    if (!normalized || specialWalletMap.has(normalized)) return false;
-    const current = Array.isArray(settings.specialWallets) ? settings.specialWallets : [];
-    persistSpecialWallets([
-      ...current,
-      {
-        address: normalized,
-        label: String(label || '').trim().slice(0, 32),
-        color: normalizeSpecialColor(color),
-        pin: pin === true,
-      },
-    ]);
-    return true;
-  }
-
-  let colorPaletteEl = null;
-
-  function closeColorPalette() {
-    colorPaletteEl?.remove();
-    colorPaletteEl = null;
-  }
-
-  function openColorPalette(address, anchorRect) {
-    closeColorPalette();
-    const palette = document.createElement('div');
-    palette.className = 'gdh-color-palette';
-    palette.addEventListener('pointerdown', (event) => event.stopPropagation());
-    const current = specialWalletColor(address);
-
-    const colorsRow = document.createElement('div');
-    colorsRow.className = 'gdh-color-palette__row';
-    for (const color of SPECIAL_COLOR_PALETTE) {
-      const dot = document.createElement('button');
-      dot.type = 'button';
-      dot.className = 'gdh-color-palette__dot';
-      dot.style.background = color;
-      dot.classList.toggle('is-current', color === current);
-      dot.title = color;
-      dot.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        setSpecialWalletColor(address, color);
-        closeColorPalette();
-      });
-      colorsRow.appendChild(dot);
-    }
-    const rainbow = document.createElement('button');
-    rainbow.type = 'button';
-    rainbow.className = 'gdh-color-palette__dot gdh-color-palette__dot--rainbow';
-    rainbow.classList.toggle('is-current', current === 'rainbow');
-    rainbow.title = 'Rainbow highlight';
-    rainbow.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      setSpecialWalletColor(address, 'rainbow');
-      closeColorPalette();
-    });
-    colorsRow.appendChild(rainbow);
-    const custom = document.createElement('input');
-    custom.type = 'color';
-    custom.className = 'gdh-color-palette__custom';
-    custom.value = current === 'rainbow' ? SPECIAL_COLOR_PALETTE[0] : current;
-    custom.title = 'Custom color';
-    custom.addEventListener('change', () => {
-      setSpecialWalletColor(address, custom.value);
-      closeColorPalette();
-    });
-    colorsRow.appendChild(custom);
-    palette.appendChild(colorsRow);
-
-    const pinRow = document.createElement('label');
-    pinRow.className = 'gdh-color-palette__pin';
-    const pinBox = document.createElement('input');
-    pinBox.type = 'checkbox';
-    pinBox.checked = specialWalletMap.get(address)?.pin === true;
-    pinBox.addEventListener('change', () => {
-      setSpecialWalletPin(address, pinBox.checked);
-    });
-    const pinText = document.createElement('span');
-    pinText.textContent = '📌 Pin new activity for 10 seconds';
-    pinRow.append(pinBox, pinText);
-    palette.appendChild(pinRow);
-
-    document.body.appendChild(palette);
-    const width = palette.offsetWidth || 220;
-    const left = Math.max(8, Math.min(window.innerWidth - width - 8, anchorRect.left - width / 2));
-    let top = anchorRect.bottom + 6;
-    const height = palette.offsetHeight || 60;
-    if (top + height + 8 > window.innerHeight) top = anchorRect.top - height - 6;
-    palette.style.left = `${Math.round(left)}px`;
-    palette.style.top = `${Math.round(top)}px`;
-    colorPaletteEl = palette;
-  }
-
-  document.addEventListener('pointerdown', (event) => {
-    if (!colorPaletteEl) return;
-    if (event.target instanceof Node && colorPaletteEl.contains(event.target)) return;
-    closeColorPalette();
-  }, true);
-  document.addEventListener('scroll', () => closeColorPalette(), true);
-
-  function findCardActionContainer(card) {
-    const span = [...card.querySelectorAll('span')].find((el) => (
-      el.children.length <= 1
-      && /^(\u5efa\u4ed3|\u52a0\u4ed3|\u51cf\u4ed3|\u6e05\u4ed3)/.test((el.textContent || '').trim())
-    ));
-    return span?.parentElement instanceof HTMLElement ? span.parentElement : null;
-  }
-
-  function ensureStarButton(host, address, label, anchor, insertMode) {
-    let button = host.querySelector('.gdh-star-button');
-    if (!button) {
-      button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'gdh-star-button';
-      button.addEventListener('pointerdown', (event) => event.stopPropagation());
-      button.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        toggleSpecialWallet(
-          button.dataset.gdhStarAddr || '',
-          button.dataset.gdhStarLabel || '',
-        );
-      });
-      if (anchor instanceof HTMLElement && insertMode === 'after') {
-        button.classList.add('gdh-star-button--inline');
-        anchor.insertAdjacentElement('afterend', button);
-      } else if (anchor instanceof HTMLElement && insertMode === 'append') {
-        button.classList.add('gdh-star-button--inline');
-        anchor.appendChild(button);
-      } else {
-        host.appendChild(button);
-      }
-    }
-    button.dataset.gdhStarAddr = address;
-    button.dataset.gdhStarLabel = label;
-    const starred = isSpecialWallet(address);
-    const starColor = starred ? specialWalletColor(address) : '';
-    const text = starred ? '★' : '☆';
-    if (button.textContent !== text) button.textContent = text;
-    button.classList.toggle('is-starred', starred);
-    button.classList.toggle('gdh-rainbow-text', starColor === 'rainbow');
-    button.style.color = starred && starColor !== 'rainbow' ? starColor : '';
-    button.title = starred ? 'Remove from special watch' : 'Add to special watch';
-
-    let swatch = host.querySelector('.gdh-color-button');
-    if (starred && button.classList.contains('gdh-star-button--inline')) {
-      if (!swatch) {
-        swatch = document.createElement('button');
-        swatch.type = 'button';
-        swatch.className = 'gdh-color-button';
-        swatch.addEventListener('pointerdown', (event) => event.stopPropagation());
-        swatch.addEventListener('click', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          openColorPalette(
-            swatch.dataset.gdhStarAddr || '',
-            swatch.getBoundingClientRect(),
-          );
-        });
-        button.insertAdjacentElement('afterend', swatch);
-      }
-      swatch.dataset.gdhStarAddr = address;
-      applySwatchColor(swatch, specialWalletColor(address));
-      swatch.title = 'Choose highlight color / pin';
-    } else {
-      swatch?.remove();
-    }
-    return button;
-  }
-
-  function applySwatchColor(el, color) {
-    if (color === 'rainbow') {
-      el.style.background = 'conic-gradient(#ef5350, #f5b83d, #43c07a, #4c9ffe, #b48ae0, #ed6ba4, #ef5350)';
-    } else {
-      el.style.background = color;
-    }
-  }
-
-  function applySpecialState(host, address) {
-    if (isSpecialWallet(address)) {
-      const color = specialWalletColor(address);
-      host.dataset.gdhSpecial = '1';
-      if (color === 'rainbow') {
-        host.dataset.gdhSpRainbow = '1';
-        host.style.removeProperty('--gdh-sp-bg');
-        host.style.removeProperty('--gdh-sp-border');
-      } else {
-        delete host.dataset.gdhSpRainbow;
-        host.style.setProperty('--gdh-sp-bg', hexToRgba(color, 0.1));
-        host.style.setProperty('--gdh-sp-border', color);
-      }
-    } else {
-      delete host.dataset.gdhSpecial;
-      delete host.dataset.gdhSpRainbow;
-      host.style.removeProperty('--gdh-sp-bg');
-      host.style.removeProperty('--gdh-sp-border');
-    }
-  }
-
-  function findWalletTableRow(link) {
-    let row = link;
-    for (let depth = 0; depth < 8 && row.parentElement; depth += 1) {
-      row = row.parentElement;
-      if (row.matches?.(WALLET_TABLE_SELECTOR)) return null;
-      const cls = String(row.className || '');
-      if (cls.includes('h-[44px]') || cls.includes('h-[64')) return row;
-      const rect = row.getBoundingClientRect();
-      if (rect.width > 200 && rect.height >= 36 && rect.height <= 130) return row;
-    }
-    return null;
-  }
-
-  function scanSpecialWallets() {
-    if (settings.enableSpecialWallet === false) {
-      closeColorPalette();
-      specialManageOpen = false;
-      document
-        .querySelectorAll('.gdh-star-button, .gdh-color-button, .gdh-sp-manage-button, .gdh-sp-manage-modal, .gdh-pin-strip, .gdh-addw-row')
-        .forEach((node) => node.remove());
-      document.querySelectorAll('[data-gdh-special="1"]').forEach((node) => {
-        delete node.dataset.gdhSpecial;
-        delete node.dataset.gdhSpRainbow;
-        node.style.removeProperty('--gdh-sp-bg');
-        node.style.removeProperty('--gdh-sp-border');
-      });
-      document.querySelectorAll('[data-gdh-star-host="1"]').forEach((node) => {
-        delete node.dataset.gdhStarHost;
-      });
-      return;
-    }
-
-    trackerCards().forEach((card) => {
-      const address = extractRowWalletAddress(card);
-      if (!address) return;
-      if (card.dataset.gdhStarHost !== '1') card.dataset.gdhStarHost = '1';
-      applySpecialState(card, address);
-      const tokenAddr = card.dataset.gdhTrackAddr || '';
-      if (tokenAddr) {
-        ensureTokenBlockButton(card, tokenAddr, card.dataset.gdhTrackSymbol || '');
-        markBlockedHosts(card, isTokenBlocked(tokenAddr));
-      }
-      ensureStarButton(
-        card,
-        address,
-        extractRowWalletLabel(card),
-        findCardActionContainer(card),
-        'append',
-      );
-    });
-
-    walletTableScopes().forEach((table) => {
-      table.querySelectorAll('a[href*="/address/"]').forEach((link) => {
-        const row = findWalletTableRow(link);
-        if (!(row instanceof HTMLElement)) return;
-        const address = extractRowWalletAddress(row);
-        if (!address) return;
-        if (row.dataset.gdhStarHost !== '1') row.dataset.gdhStarHost = '1';
-        applySpecialState(row, address);
-        ensureStarButton(row, address, extractRowWalletLabel(row), link, 'after');
-      });
-    });
-
-    refreshOnchainBalances();
-    ensureAddressPageStar();
-    ensureAddWalletStarRow();
-    ensureSpecialManageUI();
-    scanPinnedPush();
-  }
-
-  function ensureAddressPageStar() {
-    const pageAddress = walletAddressFromHref(location.pathname);
-    const follow = document.querySelector('[data-sentry-component="UserFollow"]');
-    const existing = document.querySelector('.gdh-star-button--address');
-    if (!pageAddress || !(follow instanceof HTMLElement) || !follow.parentElement) {
-      existing?.remove();
-      document.querySelector('.gdh-color-button--address')?.remove();
-      return;
-    }
-    const address = pageAddress;
-    const host = follow.parentElement;
-    if (host.dataset.gdhStarHost !== '1') host.dataset.gdhStarHost = '1';
-    const label = String(document.title || '').split(' ')[0].trim().slice(0, 32);
-    const button = ensureStarButton(host, address, label, follow, 'after');
-    if (button) {
-      button.classList.add('gdh-star-button--address');
-      const swatch = host.querySelector('.gdh-color-button');
-      swatch?.classList.add('gdh-color-button--address');
-    }
-  }
-
   const ADDR_PLACEHOLDER_RE = /\u94b1\u5305\u5730\u5740|wallet\s*address/i;
   const NAME_PLACEHOLDER_RE = /\u94b1\u5305\u540d\u79f0|wallet\s*name|\u5907\u6ce8/i;
   const ADD_SUBMIT_RE = /^(\u6dfb\u52a0\u94b1\u5305|add\s*wallet)$/i;
@@ -1727,24 +1188,6 @@
       node = node.parentElement;
     }
     return null;
-  }
-
-  function readAddWalletPref() {
-    const p = settings.addWalletStarPref;
-    return {
-      on: p?.on === true,
-      color: normalizeSpecialColor(p?.color),
-      pin: p?.pin === true,
-    };
-  }
-
-  function saveAddWalletPref(pref) {
-    settings.addWalletStarPref = pref;
-    try {
-      chrome.storage.local.set({ addWalletStarPref: pref });
-    } catch {
-      // context invalidated
-    }
   }
 
   async function followWalletOnChain(chain, address, name) {
@@ -1782,96 +1225,13 @@
     return '';
   }
 
-  function ensureAddWalletStarRow() {
+  // Independent native cross-chain follow shortcut; no watch metadata.
+  function ensureAddWalletCrossChainRow() {
     const ctx = findAddWalletDialog();
-    if (!ctx) return;
-    if (settings.enableSpecialWallet === false) {
-      ctx.dialog.querySelector(':scope .gdh-addw-row')?.remove();
-      return;
-    }
-    let row = ctx.dialog.querySelector(':scope .gdh-addw-row');
-    if (row) return;
-
-    const pref = readAddWalletPref();
-    row = document.createElement('div');
-    row.className = 'gdh-addw-row';
-    row.addEventListener('pointerdown', (event) => event.stopPropagation());
-
-    const toggle = document.createElement('label');
-    toggle.className = 'gdh-addw-toggle';
-    const box = document.createElement('input');
-    box.type = 'checkbox';
-    box.checked = pref.on;
-    const star = document.createElement('span');
-    star.className = 'gdh-addw-star';
-    star.textContent = '★';
-    const text = document.createElement('span');
-    text.textContent = 'Add to special watch too';
-    toggle.append(box, star, text);
-    row.appendChild(toggle);
-
-    const opts = document.createElement('div');
-    opts.className = 'gdh-addw-opts';
-    const dots = document.createElement('div');
-    dots.className = 'gdh-addw-dots';
-    let chosen = pref.color;
-    const renderDots = () => {
-      [...dots.querySelectorAll('.gdh-addw-dot')].forEach((d) => {
-        d.classList.toggle('is-current', d.dataset.color === chosen);
-      });
-      star.style.color = chosen === 'rainbow' ? '' : chosen;
-      star.classList.toggle('gdh-rainbow-text', chosen === 'rainbow');
-    };
-    [...SPECIAL_COLOR_PALETTE, 'rainbow'].forEach((color) => {
-      const dot = document.createElement('button');
-      dot.type = 'button';
-      dot.className = 'gdh-addw-dot';
-      dot.dataset.color = color;
-      applySwatchColor(dot, color);
-      dot.title = color === 'rainbow' ? 'Rainbow' : color;
-      dot.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        chosen = color;
-        renderDots();
-      });
-      dots.appendChild(dot);
-    });
-    const custom = document.createElement('input');
-    custom.type = 'color';
-    custom.className = 'gdh-addw-custom';
-    custom.value = chosen === 'rainbow' ? SPECIAL_COLOR_PALETTE[0] : chosen;
-    custom.title = 'Custom color';
-    custom.addEventListener('input', () => {
-      chosen = custom.value;
-      renderDots();
-    });
-    dots.appendChild(custom);
-    opts.appendChild(dots);
-
-    const pinLabel = document.createElement('label');
-    pinLabel.className = 'gdh-addw-pin';
-    const pinBox = document.createElement('input');
-    pinBox.type = 'checkbox';
-    pinBox.checked = pref.pin;
-    const pinText = document.createElement('span');
-    pinText.textContent = '📌 Pin activity';
-    pinLabel.append(pinBox, pinText);
-    opts.appendChild(pinLabel);
-    row.appendChild(opts);
-
-    const syncEnabled = () => {
-      row.classList.toggle('is-on', box.checked);
-      opts.querySelectorAll('button, input').forEach((el) => { el.disabled = !box.checked; });
-    };
-    box.addEventListener('change', syncEnabled);
-    syncEnabled();
-    renderDots();
-
+    if (!ctx || ctx.dialog.querySelector('.gdh-addw-cross')) return;
     const hint = document.createElement('div');
     hint.className = 'gdh-addw-cross';
-    row.appendChild(hint);
-
+    ctx.submit.parentElement?.insertBefore(hint, ctx.submit);
     const syncCrossChain = () => {
       const value = String(ctx.addrInput.value || '').trim();
       const target = detectAddressChain(value);
@@ -1901,7 +1261,6 @@
         const res = await followWalletOnChain(targetChain, value, name);
         if (res.ok) {
           go.textContent = 'Added ✓';
-          if (box.checked) addSpecialWallet(value, name, chosen, pinBox.checked);
           window.setTimeout(() => { syncCrossChain(); }, 1500);
         } else {
           go.disabled = false;
@@ -1915,365 +1274,6 @@
     ctx.addrInput.addEventListener('paste', () => setTimeout(syncCrossChain, 0));
     syncCrossChain();
 
-    ctx.submit.addEventListener('click', () => {
-      if (!box.checked) {
-        saveAddWalletPref({ on: false, color: chosen, pin: pinBox.checked });
-        return;
-      }
-      const address = String(ctx.addrInput.value || '').trim();
-      const label = String(ctx.nameInput?.value || '').trim();
-      saveAddWalletPref({ on: true, color: chosen, pin: pinBox.checked });
-      if (!addSpecialWallet(address, label, chosen, pinBox.checked)) {
-        const normalized = normalizeAddress(address);
-        if (specialWalletMap.has(normalized)) {
-          setSpecialWalletColor(normalized, chosen);
-          setSpecialWalletPin(normalized, pinBox.checked);
-        }
-      }
-    }, true);
-
-    ctx.submit.parentElement?.insertBefore(row, ctx.submit);
-  }
-
-  let specialManageOpen = false;
-
-  function specialEntries() {
-    return [...specialWalletMap.entries()].map(([address, meta]) => ({ address, ...meta }));
-  }
-
-  function ensureSpecialManageUI() {
-    const panel = document.querySelector('[data-sentry-component="WalletTrack"]');
-    const header = panel?.querySelector('[data-sentry-component="TrackingHeader"]');
-    if (!(header instanceof HTMLElement) || !(panel instanceof HTMLElement)) {
-      if (specialManageOpen) specialManageOpen = false;
-      document.querySelector('.gdh-sp-manage-modal')?.remove();
-      return;
-    }
-    let button = header.querySelector(':scope .gdh-sp-manage-button');
-    if (!button) {
-      button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'gdh-sp-manage-button';
-      button.title = 'Manage special watch';
-      button.addEventListener('pointerdown', (event) => event.stopPropagation());
-      button.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        specialManageOpen = !specialManageOpen;
-        scheduleScan();
-      });
-      header.appendChild(button);
-    }
-    const text = `★${specialWalletMap.size}`;
-    if (button.textContent !== text) button.textContent = text;
-    button.classList.toggle('is-active', specialManageOpen);
-    ensureSpecialManageModal(panel);
-  }
-
-  function ensureSpecialManageModal(panel) {
-    let modal = panel.querySelector(':scope > .gdh-sp-manage-modal');
-    if (!specialManageOpen) {
-      modal?.remove();
-      return;
-    }
-    panel.classList.add('gdh-callout-panel-host');
-    if (!modal) {
-      modal = document.createElement('section');
-      modal.className = 'gdh-sp-manage-modal';
-      modal.addEventListener('pointerdown', (event) => event.stopPropagation());
-
-      const head = document.createElement('div');
-      head.className = 'gdh-sp-manage__head';
-      const title = document.createElement('strong');
-      title.className = 'gdh-sp-manage__title';
-      title.textContent = 'Special watch / blocked tokens';
-      const close = document.createElement('button');
-      close.type = 'button';
-      close.className = 'gdh-sp-manage__close';
-      close.textContent = '×';
-      close.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        specialManageOpen = false;
-        modal.remove();
-        scheduleScan();
-      });
-      head.append(title, close);
-
-      const addRow = document.createElement('div');
-      addRow.className = 'gdh-sp-manage__add';
-      const addrInput = document.createElement('input');
-      addrInput.className = 'gdh-sp-manage__input gdh-sp-manage__input--addr';
-      addrInput.placeholder = '0x wallet address';
-      addrInput.spellcheck = false;
-      const labelInput = document.createElement('input');
-      labelInput.className = 'gdh-sp-manage__input gdh-sp-manage__input--label';
-      labelInput.placeholder = 'Note (optional)';
-      const addButton = document.createElement('button');
-      addButton.type = 'button';
-      addButton.className = 'gdh-sp-manage__addbtn';
-      addButton.textContent = 'Add';
-      addButton.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (addSpecialWallet(addrInput.value, labelInput.value)) {
-          addrInput.value = '';
-          labelInput.value = '';
-        } else {
-          addrInput.classList.add('is-error');
-          window.setTimeout(() => addrInput.classList.remove('is-error'), 900);
-        }
-      });
-      addRow.append(addrInput, labelInput, addButton);
-
-      const list = document.createElement('div');
-      list.className = 'gdh-sp-manage__list';
-      const blocked = document.createElement('div');
-      blocked.className = 'gdh-sp-manage__blocked';
-      modal.append(head, addRow, list, blocked);
-      panel.appendChild(modal);
-    }
-
-    try {
-      const headerRect = panel
-        .querySelector('[data-sentry-component="TrackingHeader"]')
-        .getBoundingClientRect();
-      const panelRect = panel.getBoundingClientRect();
-      modal.style.top = `${Math.max(30, Math.round(headerRect.bottom - panelRect.top) + 4)}px`;
-    } catch {
-      modal.style.top = '34px';
-    }
-    renderSpecialManageList(modal);
-    renderBlockedTokenList(modal);
-  }
-
-  function renderBlockedTokenList(modal) {
-    const box = modal.querySelector('.gdh-sp-manage__blocked');
-    if (!box) return;
-    const key = JSON.stringify(getBlockedTokens().map((x) => `${x.address}|${x.symbol || ''}`));
-    if (box.dataset.gdhBlockedKey === key) return;
-    box.dataset.gdhBlockedKey = key;
-    box.replaceChildren();
-
-    const head = document.createElement('div');
-    head.className = 'gdh-sp-manage__subhead';
-    const list = getBlockedTokens();
-    head.textContent = `Tokens blocked in tracking (${list.length})`;
-    box.appendChild(head);
-
-    if (!list.length) {
-      const empty = document.createElement('div');
-      empty.className = 'gdh-sp-manage__empty';
-      empty.textContent = 'No tokens are blocked. Hover over a tracking card and select 🚫 beside the token name.';
-      box.appendChild(empty);
-      return;
-    }
-
-    for (const item of list) {
-      const row = document.createElement('div');
-      row.className = 'gdh-sp-manage__brow';
-      const name = document.createElement('span');
-      name.className = 'gdh-sp-manage__bname';
-      name.textContent = item.symbol || '(Unknown token)';
-      const addr = document.createElement('span');
-      addr.className = 'gdh-sp-manage__baddr';
-      addr.textContent = `${item.address.slice(0, 6)}…${item.address.slice(-4)}`;
-      addr.title = item.address;
-      const undo = document.createElement('button');
-      undo.type = 'button';
-      undo.className = 'gdh-sp-manage__undo';
-      undo.textContent = 'Restore';
-      undo.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        toggleBlockedToken(item.address, item.symbol);
-        delete box.dataset.gdhBlockedKey;
-        renderBlockedTokenList(modal);
-      });
-      row.append(name, addr, undo);
-      box.appendChild(row);
-    }
-  }
-
-  function renderSpecialManageList(modal) {
-    const entries = specialEntries();
-    const key = JSON.stringify(entries);
-    if (modal.dataset.gdhSpKey === key) return;
-    modal.dataset.gdhSpKey = key;
-    const title = modal.querySelector('.gdh-sp-manage__title');
-    if (title) title.textContent = `Special watch · ${entries.length}`;
-    const list = modal.querySelector('.gdh-sp-manage__list');
-    list.replaceChildren();
-    if (!entries.length) {
-      const empty = document.createElement('div');
-      empty.className = 'gdh-sp-manage__empty';
-      empty.textContent = 'No wallets are on special watch';
-      list.appendChild(empty);
-      return;
-    }
-    for (const entry of entries) {
-      const row = document.createElement('div');
-      row.className = 'gdh-sp-manage__row';
-
-      const swatch = document.createElement('button');
-      swatch.type = 'button';
-      swatch.className = 'gdh-sp-manage__swatch';
-      applySwatchColor(swatch, entry.color);
-      swatch.title = 'Choose highlight color / pin';
-      swatch.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        openColorPalette(entry.address, swatch.getBoundingClientRect());
-      });
-
-      const pin = document.createElement('button');
-      pin.type = 'button';
-      pin.className = 'gdh-sp-manage__pin';
-      pin.textContent = '📌';
-      pin.classList.toggle('is-on', entry.pin);
-      pin.title = entry.pin ? 'Pinned: new activity stays on top for 10 seconds' : 'Not pinned';
-      pin.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        setSpecialWalletPin(entry.address, !entry.pin);
-      });
-
-      const name = document.createElement('span');
-      name.className = 'gdh-sp-manage__name';
-      name.textContent = entry.label || '(No note)';
-      const addr = document.createElement('span');
-      addr.className = 'gdh-sp-manage__addr';
-      addr.textContent = `${entry.address.slice(0, 6)}…${entry.address.slice(-4)}`;
-
-      const remove = document.createElement('button');
-      remove.type = 'button';
-      remove.className = 'gdh-sp-manage__remove';
-      remove.textContent = 'Remove';
-      remove.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        toggleSpecialWallet(entry.address, entry.label);
-      });
-
-      row.append(swatch, pin, name, addr, remove);
-      list.appendChild(row);
-    }
-  }
-
-  const SPECIAL_PIN_MS = 10000;
-  const SPECIAL_PIN_MAX = 3;
-  const SPECIAL_PIN_SEEN_MAX = 400;
-  const specialPinSeen = new Set();
-  let specialPinBaselineDone = false;
-  let specialPinStrip = null;
-
-  function hasPinnedWallets() {
-    for (const meta of specialWalletMap.values()) if (meta.pin) return true;
-    return false;
-  }
-
-  function trackerCardSignature(card, address) {
-    const action = findCardActionContainer(card);
-    const actionText = action
-      ? [...action.children].filter((el) => el.tagName === 'SPAN').map((el) => (el.textContent || '').trim()).join('')
-      : '';
-    const amount = (card.querySelector('[data-sentry-component="LiteTrackerAmount"]')?.textContent || '').trim();
-    return `${address}|${card.getAttribute('href') || ''}|${actionText}|${amount}`;
-  }
-
-  function rememberPinSeen(sig) {
-    specialPinSeen.add(sig);
-    if (specialPinSeen.size > SPECIAL_PIN_SEEN_MAX) {
-      const iterator = specialPinSeen.values();
-      for (let extra = specialPinSeen.size - SPECIAL_PIN_SEEN_MAX; extra > 0; extra -= 1) {
-        specialPinSeen.delete(iterator.next().value);
-      }
-    }
-  }
-
-  function ensurePinStrip(panel) {
-    if (specialPinStrip && specialPinStrip.isConnected) return specialPinStrip;
-    specialPinStrip = document.createElement('div');
-    specialPinStrip.className = 'gdh-pin-strip';
-    panel.classList.add('gdh-callout-panel-host');
-    panel.appendChild(specialPinStrip);
-    return specialPinStrip;
-  }
-
-  function pinTrackerCard(card, panel) {
-    const strip = ensurePinStrip(panel);
-    try {
-      const body = panel.querySelector('[data-sentry-component="TrackingBody"]');
-      const panelRect = panel.getBoundingClientRect();
-      const bodyRect = (body || panel).getBoundingClientRect();
-      strip.style.top = `${Math.max(0, Math.round(bodyRect.top - panelRect.top))}px`;
-    } catch {
-      strip.style.top = '60px';
-    }
-    while (strip.children.length >= SPECIAL_PIN_MAX) strip.lastElementChild.remove();
-
-    const item = document.createElement('div');
-    item.className = 'gdh-pin-item';
-    const clone = card.cloneNode(true);
-    clone.removeAttribute('id');
-    clone.querySelectorAll('.gdh-star-button, .gdh-color-button').forEach((n) => n.remove());
-    const badge = document.createElement('span');
-    badge.className = 'gdh-pin-item__badge';
-    badge.textContent = '📌';
-    const close = document.createElement('button');
-    close.type = 'button';
-    close.className = 'gdh-pin-item__close';
-    close.textContent = '×';
-    item.append(badge, clone, close);
-
-    const href = card.getAttribute('href') || '';
-    const dismiss = () => {
-      item.remove();
-      if (specialPinStrip && !specialPinStrip.children.length) {
-        specialPinStrip.remove();
-        specialPinStrip = null;
-      }
-    };
-    close.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      dismiss();
-    });
-    item.addEventListener('click', () => {
-      dismiss();
-      if (card.isConnected) card.click();
-      else if (href) gdhSpaNavigate(href);
-    });
-    strip.prepend(item);
-    window.setTimeout(dismiss, SPECIAL_PIN_MS);
-  }
-
-  function scanPinnedPush() {
-    const panel = document.querySelector('[data-sentry-component="WalletTrack"]');
-    if (!(panel instanceof HTMLElement)) return;
-    const cards = [...panel.querySelectorAll(TRACKER_ITEM_SELECTOR)];
-    if (!cards.length) return;
-
-    if (!specialPinBaselineDone) {
-      cards.forEach((card) => {
-        const address = extractRowWalletAddress(card);
-        if (address) rememberPinSeen(trackerCardSignature(card, address));
-      });
-      specialPinBaselineDone = true;
-      return;
-    }
-
-    const pinnedActive = hasPinnedWallets();
-    cards.forEach((card) => {
-      const address = extractRowWalletAddress(card);
-      if (!address) return;
-      const sig = trackerCardSignature(card, address);
-      if (specialPinSeen.has(sig)) return;
-      rememberPinSeen(sig);
-      if (pinnedActive && specialWalletMap.get(address)?.pin === true) {
-        pinTrackerCard(card, panel);
-      }
-    });
   }
 
   const FRONTRUN_LIGHTNING_SELECTOR =
@@ -4849,7 +3849,6 @@
   function fomoFeedEventAllowed(ev) {
     const types = settings.fomoFeedTypes || DEFAULTS.fomoFeedTypes;
     if (types[ev.type] === false) return false;
-    if (ev.addr && isTokenBlocked(ev.addr)) return false;
     if (ev?.source === 'fomo-followed') return ev.followed === true;
     return false;
   }
@@ -5859,7 +4858,8 @@
     };
     timed('trench', () => document.querySelectorAll(CARD_SELECTOR).forEach(applyCardState));
     timed('callout', scanCalloutBlacklist);
-    timed('special', scanSpecialWallets);
+    timed('onchainBalances', refreshOnchainBalances);
+    timed('crossChainFollow', ensureAddWalletCrossChainRow);
     timed('marked', () => { try { scanMarkedBadges(); } catch {  } });
     timed('lightning', scanFrontrunLightning);
     timed('remind', scanRemindToasts);
@@ -6134,8 +5134,6 @@
     settings = { ...DEFAULTS, ...stored };
     rebuildWatchedMap();
     rebuildBlockedCallerIndex();
-    rebuildBlockedTokenIndex();
-    rebuildSpecialWalletSet();
     rebuildHoldingWatch();
     scheduleScan();
   });
@@ -6246,8 +5244,6 @@
     }
     rebuildWatchedMap();
     rebuildBlockedCallerIndex();
-    rebuildBlockedTokenIndex();
-    rebuildSpecialWalletSet();
     rebuildHoldingWatch();
     scheduleScan();
   });
