@@ -8,8 +8,6 @@ const DEFAULTS = {
   showDevTooltip: true,
   enableDevBookmark: true,
   enableCalloutBlacklist: true,
-  enableManifestoToast: true,
-  enableManifestoTab: true,
   enableSpecialWallet: true,
   enableRemindAlert: true,
   enableFomoPanel: true,
@@ -18,8 +16,6 @@ const DEFAULTS = {
   holdingSurgeCooldown: 60,
   mergeFomoHolders: true,
   enableMarkedHolders: true,
-  enableFlapTax: false,
-  flapRpc: '',
   enableFomoFeed: true,
   enablePumpFeed: true,
   fomoFeedChainOnly: false,
@@ -43,8 +39,6 @@ const featureInputs = {
   showDevTooltip: document.querySelector('#show-dev-tooltip'),
   enableDevBookmark: document.querySelector('#enable-dev-bookmark'),
   enableCalloutBlacklist: document.querySelector('#enable-callout-blacklist'),
-  enableManifestoToast: document.querySelector('#enable-manifesto-toast'),
-  enableManifestoTab: document.querySelector('#enable-manifesto-tab'),
   enableSpecialWallet: document.querySelector('#enable-special-wallet'),
   enableRemindAlert: document.querySelector('#enable-remind-alert'),
   enableFomoPanel: document.querySelector('#enable-fomo-panel'),
@@ -90,8 +84,6 @@ const gmgnHoldingSyncStatus = document.querySelector('#gmgn-holding-sync-status'
 const j7TrackerSyncStatus = document.querySelector('#j7tracker-sync-status');
 const mergeHoldersInput = document.querySelector('#enable-merge-fomo-holders');
 const markedEnableInput = document.querySelector('#enable-marked-holders');
-const flapEnableInput = document.querySelector('#enable-flap-tax');
-const flapRpcInput = document.querySelector('#flap-rpc');
 const fomoFeedEnableInput = document.querySelector('#enable-fomo-feed');
 const pumpFeedEnableInput = document.querySelector('#enable-pump-feed');
 const fomoFeedChainOnlyInput = document.querySelector('#fomo-feed-chain-only');
@@ -101,16 +93,6 @@ const fomoFeedTypeInputs = {
   thesis: document.querySelector('#fomo-feed-thesis'),
 };
 
-async function ensureRpcPermission(url) {
-  const raw = String(url || '').trim();
-  if (!raw) return true;
-  let origin;
-  try { origin = new URL(raw).origin + '/*'; } catch { return false; }
-  try {
-    if (await chrome.permissions.contains({ origins: [origin] })) return true;
-    return await chrome.permissions.request({ origins: [origin] });
-  } catch { return false; }
-}
 const markedListInput = document.querySelector('#marked-list');
 
 function markedToText(list) {
@@ -222,8 +204,6 @@ chrome.storage.local.get(DEFAULTS, (stored) => {
   surgeCooldownInput.value = String(stored.holdingSurgeCooldown || DEFAULTS.holdingSurgeCooldown);
   mergeHoldersInput.checked = stored.mergeFomoHolders !== false;
   markedEnableInput.checked = stored.enableMarkedHolders !== false;
-  flapEnableInput.checked = stored.enableFlapTax === true;
-  flapRpcInput.value = String(stored.flapRpc || '');
   fomoFeedEnableInput.checked = stored.enableFomoFeed !== false;
   pumpFeedEnableInput.checked = stored.enablePumpFeed !== false;
   fomoFeedChainOnlyInput.checked = stored.fomoFeedChainOnly === true;
@@ -263,18 +243,6 @@ saveButton.addEventListener('click', async () => {
     return;
   }
 
-  const rpc = flapRpcInput.value.trim();
-  if (rpc) {
-    if (!/^https:\/\//i.test(rpc)) {
-      setStatus('The custom RPC URL must start with https://', 'error');
-      return;
-    }
-    if (!(await ensureRpcPermission(rpc))) {
-      setStatus('Access to that RPC host was not granted. Other settings were kept; save again and allow access to use it.', 'error');
-      flapRpcInput.value = '';
-    }
-  }
-
   const next = {
     ...Object.fromEntries(
       Object.entries(featureInputs).map(([key, input]) => [key, input.checked]),
@@ -285,8 +253,6 @@ saveButton.addEventListener('click', async () => {
     holdingSurgeCooldown: Number(surgeCooldownInput.value) || DEFAULTS.holdingSurgeCooldown,
     mergeFomoHolders: mergeHoldersInput.checked,
     enableMarkedHolders: markedEnableInput.checked,
-    enableFlapTax: flapEnableInput.checked,
-    flapRpc: flapRpcInput.value.trim(),
     enableFomoFeed: fomoFeedEnableInput.checked,
     enablePumpFeed: pumpFeedEnableInput.checked,
     fomoFeedChainOnly: fomoFeedChainOnlyInput.checked,

@@ -504,7 +504,7 @@ await test('Long-lived caches evict their oldest entries', () => {
   assert.ok(content.includes('setBoundedMap(fomoPnlCache'));
   assert.ok(content.includes('rememberBoundedSet(fomoFeedSeen'));
   assert.ok(background.includes('setBoundedMap(fomoCache'));
-  assert.ok(background.includes('setBoundedMap(flapCache'));
+  assert.ok(!background.includes('flapTokenInfo'), 'removed Flap collector cannot issue RPC calls');
   assert.ok(background.includes('setBoundedMap(supplyCache'));
 });
 
@@ -1648,12 +1648,13 @@ await test('FOMO panel discards stale responses after account, route, or tab cha
   assert.ok(!content.includes('if (fomoLoading) return'));
 });
 
-await test('Flap tax links explicitly use English', () => {
-  const fn = extractFunction(content, 'flapTaxUrl');
-  const address = '0x1234567890123456789012345678901234567890';
-  const url = evaluate([fn], `flapTaxUrl('${address}')`, { FLAP_ADDR_RE: /^0x[a-fA-F0-9]{40}$/ });
-  assert.equal(url, `https://flap.sh/bnb/${address}/taxinfo?lang=en`);
-  assert.ok(!fn.includes('lang=zh'));
+await test('Retired manifesto and Flap controls cannot be enabled', () => {
+  for (const key of ['enableManifestoToast', 'enableManifestoTab', 'enableFlapTax', 'flapRpc']) {
+    assert.ok(!content.includes(key));
+    assert.ok(!popupHtml.includes(key));
+    assert.ok(!read('popup.js').includes(key));
+  }
+  assert.ok(!background.includes('flap-token-info'));
 });
 
 await test('Developer tooltip target is the compact metrics badge, not the whole card', () => {

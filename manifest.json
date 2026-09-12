@@ -22,9 +22,6 @@
     "https://j7tracker.io/*",
     "https://nj.j7tracker.io/*"
   ],
-  "optional_host_permissions": [
-    "https://*/*"
-  ],
   "action": {
     "default_title": "better gmgn",
     "default_icon": {

@@ -1609,63 +1609,19 @@ async function fomoUserPnl7d({ userId }) {
 }
 
 //                          / mainPool() / dividendContract() / quoteToken()
-const FLAP_SEL = {
-  getPoolStateData: '0x65761b95',
-  taxRate: '0x771a3a1d',
-  taxProcessor: '0xf3635019',
-  mainPool: '0xa5a302d3',
-  dividendContract: '0x6124e4e7',
-  quoteToken: '0x217a4b70',
-  feeConfigV3: '0x46e62d07',
-  symbol: '0x95d89b41',
-  totalSupply: '0x18160ddd',
-  decimals: '0x313ce567',
-};
-const FLAP_RPCS = [
+const SUPPLY_SEL = { totalSupply: '0x18160ddd', decimals: '0x313ce567' };
+const BSC_SUPPLY_RPCS = [
   'https://bsc-dataseed.bnbchain.org',
   'https://bsc-dataseed1.defibit.io',
   'https://bsc-dataseed1.ninicoin.io',
 ];
 
 const SUPPLY_RPCS = {
-  bsc: [...FLAP_RPCS, 'https://bsc-rpc.publicnode.com'],
+  bsc: [...BSC_SUPPLY_RPCS, 'https://bsc-rpc.publicnode.com'],
   eth: ['https://ethereum-rpc.publicnode.com'],
   base: ['https://mainnet.base.org', 'https://base-rpc.publicnode.com'],
 };
-const FLAP_TTL = 60000;
-const FLAP_CACHE_MAX = 400;
-const FLAP_SYMBOL_CACHE_MAX = 600;
-const flapCache = new Map();
-
-
-function flapWords(hex) {
-  const body = String(hex || '').replace(/^0x/, '');
-  const out = [];
-  for (let i = 0; i + 64 <= body.length; i += 64) out.push(body.slice(i, i + 64));
-  return out;
-}
-const flapNum = (word) => (word ? Number(BigInt('0x' + word)) : 0);
-
-
-function flapString(hex) {
-  const w = flapWords(hex);
-  if (w.length < 3) return '';
-  const len = Number(BigInt('0x' + w[1]));
-  if (!len || len > 64) return '';
-  const bytes = w.slice(2).join('').slice(0, len * 2);
-  let out = '';
-  for (let i = 0; i + 1 < bytes.length; i += 2) {
-    const code = parseInt(bytes.slice(i, i + 2), 16);
-    if (code) out += String.fromCharCode(code);
-  }
-  return out.trim();
-}
-
-const flapSymbolCache = new Map();
-const flapBig = (word) => (word ? BigInt('0x' + word).toString() : '0');
-const flapAddr = (word) => (word ? '0x' + word.slice(24) : '');
-
-async function flapRpc(rpc, calls) {
+async function supplyRpc(rpc, calls) {
   const res = await fetch(rpc, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1683,99 +1639,6 @@ async function flapRpc(rpc, calls) {
     if (!hit || hit.error) throw new Error(hit?.error?.message || 'rpc-error');
     return hit.result;
   });
-}
-
-async function flapTokenInfo({ token, rpc }) {
-  const address = String(token || '').toLowerCase();
-  if (!/^0x[a-f0-9]{40}$/.test(address)) return { ok: false, reason: 'bad-token' };
-  const hit = flapCache.get(address);
-  if (hit && Date.now() - hit.at < FLAP_TTL) return hit.data;
-
-  const endpoints = [rpc, ...FLAP_RPCS].filter(Boolean);
-  let lastError = '';
-  for (const endpoint of endpoints) {
-    try {
-      const first = await flapRpc(endpoint, [
-        { to: address, data: FLAP_SEL.getPoolStateData },
-        { to: address, data: FLAP_SEL.taxRate },
-        { to: address, data: FLAP_SEL.taxProcessor },
-        { to: address, data: FLAP_SEL.mainPool },
-        { to: address, data: FLAP_SEL.dividendContract },
-        { to: address, data: FLAP_SEL.quoteToken },
-      ]);
-      const pool = flapWords(first[0]);
-      if (!pool.length) throw new Error('not-flap');
-      const processor = flapAddr(flapWords(first[2])[0]);
-
-      let dist = null;
-      if (/^0x[a-f0-9]{40}$/i.test(processor) && !/^0x0{40}$/i.test(processor)) {
-        try {
-          const [cfg] = await flapRpc(endpoint, [{ to: processor, data: FLAP_SEL.feeConfigV3 }]);
-          const w = flapWords(cfg);
-          if (w.length >= 15) {
-            dist = {
-              vault: [0, 1, 2, 3].map((i) => ({
-                bps: flapNum(w[i]), address: flapAddr(w[11 + i]),
-              })).filter((x) => x.bps > 0 || (x.address && !/^0x0{40}$/.test(x.address))),
-              deflationBps: flapNum(w[4]),
-              lpBps: flapNum(w[5]),
-              dividendBps: flapNum(w[6]),
-              feeRateBps: flapNum(w[7]),
-              commissionBps: flapNum(w[9]),
-              dividendToken: flapAddr(w[10]),
-            };
-          }
-        } catch {
-        }
-      }
-
-      const quoteAddr = flapAddr(flapWords(first[5])[0]);
-      const divToken = dist?.dividendToken || '';
-      const wanted = [address, quoteAddr, divToken]
-        .filter((a) => a && !/^0x0{40}$/i.test(a));
-      const missing = [...new Set(wanted)].filter((a) => !flapSymbolCache.has(a));
-      if (missing.length) {
-        try {
-          const syms = await flapRpc(endpoint, missing.map((a) => ({ to: a, data: FLAP_SEL.symbol })));
-          missing.forEach((a, i) => setBoundedMap(flapSymbolCache, a, flapString(syms[i]), FLAP_SYMBOL_CACHE_MAX));
-        } catch {
-        }
-      }
-      const symbolOf = (a) => (a && flapSymbolCache.get(a)) || '';
-      const dividendSymbol = symbolOf(divToken);
-
-      const data = {
-        ok: true,
-        token: address,
-        dividendSymbol,
-        tokenSymbol: symbolOf(address),
-        quoteSymbol: symbolOf(quoteAddr),
-        state: flapNum(pool[0]),
-        buyTaxBps: flapNum(pool[1]),
-        sellTaxBps: flapNum(pool[2]),
-        taxBps: flapNum(flapWords(first[1])[0]),
-        liqThreshold: flapBig(pool[3]),
-        taxExpiry: flapNum(pool[4]),
-        processor,
-        mainPool: flapAddr(flapWords(first[3])[0]),
-        dividendContract: flapAddr(flapWords(first[4])[0]),
-        quoteToken: flapAddr(flapWords(first[5])[0]),
-        dist,
-        rpc: endpoint,
-      };
-      setBoundedMap(flapCache, address, { at: Date.now(), data }, FLAP_CACHE_MAX);
-      return data;
-    } catch (error) {
-      lastError = String(error?.message || error).slice(0, 80);
-      if (lastError === 'not-flap' || /revert|invalid opcode|execution error/i.test(lastError)) {
-        lastError = 'not-flap';
-        break;
-      }
-    }
-  }
-  const data = { ok: false, reason: lastError === 'not-flap' ? 'not-flap' : 'rpc-failed', message: lastError };
-  setBoundedMap(flapCache, address, { at: Date.now(), data }, FLAP_CACHE_MAX);
-  return data;
 }
 
 const supplyCache = new Map();
@@ -1801,7 +1664,7 @@ async function gmgnTokenSupply(chain, address, apiQuery) {
   }
 }
 
-async function tokenSupply({ chain, address, rpc, apiQuery }) {
+async function tokenSupply({ chain, address, apiQuery }) {
   const chainKey = String(chain || '').toLowerCase();
   const chainRpcs = SUPPLY_RPCS[chainKey];
   const looksEvm = /^0x[a-fA-F0-9]{40}$/i.test(address || '');
@@ -1820,13 +1683,13 @@ async function tokenSupply({ chain, address, rpc, apiQuery }) {
   }
 
   if (!chainRpcs || !looksEvm) return { ok: false, reason: 'unsupported-chain' };
-  const endpoints = [chain === 'bsc' ? rpc : '', ...chainRpcs].filter(Boolean);
+  const endpoints = chainRpcs;
   let lastError = '';
   for (const endpoint of endpoints) {
     try {
-      const [rawSupply, rawDec] = await flapRpc(endpoint, [
-        { to: address, data: FLAP_SEL.totalSupply },
-        { to: address, data: FLAP_SEL.decimals },
+      const [rawSupply, rawDec] = await supplyRpc(endpoint, [
+        { to: address, data: SUPPLY_SEL.totalSupply },
+        { to: address, data: SUPPLY_SEL.decimals },
       ]);
       const raw = BigInt(rawSupply || '0x0');
       const dec = Number(BigInt(rawDec || '0x12'));
@@ -2759,13 +2622,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === 'token-supply') {
     tokenSupply(message.payload || {})
-      .then(sendResponse)
-      .catch((error) => sendResponse({ ok: false, reason: 'error', message: String(error?.message || '') }));
-    return true;
-  }
-
-  if (message?.type === 'flap-token-info') {
-    flapTokenInfo(message.payload || {})
       .then(sendResponse)
       .catch((error) => sendResponse({ ok: false, reason: 'error', message: String(error?.message || '') }));
     return true;
