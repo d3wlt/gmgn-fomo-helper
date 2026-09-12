@@ -1673,6 +1673,17 @@
   }
 
   // A single notice outside the virtual rows never changes their offsets.
+  function positionFomoFollowedGap() {
+    const notice = document.querySelector('.gdh-fomo-feed-gap');
+    if (!notice) return;
+    const bars = [...document.querySelectorAll('.flex.flex-1.min-w-0.overflow-x-auto.no-scrollbar')]
+      .map(el=>el.getBoundingClientRect()).filter(r=>r.width>0 && r.height>0 && r.top>innerHeight*.7 && r.bottom<=innerHeight+1);
+    const bottom = bars.length ? Math.max(...bars.map(r=>innerHeight-r.top))+8 : 12;
+    const value = `${bottom}px`;
+    if (notice.style.bottom !== value) notice.style.bottom = value;
+  }
+  window.addEventListener('resize', positionFomoFollowedGap, {passive:true});
+
   function renderFomoFollowedGap(response) {
     let notice = document.querySelector('.gdh-fomo-feed-gap');
     const passive = response?.mode === 'passive';
@@ -1686,18 +1697,20 @@
       document.body.appendChild(notice);
     }
     const passiveLabels = {
-      'waiting-for-fomo-tab': 'Following feed: waiting for FOMO tab',
-      'waiting-for-account': 'Following feed: sign in on FOMO',
-      'waiting-for-following': 'Following feed: waiting for native following list',
+      'waiting-for-fomo-tab': 'Following feed: FOMO unavailable → Open FOMO and visit your profile',
+      'waiting-for-account': 'Following feed: sign in on FOMO → Visit your profile, then open Alerts',
+      'waiting-for-following': 'Following feed: following list not ready → Visit your profile on FOMO',
       'waiting-for-activity': 'Following feed: open FOMO Alerts',
-      connected: response?.coverageGap ? 'Following feed: native tab connected · partial coverage' : 'Following feed: receiving from FOMO tab',
-      disconnected: 'Following feed: FOMO tab disconnected',
+      connected: 'FOMO connected',
+      disconnected: 'Following feed: disconnected → Visit your profile on FOMO, then open Alerts',
     };
-    const text = passive ? (passiveLabels[response.passiveStatus] || 'Following feed: waiting for FOMO tab')
+    const text = passive ? (passiveLabels[response.passiveStatus] || 'Following feed: FOMO unavailable → Open FOMO and visit your profile')
       : response?.coverageGap === true ? 'Following feed: coverage gap' : 'Following feed: stale';
     if (notice.textContent !== text) notice.textContent = text;
+    notice.classList.toggle('is-disconnected', passive && response.passiveStatus !== 'connected');
+    positionFomoFollowedGap();
     notice.title = passive
-      ? 'Passive mode: keep a signed-in FOMO Alerts tab open. This tracker observes native activity only; it does not poll FOMO or open a separate connection. Missing activity is not automatically fetched.'
+      ? `${response?.coverageGap ? 'Partial coverage: retained history may have gaps. ' : ''}Passive mode: keep a signed-in FOMO Alerts tab open. This tracker observes native activity only; it does not poll FOMO or open a separate connection. Missing activity is not automatically fetched.`
       : 'Bounded polling may omit activity. This feed is not a complete trade history.';
   }
 
@@ -1806,7 +1819,6 @@
     clear.className = 'gdh-notification__clear';
     clear.textContent = 'Clear';
     clear.addEventListener('click', () => {
-      if (!window.confirm('Clear all notification history?')) return;
       try {
         chrome.runtime.sendMessage({ type: 'notification-history-clear' }, () => void chrome.runtime.lastError);
       } catch {
@@ -1844,6 +1856,19 @@
       return rect.width > 0 && rect.height > 0 && getComputedStyle(el).visibility !== 'hidden';
     }) || null;
   }
+
+  function positionNotificationPanel() {
+    const btn = document.querySelector('.gdh-notification-launcher');
+    if (!btn || !notificationPanelEl) return;
+    const rect = btn.getBoundingClientRect();
+    const width = Math.min(420, innerWidth - 16);
+    const left = Math.max(8, Math.min(rect.left, innerWidth - width - 8));
+    const top = Math.max(8, rect.bottom + 8);
+    const values = {left:`${left}px`, top:`${top}px`, right:'auto', bottom:'auto', width:`${width}px`, maxHeight:`${Math.max(80, innerHeight-top-8)}px`};
+    for (const [key,value] of Object.entries(values)) if (notificationPanelEl.style[key] !== value) notificationPanelEl.style[key] = value;
+  }
+  window.addEventListener('resize', positionNotificationPanel, {passive:true});
+  window.addEventListener('scroll', positionNotificationPanel, {passive:true, capture:true});
 
   function ensureNotificationLauncher() {
     let btn = document.querySelector('.gdh-notification-launcher');
@@ -1895,6 +1920,7 @@
       document.body.appendChild(notificationPanelEl);
       renderNotificationPanel();
     }
+    positionNotificationPanel();
   }
 
   function fomoAgo(value) {

@@ -43,7 +43,7 @@ try {
     identity: trackingFeedEventIdentity,
     eligible: () => visibleTrackingFeedEvents(nativeTrackingFeedRows(trackerCards())).map(e => e.key),
     prepare: () => { lastFullScanAt = Date.now(); scanCostEma = 60; },
-    settings: values => { Object.assign(settings, values); rebuildBlockedTokenIndex(); },
+    settings: values => { Object.assign(settings, values); },
   };`;
   await page.addStyleTag({ path:`${root}/styles.css` });
   await page.addScriptTag({ content:fs.readFileSync(`${root}/content.js`,'utf8').replace(/\}\)\(\);\s*$/, `${hooks}\n})();`) });
@@ -121,12 +121,12 @@ try {
   reports.push({scenario:'fractional 64.5px native rows pass complete-index geometry validation',passed:true});
   await layout('fixed','head');
   for(const [passiveStatus,label] of Object.entries({
-    'waiting-for-fomo-tab':'waiting for FOMO tab',
+    'waiting-for-fomo-tab':'Open FOMO and visit your profile',
     'waiting-for-account':'sign in on FOMO',
-    'waiting-for-following':'waiting for native following list',
+    'waiting-for-following':'following list not ready',
     'waiting-for-activity':'open FOMO Alerts',
-    'connected':'receiving from FOMO tab',
-    'disconnected':'FOMO tab disconnected',
+    'connected':'FOMO connected',
+    'disconnected':'disconnected → Visit your profile on FOMO',
   })) {
     await deliver([],0,{mode:'passive',passiveStatus,coverageGap:false});
     assert.ok((await page.locator('.gdh-fomo-feed-gap').textContent()).includes(label));
@@ -256,7 +256,7 @@ try {
   reports.push({scenario:'chain filter remains effective',...await deliver(same.map(e=>({...e,chain:'sol'})),0)});
   await page.evaluate(()=>window.__direct.settings({fomoFeedChainOnly:false}));
   await page.evaluate(()=>window.__direct.settings({blockedTokens:[{address:'0x3333333333333333333333333333333333333333'}]}));
-  reports.push({scenario:'blocked-token filter remains effective',...await deliver(same,0)});
+  reports.push({scenario:'retired token blocklist cannot hide activity',...await deliver(same,10)});
   await page.evaluate(()=>window.__direct.settings({blockedTokens:[]}));
   const nativeEvents=same.slice(0,3).map((e,i)=>({...e,tx:i<2?'real-native-hash':'distinct-hash',type:i===1?'thesis':'buy',commentId:i===1?'native-thesis':undefined}));
   await page.evaluate(()=>{

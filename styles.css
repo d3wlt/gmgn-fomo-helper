@@ -1914,6 +1914,7 @@
   font: 400 12px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
   overflow-wrap: anywhere;
 }
+.gdh-fomo-feed-gap.is-disconnected { color: #ff737d; border-color: rgba(255, 90, 105, .6); background: #261619; }
 .gdh-fomo-feed-gap:focus-visible { outline: 2px solid #f5b83d; outline-offset: 2px; }
 
 .gdh-fomo-panel {
