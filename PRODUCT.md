@@ -5,7 +5,7 @@ GMGN FOMO Helper is an independent Chrome MV3 interface extension for GMGN.ai. T
 ## Core behavior
 
 - Highlights watched developers and special-watch wallets.
-- Adds developer history, marked-holder, native FOMO Following, token FOMO panels, and notification views.
+- Adds developer history, token-page followed-holder counts, passive native FOMO Following, token FOMO panels, and notification views.
 - Reads existing page and same-site API data without signing or submitting transactions.
 - Uses browser-local language detection and translation to add English translations below non-English FOMO narratives.
 - Keeps original narratives visible.
@@ -17,6 +17,6 @@ Distribution is ZIP-only through this repository's GitHub Releases page. Users v
 
 ## Boundaries
 
-This project has no analytics, remote code, wallet signing, or transaction execution. It is not affiliated with the supported websites or the original upstream author.
+This project has no analytics, remote executable code or its own wallet-signing/trading API. Explicitly activating QuickBuy can execute a real trade through GMGN's native controls; the helper does not submit trades automatically. It is not affiliated with the supported websites or the original upstream author.
 
 Repository: <https://github.com/d3wlt/gmgn-fomo-helper>

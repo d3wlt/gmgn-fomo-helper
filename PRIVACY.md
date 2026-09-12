@@ -11,15 +11,15 @@ The extension may store:
 - A mirror of the FOMO access and refresh session already present in a signed-in FOMO page. These credentials are used only with FOMO's own API.
 - Diagnostic timestamps and status values needed for session renewal and synchronization.
 
-Chrome local storage remains on the user's browser profile unless Chrome synchronization or browser administration changes that behavior.
+The extension uses browser-local and session storage, not Chrome's sync storage. Browser/profile backups or administration may copy that data outside the extension's control.
 
 ## Network access
 
-The extension communicates only with hosts declared in the manifest or a custom HTTPS BSC RPC host that the user explicitly grants:
+The extension communicates only with hosts declared in the manifest:
 
 - `gmgn.ai`: reads page data and same-site API responses needed for interface features.
 - `fomo.family` and `prod-api.fomo.family`: mirrors the signed-in browser session and requests token holders, narratives, trades, and performance data.
-- Listed public BSC RPC endpoints, or a user-approved custom HTTPS RPC: reads public contract state for token supply information.
+- Listed public BSC RPC endpoints: reads public contract state for token supply information.
 
 The browser-local Translation and Language Detection APIs process supported narrative translations on the device. Original text remains visible alongside the English translation.
 

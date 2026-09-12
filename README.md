@@ -16,7 +16,7 @@ This project is not affiliated with GMGN, FOMO or the original upstream author.
 
 For an update, replace the files in your existing unpacked extension folder, select **Reload** on its extension card, and refresh the supported pages. Chromium does not automatically update unpacked extensions. Keep the same browser profile; the extension identity is preserved across the repository rename.
 
-## What it does
+## Features
 
 ### One GMGN + FOMO tracker
 
@@ -55,7 +55,7 @@ The token panel and holder count may make their own scoped requests using your b
 - Monitor your own positions for price surges with fresh ownership confirmation, valid cost/balance checks and native notification-setting handling. Hybrid multichain holdings and Robinhood are supported.
 - Hide the third-party Lightning Trade button.
 
-Open the native GMGN **Holding** panel to initialize the selected wallets. Surge monitoring needs a visible GMGN page and recent captured native request scopes. Expired scopes and ambiguous chain/account data fail closed. Manifesto pop-ups/list tabs, Flap tax badges, custom BSC RPC settings J7Tracker/Pump activity and DeBot support are not included.
+Open the native GMGN **Holding** panel to initialize the selected wallets. Surge monitoring needs a visible GMGN page and recent captured native request scopes. Expired scopes and ambiguous chain/account data fail closed. Manifesto pop-ups/list tabs, Flap tax badges, custom BSC RPC settings, J7Tracker/Pump activity and DeBot support are not included.
 
 ## Diagnostics
 
@@ -87,7 +87,3 @@ On PowerShell:
 Builders use the canonical runtime-file allowlist and produce `dist/gmgn-fomo-helper-vX.Y.Z.zip` plus its SHA-256 checksum. Tests, screenshots, local diagnostics and dependencies stay outside the package. Release notes must match the manifest version and include the required installation, usage, updating and privacy sections.
 
 The tag-triggered GitHub workflow runs the verification suite before building and publishing release assets. Fixture tests cover production code with synthetic data and isolated Chromium, including account/route races, passive delivery, native-control guards, merged scrolling, retirement of removed integrations and MV3 lifecycle. They do not replace a signed-in smoke test when third-party interfaces change.
-
-## Repository
-
-Source and releases: **[d3wlt/gmgn-fomo-helper](https://github.com/d3wlt/gmgn-fomo-helper)** (private).

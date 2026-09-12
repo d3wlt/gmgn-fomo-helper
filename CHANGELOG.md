@@ -1,5 +1,57 @@
 # Changelog
 
+Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
+
+## 0.53.15 - 2026-09-12
+
+- Renamed the private repository and extension branding to GMGN FOMO Helper; updated package names, documentation and links while preserving the extension key and identity.
+- Completely removed J7Tracker authentication/session bridges, collectors, sockets, polling/alarm paths, controls, permissions and J7-provided FOMO/Pump activity.
+- Completely removed DeBot scripts, styles, injection, permissions and runtime integration. Removed the integration-only Socket.IO dependency and vendor assets.
+- Preserved native GMGN tracking, passive FOMO Following, the single merged scrollbar, token panels, holder counts, native QuickBuy and hybrid holdings alerts.
+- Prevented stale metadata on off-screen native overscan rows from disabling the merged tracker while retaining validation of visible rows and full index geometry.
+- Added retirement tests proving that old saved credentials, settings and caches cannot restore the removed integrations, including cleanup failures and MV3 restarts.
+- Verified the full local suite, GitHub release workflow, live GMGN/FOMO smoke tests and continuous down/up scrolling. Published a 17-runtime-file ZIP with SHA-256 checksum.
+
+## 0.53.14 - 2026-09-12
+
+- Added GMGN hybrid multichain holdings capture and fresh ownership confirmation, including Robinhood alerts with native setting and selected-wallet boundaries preserved.
+- Restored native Robinhood QuickBuy on large Fusion pages without weakening account/token guards.
+- Moved followed-holder counts from list/tracker cards to the open token page's FOMO button, with exact-chain requests, one-minute success caching and distinct zero/unavailable states.
+- Fixed the current FOMO `responseObject.tokens` response parsing.
+- Removed manifesto pop-ups/list tab, Flap tax badges and custom BSC RPC controls and permissions.
+- Preserved merged tracker rows and reading position through asynchronous virtual-row recycling and new arrivals.
+- Corrected a browser fixture teardown race caught by CI. Development versions 0.53.12 and 0.53.13 were not published as GitHub releases; their changes shipped here.
+
+## 0.53.11 - 2026-09-09
+
+Consolidates development changes since published 0.53.1:
+
+- Added off-by-default, local-only diagnostic logging, export and clear controls with bounded retention and strict privacy allowlists.
+- Switched direct FOMO Following to passive observation of an existing signed-in native FOMO tab, removing independent feed polling, sockets, keeper tabs and credential restoration.
+- Introduced one chronological GMGN/FOMO scroll surface with complete native timestamp-index validation and fractional-row support.
+- Added native GMGN QuickBuy on FOMO cards with explicit token/chain identity and stale-context safeguards.
+- Added terminal extension-invalidation handling for holder lookups and chain-specific developer performance support for BSC, Robinhood and Solana.
+- Fixed native row sizing with recycled Flap markers; made the then-supported Flap helper explicitly opt-in and off by default. Flap was subsequently removed in 0.53.14.
+
+## 0.53.1 - 2026-09-07
+
+- Added bounded token/profile recovery to the then-active direct Following collector, including owner-checked seller trade details.
+- Refreshed retained cards when metadata changed without duplicating trades or replaying entry animations.
+- Preserved known metadata through sparse updates and showed explicit identity fallbacks rather than invented names/tickers.
+
+## 0.53.0 - 2026-09-07
+
+- Added source-specific direct FOMO Following swaps and social theses with bounded recovery and account-isolated state.
+- Kept swap, comment, provider-event, position and transaction identities separate so multiple fills and theses survived deduplication.
+- Decoupled recent activity rendering from the heavy scanner and historical continuity gaps, with explicit incomplete-coverage warnings.
+- This release used bounded polling; passive native-tab observation replaced it in the changes consolidated into 0.53.11.
+
+## 0.52.0 - 2026-09-07
+
+- Rendered normalized J7 FOMO/Pump pushes independently of the heavy scanner and merged same-session arrivals into history.
+- Added bounded account-isolated session-cache recovery, adaptive disconnected recovery and a supported authenticated socket-history keepalive.
+- Added local numeric latency diagnostics and required Chrome 116 or newer. J7Tracker was subsequently removed in 0.53.15.
+
 ## 0.51.0 - 2026-09-06
 
 - Replaced the optional 985monitor feed connector with J7Tracker account filtering.
