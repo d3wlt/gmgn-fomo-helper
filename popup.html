@@ -13,7 +13,7 @@
           <img class="brand-icon" src="icons/icon48.png" alt="" />
           <div>
             <h1>better gmgn</h1>
-            <p>GMGN / DeBot trading tools</p>
+            <p>GMGN trading tools</p>
           </div>
         </div>
         <span id="version"></span>
@@ -71,14 +71,14 @@
           <label class="switch-row">
             <span>
               <strong>Special-watch highlighting</strong>
-              <small>Show ⭐ on wallet and tracking rows; colors and pinning are shared across GMGN and DeBot</small>
+              <small>Show ⭐ on wallet and tracking rows; colors and pinning are shared across GMGN views</small>
             </span>
             <input id="enable-special-wallet" type="checkbox" />
           </label>
           <label class="switch-row">
             <span>
               <strong>FOMO panel</strong>
-              <small>Add a FOMO button to GMGN and DeBot token pages for narratives and trades</small>
+              <small>Add a FOMO button to GMGN token pages for narratives and trades</small>
             </span>
             <input id="enable-fomo-panel" type="checkbox" />
           </label>
@@ -115,18 +115,10 @@
           <label class="switch-row">
             <span>
               <strong>Insert FOMO activity into tracking</strong>
-              <small>Insert J7Tracker FOMO buys, sells, and narratives into GMGN and DeBot tracking by time. Activity is limited to FOMO accounts tracked by your J7Tracker login.</small>
+              <small>Show native FOMO Following activity alongside tracking. Keep your signed-in FOMO tab open and visit your profile to initialize Following; the helper passively observes native activity.</small>
             </span>
             <input id="enable-fomo-feed" type="checkbox" />
           </label>
-          <label class="switch-row">
-            <span>
-              <strong>Insert Pump activity into tracking</strong>
-              <small>Insert J7Tracker Pump.fun callouts and replies into GMGN and DeBot tracking by time. Activity is limited to callers tracked by your J7Tracker login.</small>
-            </span>
-            <input id="enable-pump-feed" type="checkbox" />
-          </label>
-          <div id="j7tracker-sync-status" class="sync-status" aria-live="polite">J7Tracker not connected</div>
           <label class="switch-row">
             <span>
               <strong>Show FOMO activity for current chain only</strong>
@@ -210,7 +202,7 @@
       <div id="status" aria-live="polite"></div>
       <button id="save" type="button">Save settings</button>
 
-      <footer>Data comes from current GMGN cards and optional signed-in FOMO/J7Tracker sessions. No wallet signing or transaction execution is used.</footer>
+      <footer>Data comes from current GMGN cards and optional signed-in FOMO sessions. No private keys or wallet-signing logic are added. Optional QuickBuy uses GMGN’s native controls.</footer>
     </main>
     <script src="popup.js"></script>
   </body>

@@ -15,7 +15,7 @@ function section(source, start, end) {
   return source.slice(a, b);
 }
 const plain = value => JSON.parse(JSON.stringify(value));
-for (const file of ['content.js', 'debot-content.js']) {
+for (const file of ['content.js']) {
   const source = fs.readFileSync(new URL(file, root), 'utf8');
   const list = { children: [], replaceChildren(...children) { this.children = children; } };
   const context = vm.createContext({
@@ -99,19 +99,7 @@ for (const file of ['content.js', 'debot-content.js']) {
     assert.equal(run('fomoUiActivity({isSell:true,isFullExit:true})'), 'Exit');
     assert.equal(run("fomoUiActivity({type:'wholesale'})"), '');
   });
-  if (file === 'debot-content.js') {
-    vm.runInContext(section(source, '  function runtimeMessage(', '  function safeText('), context);
-    for (const mode of ['empty', 'lastError', 'throw', 'success']) {
-      context.chrome.runtime.lastError = mode === 'lastError' ? { message: 'SECRET' } : null;
-      context.chrome.runtime.sendMessage = (_message, callback) => {
-        if (mode === 'throw') throw new Error('SECRET');
-        callback(mode === 'success' ? { ok: true } : undefined);
-      };
-      const result = plain(await run('runtimeMessage({type:"fixture"})'));
-      assert.deepEqual(result, mode === 'success' ? { ok: true } : { ok: false, reason: 'runtime' });
-      passed++; console.log(`PASS ${file}: runtime ${mode}`);
-    }
-  }
+
 }
 const gmgnSource = fs.readFileSync(new URL('content.js', root), 'utf8');
 const gaps = [];

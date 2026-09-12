@@ -1,13 +1,13 @@
 # Product overview
 
-better gmgn is an independent Chrome MV3 interface extension for GMGN.ai and DeBot. This private copy preserves the upstream trading-view enhancements while making the maintained source and user interface English-only.
+better gmgn is an independent Chrome MV3 interface extension for GMGN.ai. This private copy preserves the upstream trading-view enhancements while making the maintained source and user interface English-only.
 
 ## Core behavior
 
 - Highlights watched developers and special-watch wallets.
-- Adds developer history, manifesto, marked-holder, FOMO, Pump, Flap-tax, and notification views.
+- Adds developer history, marked-holder, native FOMO Following, token FOMO panels, and notification views.
 - Reads existing page and same-site API data without signing or submitting transactions.
-- Uses browser-local language detection and translation to add English translations below non-English FOMO and DeBot narratives.
+- Uses browser-local language detection and translation to add English translations below non-English FOMO narratives.
 - Keeps original narratives visible.
 - Stores preferences and limited caches in browser-local extension storage.
 

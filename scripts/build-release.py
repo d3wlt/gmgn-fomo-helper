@@ -49,7 +49,7 @@ def build(tag=None):
             raise ValueError(f"Empty release file: {name}")
     dist = ROOT / "dist"
     dist.mkdir(exist_ok=True)
-    target = dist / f"985gmgn-helper-v{version}.zip"
+    target = dist / f"gmgn-fomo-helper-v{version}.zip"
     temp = target.with_suffix(".zip.tmp")
     try:
         with zipfile.ZipFile(temp, "w", compression=zipfile.ZIP_DEFLATED) as archive:

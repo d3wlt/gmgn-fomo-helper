@@ -162,7 +162,7 @@ test('parent request, collector and renderer contracts plus numeric report caps'
     h.api.record('render', { source: 'gmgn', received: 8, eligible: 6, placed: 5, filtered: 3,
       missingProfiles: 1, missingSymbols: 2, missingMC: 3, reason });
   }
-  h.api.record('render', { source: 'debot' });
+  h.api.record('render', { source: 'gmgn' });
   h.api.record('lifecycle', { event: 'startup', reason: 'startup', address: 'DROP' });
   h.api.record('request', { count: 1e99, durationMs: 1e99, status: 999 });
   const report = await h.report();
@@ -170,7 +170,7 @@ test('parent request, collector and renderer contracts plus numeric report caps'
   assert.equal(report.entries[0].durationMs, 13);
   assert.deepEqual(report.entries[16], { at: NOW, kind: 'collector', ...collector });
   assert.equal(report.entries[20].reason, 'rendered');
-  assert.equal(report.entries[21].source, 'debot');
+  assert.equal(report.entries[21].source, 'gmgn');
   assert.deepEqual(report.entries[22], { at: NOW, kind: 'lifecycle', reason: 'startup', event: 'startup' });
   assert.deepEqual(report.entries[23], { at: NOW, kind: 'request', count: 1000000, durationMs: 600000 });
 });
@@ -217,11 +217,11 @@ test('TTL expires on export while disabled and on restart, future timestamps rej
 test('restart restores durable sanitized ring and flag, hostile storage is re-sanitized', async () => {
   const h = harness({ debugLogging: true });
   await h.api.ready;
-  h.api.record('render', { placed: 7, source: 'debot' });
+  h.api.record('render', { placed: 7, source: 'gmgn' });
   await h.advance(1000);
   const restarted = harness({}, { state: h.state, now: NOW + 2000 });
   await restarted.api.ready;
-  assert.deepEqual((await restarted.report()).entries, [{ at: NOW, kind: 'render', placed: 7, source: 'debot' }]);
+  assert.deepEqual((await restarted.report()).entries, [{ at: NOW, kind: 'render', placed: 7, source: 'gmgn' }]);
   assert.equal((await restarted.report()).enabled, true);
   const hostile = harness({ [KEY]: { version: 1, dropped: 1e99, secret: 'PRIVATE', entries: [
     { at: NOW, kind: 'request', endpoint: 'https://PRIVATE', reason: 'PRIVATE', username: 'PRIVATE', status: 200 },

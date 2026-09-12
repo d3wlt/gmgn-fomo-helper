@@ -42,7 +42,7 @@ function harness(route, session = null) {
       tabs: { get:async id => { if (!tabs.has(id)) throw Error('closed'); return tabs.get(id); }, query:async()=>[{id:99}], sendMessage:async(id,message)=>pushes.push(message), onRemoved:{addListener:fn=>removed.push(fn)}, onUpdated:{addListener:fn=>updated.push(fn)} },
       runtime: { onInstalled: ignore, onStartup: ignore, onMessage: { addListener(fn) { messages.push(fn); } } },
       alarms: { get: async () => ({}), create() {}, onAlarm: ignore },
-      storage: { session, local: { get: async () => ({ ...store }), set: async (data) => Object.assign(store, data) }, onChanged: { addListener(fn) { changed.push(fn); } } },
+      storage: { session, local: { remove: async keys => { for (const key of [keys].flat()) delete store[key]; }, get: async () => ({ ...store }), set: async (data) => Object.assign(store, data) }, onChanged: { addListener(fn) { changed.push(fn); } } },
     },
   });
   vm.runInContext(source, ctx, { filename: 'background.js' });

@@ -1,35 +1,28 @@
 'use strict';
 
-importScripts('vendor/socket.io.min.js');
 importScripts('debug-log.js');
 
-const J7TRACKER_SYNC_ALARM = '985gmgn-j7tracker-sync';
+// Upgrade cleanup only: retired provider data cannot start collectors.
+chrome.alarms.clear?.('985gmgn-j7tracker-sync')?.catch(() => {});
+chrome.storage.local.remove(['j7TrackerSessionV1', 'j7TrackerSyncStateV1',
+  'j7TrackerFomoConfigV1', 'j7TrackerPumpConfigV1', 'enablePumpFeed',
+  'debotFomoPanelOpen', 'debotFomoPanelTab']).catch(() => {});
+chrome.storage.session?.remove('j7TrackerCacheV1')?.catch(() => {});
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.alarms.create(J7TRACKER_SYNC_ALARM, { periodInMinutes: 5 });
   chrome.storage.local.remove([
     'monitor985SessionV1', 'monitor985ClientIdV1', 'monitor985SyncStateV1',
     'monitorFomoConfig', 'monitorPumpConfig',
   ]).catch(() => {});
-  refreshJ7TrackerState(true);
-});
-
-chrome.runtime.onStartup.addListener(() => {
-  chrome.alarms.create(J7TRACKER_SYNC_ALARM, { periodInMinutes: 5 });
-  refreshJ7TrackerState(true);
 });
 
 const FOMO_KEEPALIVE_ALARM = '985gmgn-fomo-keepalive';
 // Remove legacy autonomous keeper scheduling on upgrade.
 chrome.alarms.clear?.(FOMO_KEEPALIVE_ALARM)?.catch(() => {});
-chrome.alarms.get(J7TRACKER_SYNC_ALARM).then((existing) => {
-  if (!existing) chrome.alarms.create(J7TRACKER_SYNC_ALARM, { periodInMinutes: 5 });
-}).catch(() => {});
 
 const FOMO_REFRESH_AHEAD_MS = 20 * 60000;
 const FOMO_KEEPER_URL = 'https://fomo.family/?gdh_keeper=1';
 let fomoKeepAliveAt = 0;
-
 
 async function fomoOpenTabs() {
   try {
@@ -47,7 +40,6 @@ async function fomoPageAlive() {
     return false;
   }
 }
-
 
 async function fomoEnsureSdkOwner(requireDedicated = false) {
   try {
@@ -78,7 +70,6 @@ async function fomoEnsureSdkOwner(requireDedicated = false) {
     return null;
   }
 }
-
 
 async function fomoWaitMirror(prevToken, timeoutMs = 35000) {
   const attempts = Math.max(1, Math.ceil(timeoutMs / 1000));
@@ -113,10 +104,6 @@ async function fomoKeepAlive(force) {
   }
 }
 
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === J7TRACKER_SYNC_ALARM) refreshJ7TrackerState(true);
-});
-
 const FOMO_API = 'https://prod-api.fomo.family';
 const FOMO_CHAINS = '1,56,143,4663,8453,1399811149';
 const FOMO_CACHE_MS = 20000;
@@ -128,7 +115,6 @@ function setBoundedMap(map, key, value, max) {
   map.set(key, value);
   while (map.size > max) map.delete(map.keys().next().value);
 }
-
 
 function firstObjectArray(value, depth) {
   if (!value || typeof value !== 'object' || depth > 4) return null;
@@ -1116,7 +1102,6 @@ async function legacyFetchFomoFollowedFeed() {
   return promise;
 }
 
-
 function fomoDebugEndpoint(path) {
   const base=String(path).split('?')[0];
   if (base==='/v2/users/current/followingIds') return 'current-following';
@@ -1565,7 +1550,6 @@ async function fomoFetchToken({ tokenAddress, networkId, kind }) {
   return promise;
 }
 
-
 const FOMO_PNL_TTL = 10 * 60 * 1000;
 const FOMO_PNL_CACHE_MAX = 500;
 const fomoPnlCache = new Map();
@@ -1705,596 +1689,6 @@ async function tokenSupply({ chain, address, apiQuery }) {
     }
   }
   return { ok: false, reason: 'rpc', message: lastError };
-}
-
-
-function notifyTrackerTabs(messageType, detail = null, generation = j7TrackerSessionGeneration) {
-  try {
-    chrome.tabs.query({ url: ['https://gmgn.ai/*', 'https://debot.ai/*'] }, (tabs) => {
-      if (chrome.runtime.lastError || !Array.isArray(tabs) || generation !== j7TrackerSessionGeneration) return;
-      for (const tab of tabs) {
-        chrome.tabs.sendMessage(tab.id, { type: messageType, ...detail }, () => void chrome.runtime.lastError);
-      }
-    });
-  } catch {
-  }
-}
-
-const J7TRACKER_API_ORIGIN = 'https://nj.j7tracker.io/wallets';
-const J7TRACKER_SOCKET_ORIGIN = 'https://nj.j7tracker.io';
-const J7TRACKER_SOCKET_PATH = '/wallets/socket.io/';
-const J7TRACKER_CONFIG_TTL_MS = 3 * 60000;
-const J7TRACKER_HISTORY_TTL_MS = 12000;
-const J7TRACKER_HISTORY_LIMIT = 500;
-const J7TRACKER_REQUEST_TIMEOUT_MS = 12000;
-const J7TRACKER_RETRY_MS = 15000;
-let j7TrackerConfigAt = 0;
-let j7TrackerConfigPromise = null;
-let j7TrackerConfigPromiseGeneration = -1;
-let j7TrackerHistoryAt = 0;
-let j7TrackerHistoryPromise = null;
-let j7TrackerHistoryPromiseGeneration = -1;
-let j7TrackerFomoCache = [];
-let j7TrackerPumpCache = [];
-let j7TrackerHistoryError = '';
-let j7TrackerSessionGeneration = 0;
-let j7TrackerRetryAt = 0;
-let j7TrackerFomoTrackedCount = 0;
-let j7TrackerPumpTrackedCount = 0;
-let j7TrackerLiveSocket = null;
-let j7TrackerLiveToken = '';
-let j7TrackerLiveGeneration = -1;
-
-// Session storage is extension-only (default TRUSTED_CONTEXTS). No raw token is persisted here.
-let j7TrackerEpoch = '';
-let j7TrackerPersistQueue = Promise.resolve();
-let j7TrackerWakePromise = null;
-let j7TrackerHeartbeat = null;
-async function j7TrackerFingerprint(session) {
-  const bytes = new TextEncoder().encode(`${session.accountId}\n${session.token}`);
-  return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), n => n.toString(16).padStart(2, '0')).join('');
-}
-function mergeJ7TrackerEvents(history, live) {
-  return Array.from(new Map([...history, ...live].map(e => [e.key, e])).values())
-    .sort((a, b) => b.ts - a.ts).slice(0, J7TRACKER_HISTORY_LIMIT);
-}
-function persistJ7TrackerCache(session, generation) {
-  if (!chrome.storage.session) return Promise.resolve();
-  j7TrackerPersistQueue = j7TrackerPersistQueue.catch(() => {}).then(async () => {
-    const fingerprint = await j7TrackerFingerprint(session);
-    if (generation !== j7TrackerSessionGeneration) return;
-    await chrome.storage.session.set({ j7TrackerCacheV1: {
-      fingerprint, epoch: j7TrackerEpoch, at: Date.now(), historyAt: j7TrackerHistoryAt,
-      fomo: j7TrackerFomoCache, pump: j7TrackerPumpCache,
-    } });
-  });
-  return j7TrackerPersistQueue.catch(() => {});
-}
-async function wakeJ7Tracker() {
-  if (j7TrackerWakePromise) return j7TrackerWakePromise;
-  const generation = j7TrackerSessionGeneration;
-  const work = (async () => {
-    const session = await readJ7TrackerSession();
-    if (!session || generation !== j7TrackerSessionGeneration) return;
-    const fingerprint = await j7TrackerFingerprint(session);
-    const saved = chrome.storage.session ? (await chrome.storage.session.get('j7TrackerCacheV1')).j7TrackerCacheV1 : null;
-    if (generation !== j7TrackerSessionGeneration) return;
-    j7TrackerEpoch = fingerprint;
-    if (saved?.fingerprint === fingerprint && Date.now() - saved.at < 3600000) {
-      j7TrackerFomoCache = mergeJ7TrackerEvents(saved.fomo || [], j7TrackerFomoCache);
-      j7TrackerPumpCache = mergeJ7TrackerEvents(saved.pump || [], j7TrackerPumpCache);
-      j7TrackerHistoryAt = Number(saved.historyAt) || 0;
-    }
-    await ensureJ7TrackerLiveSocket(session, generation);
-  })();
-  j7TrackerWakePromise = work;
-  try { return await work; }
-  catch (error) {
-    if (j7TrackerWakePromise === work) j7TrackerWakePromise = null;
-    throw error;
-  }
-}
-async function snapshotJ7TrackerFeed(kind) {
-  await wakeJ7Tracker(); // storage only; never config/history network
-  const generation = j7TrackerSessionGeneration;
-  const session = await readJ7TrackerSession();
-  if (!session || generation !== j7TrackerSessionGeneration) return { ok: false, reason: 'not-connected', events: [], epoch: j7TrackerEpoch };
-  void refreshJ7TrackerState(false).catch(() => {});
-  void refreshJ7TrackerHistory(false).catch(() => {});
-  return { ok: true, events: (kind === 'pump' ? j7TrackerPumpCache : j7TrackerFomoCache).slice(),
-    epoch: j7TrackerEpoch, source: 'j7tracker', fetchedAt: j7TrackerHistoryAt,
-    liveConnected: j7TrackerLiveSocket?.connected === true, stale: !!j7TrackerHistoryError };
-}
-
-async function readJ7TrackerSession() {
-  const stored = await chrome.storage.local.get(['j7TrackerSessionV1']);
-  const session = stored.j7TrackerSessionV1;
-  const token = String(session?.token || '').trim();
-  if (!token || token.length > 4096) return null;
-  return {
-    token,
-    accountId: String(session?.accountId || '').trim().slice(0, 160),
-    displayName: String(session?.displayName || '').trim().slice(0, 100),
-  };
-}
-
-function resetJ7TrackerCaches() {
-  j7TrackerSessionGeneration += 1;
-  j7TrackerEpoch = '';
-  j7TrackerWakePromise = null;
-  clearInterval(j7TrackerHeartbeat);
-  j7TrackerHeartbeat = null;
-  if (chrome.storage.session) j7TrackerPersistQueue = j7TrackerPersistQueue.catch(() => {}).then(() => chrome.storage.session.remove('j7TrackerCacheV1')).catch(() => {});
-  try { j7TrackerLiveSocket?.disconnect(); } catch {}
-  j7TrackerLiveSocket = null;
-  j7TrackerLiveToken = '';
-  j7TrackerLiveGeneration = -1;
-  j7TrackerConfigAt = 0;
-  j7TrackerHistoryAt = 0;
-  j7TrackerFomoCache = [];
-  j7TrackerPumpCache = [];
-  j7TrackerHistoryError = '';
-  j7TrackerRetryAt = 0;
-  j7TrackerFomoTrackedCount = 0;
-  j7TrackerPumpTrackedCount = 0;
-}
-
-async function setJ7TrackerDisconnected(reason = 'login-required') {
-  resetJ7TrackerCaches();
-  const checkedAt = Date.now();
-  await chrome.storage.local.set({
-    j7TrackerSyncStateV1: { connected: false, reason, checkedAt },
-    j7TrackerFomoConfigV1: { connected: false, trackedCount: 0, at: checkedAt },
-    j7TrackerPumpConfigV1: { connected: false, trackedCount: 0, at: checkedAt },
-  });
-}
-
-async function fetchJ7TrackerJson(url, session) {
-  const controller = new AbortController();
-  const deadline = setTimeout(() => controller.abort(), J7TRACKER_REQUEST_TIMEOUT_MS);
-  try {
-  const resp = await fetch(url, {
-    method: 'GET',
-    headers: { Accept: 'application/json', Authorization: `Bearer ${session.token}` },
-    cache: 'no-store',
-    signal: controller.signal,
-  });
-  const body = await resp.json();
-  if (!resp.ok || !body || typeof body !== 'object' || body?.error) {
-    const error = new Error(`J7Tracker request failed (${resp.status || 0})`);
-    error.status = Number(resp.status || 0);
-    error.body = body;
-    throw error;
-  }
-  return body;
-  } finally {
-    clearTimeout(deadline);
-  }
-}
-
-function j7TrackerListCount(body, key) {
-  const list = Array.isArray(body?.[key]) ? body[key] : (Array.isArray(body) ? body : null);
-  return list ? list.length : null;
-}
-
-async function refreshJ7TrackerState(force = false) {
-  if (!force && Date.now() - j7TrackerConfigAt < J7TRACKER_CONFIG_TTL_MS) return true;
-  if (!force && Date.now() < j7TrackerRetryAt) return false;
-  const generation = j7TrackerSessionGeneration;
-  if (j7TrackerConfigPromise && j7TrackerConfigPromiseGeneration === generation) return j7TrackerConfigPromise;
-  const work = (async () => {
-    const session = await readJ7TrackerSession();
-    if (!session) {
-      await setJ7TrackerDisconnected('login-required');
-      j7TrackerHistoryError = 'not-connected';
-      return false;
-    }
-    try {
-      const [fomo, pump] = await Promise.all([
-        fetchJ7TrackerJson(`${J7TRACKER_API_ORIGIN}/api/fomo/list`, session),
-        fetchJ7TrackerJson(`${J7TRACKER_API_ORIGIN}/api/pump/list`, session),
-      ]);
-      const current = await readJ7TrackerSession();
-      if (generation !== j7TrackerSessionGeneration || current?.token !== session.token) return false;
-      const fomoTrackedCount = j7TrackerListCount(fomo, 'fomo_users');
-      const pumpTrackedCount = j7TrackerListCount(pump, 'pump_users');
-      if (!Number.isInteger(fomoTrackedCount) || !Number.isInteger(pumpTrackedCount)) {
-        throw new Error('J7Tracker config response is invalid');
-      }
-      j7TrackerFomoTrackedCount = fomoTrackedCount;
-      j7TrackerPumpTrackedCount = pumpTrackedCount;
-      const at = Date.now();
-      await chrome.storage.local.set({
-        j7TrackerSyncStateV1: {
-          connected: true,
-          accountId: session.accountId,
-          displayName: session.displayName,
-          fomoTrackedCount,
-          pumpTrackedCount,
-          verifiedAt: at,
-        },
-        j7TrackerFomoConfigV1: { connected: true, trackedCount: fomoTrackedCount, at },
-        j7TrackerPumpConfigV1: { connected: true, trackedCount: pumpTrackedCount, at },
-      });
-      j7TrackerConfigAt = at;
-      await ensureJ7TrackerLiveSocket(session, generation);
-      return true;
-    } catch (error) {
-      const current = await readJ7TrackerSession();
-      if (generation !== j7TrackerSessionGeneration || current?.token !== session.token) return false;
-      if (error?.status === 401 || error?.status === 403) {
-        await chrome.storage.local.set({ j7TrackerSessionV1: null });
-        await setJ7TrackerDisconnected('session-expired');
-        j7TrackerHistoryError = 'not-connected';
-      } else {
-        j7TrackerHistoryError = 'network';
-        j7TrackerRetryAt = Date.now() + J7TRACKER_RETRY_MS;
-        await chrome.storage.local.set({
-          j7TrackerSyncStateV1: { connected: false, reason: 'network', checkedAt: Date.now() },
-        });
-      }
-      return false;
-    }
-  })();
-  j7TrackerConfigPromise = work;
-  j7TrackerConfigPromiseGeneration = generation;
-  try {
-    return await work;
-  } finally {
-    if (j7TrackerConfigPromise === work) {
-      j7TrackerConfigPromise = null;
-      j7TrackerConfigPromiseGeneration = -1;
-    }
-  }
-}
-
-function j7TrackerSocialHistory(session) {
-  return new Promise((resolve, reject) => {
-    if (typeof io !== 'function') {
-      reject(new Error('J7Tracker Socket.IO client is unavailable'));
-      return;
-    }
-    let settled = false;
-    let socket = null;
-    const finish = (error, value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try { socket?.disconnect(); } catch {}
-      if (error) reject(error);
-      else resolve(value);
-    };
-    const timer = setTimeout(() => finish(new Error('J7Tracker history timed out')), 12000);
-    try {
-      socket = io(J7TRACKER_SOCKET_ORIGIN, {
-        path: J7TRACKER_SOCKET_PATH,
-        transports: ['websocket'],
-        upgrade: false,
-        reconnection: false,
-        timeout: 8000,
-        auth: { token: session.token },
-      });
-      socket.on('connect', () => {
-        socket.emit('social_history', { limit: J7TRACKER_HISTORY_LIMIT }, (response) => {
-          if (response?.error) {
-            const error = new Error(String(response.error));
-            error.status = /invalid token|unauthor/i.test(error.message) ? 401 : 0;
-            finish(error);
-            return;
-          }
-          if (!Array.isArray(response?.events)) {
-            finish(new Error('J7Tracker history response is invalid'));
-            return;
-          }
-          finish(null, response.events);
-        });
-      });
-      socket.on('connect_error', (cause) => {
-        const error = new Error(String(cause?.message || 'J7Tracker connection failed'));
-        error.status = /invalid token|unauthor/i.test(error.message) ? 401 : 0;
-        finish(error);
-      });
-      socket.on('error', (cause) => finish(new Error(String(cause?.message || cause || 'J7Tracker socket failed'))));
-    } catch (error) {
-      finish(error);
-    }
-  });
-}
-
-function j7TrackerHttpsUrl(value) {
-  try {
-    const parsed = new URL(String(value || ''));
-    return parsed.protocol === 'https:' ? parsed.href.slice(0, 1000) : '';
-  } catch {
-    return '';
-  }
-}
-
-function j7TrackerChain(data, token) {
-  const raw = String(
-    token?.network || token?.chain || token?.chainName || data?.network || data?.chain || data?.chainName || '',
-  ).toLowerCase();
-  const networkId = Number(token?.networkId ?? data?.networkId ?? NaN);
-  if (raw.includes('sol') || networkId === 1399811149) return 'sol';
-  if (raw.includes('base') || networkId === 8453) return 'base';
-  if (raw.includes('bsc') || raw.includes('bnb') || networkId === 56) return 'bsc';
-  if (raw.includes('robin') || networkId === 4663) return 'robinhood';
-  if (raw.includes('mono') || networkId === 143) return 'monad';
-  if (raw.includes('eth') || networkId === 1) return 'eth';
-  return raw.replace(/[^a-z0-9_-]/g, '').slice(0, 30);
-}
-
-function j7TrackerTimestamp(value) {
-  const numeric = Number(value);
-  if (Number.isFinite(numeric) && numeric > 0) return numeric < 1e12 ? numeric * 1000 : numeric;
-  const parsed = Date.parse(String(value || ''));
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
-}
-
-function slimJ7TrackerFomoEvent(record) {
-  const payload = record?.payload && typeof record.payload === 'object' ? record.payload : record;
-  const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
-  const kind = String(payload?.kind || data?.kind || '').toLowerCase();
-  if (!['trade', 'thesis'].includes(kind)) return null;
-  const token = data?.token && typeof data.token === 'object' ? data.token : {};
-  const id = String(data?.id || data?.tradeId || data?.thesisId || record?.id || '').trim().slice(0, 180);
-  const ts = j7TrackerTimestamp(data?.timestamp || data?.createdAt || payload?.received_at || record?.received_at);
-  if (!id || !Number.isFinite(ts) || ts <= 0) return null;
-  const side = String(data?.side || data?.type || '').toLowerCase();
-  const type = kind === 'thesis' ? 'thesis' : (side === 'sell' ? 'sell' : 'buy');
-  const handle = String(data?.userHandle || data?.username || data?.displayName || '').replace(/^@/, '').trim().slice(0, 120);
-  return {
-    key: `j7:fomo:${id}`,
-    id,
-    source: 'j7-fomo',
-    type,
-    ts,
-    chain: j7TrackerChain(data, token),
-    addr: String(token?.address || token?.contractAddress || data?.tokenAddress || data?.address || '').trim().slice(0, 160),
-    symbol: String(token?.symbol || data?.symbol || '').trim().slice(0, 40),
-    name: String(data?.displayName || handle || 'J7 FOMO').trim().slice(0, 120),
-    tokenName: String(token?.name || data?.tokenName || '').trim().slice(0, 120),
-    avatar: j7TrackerHttpsUrl(data?.userImageUrl || data?.avatarUrl),
-    img: j7TrackerHttpsUrl(token?.tokenImageUrl || token?.imageUrl || data?.tokenImageUrl),
-    usd: Math.max(0, Number(data?.usdAmount || data?.amountUsd || 0) || 0),
-    mc: Math.max(0, Number(token?.marketCapUsd || data?.marketCapUsd || 0) || 0),
-    handle,
-    displayName: String(data?.displayName || handle || 'J7 FOMO').trim().slice(0, 120),
-    profileUrl: handle ? `https://fomo.family/profile/${encodeURIComponent(handle)}` : '',
-    tx: String(data?.txHash || data?.transactionHash || '').trim().slice(0, 180),
-    comment: String(data?.thesis || data?.text || '').trim().slice(0, 500),
-  };
-}
-
-function slimJ7TrackerPumpEvent(record) {
-  const payload = record?.payload && typeof record.payload === 'object' ? record.payload : record;
-  const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
-  const kind = String(payload?.kind || data?.kind || '').toLowerCase();
-  if (!['callout', 'reply'].includes(kind)) return null;
-  const token = data?.token && typeof data.token === 'object' ? data.token : {};
-  const author = data?.author && typeof data.author === 'object' ? data.author : {};
-  const id = String(data?.id || data?.calloutId || data?.replyId || record?.id || '').trim().slice(0, 180);
-  const ts = j7TrackerTimestamp(data?.timestamp || data?.createdAt || payload?.received_at || record?.received_at);
-  if (!id || !Number.isFinite(ts) || ts <= 0) return null;
-  const wallet = String(author?.wallet || data?.wallet || '').trim().slice(0, 160);
-  const handle = String(author?.username || data?.username || wallet).replace(/^@/, '').trim().slice(0, 120);
-  return {
-    key: `j7:pump:${id}`,
-    id,
-    source: 'j7-pump',
-    type: kind,
-    ts,
-    chain: j7TrackerChain(data, token),
-    addr: String(token?.address || token?.contractAddress || data?.tokenAddress || data?.address || '').trim().slice(0, 160),
-    symbol: String(token?.symbol || data?.symbol || '').trim().slice(0, 40),
-    name: String(author?.displayName || author?.username || data?.displayName || handle || 'J7 Pump').trim().slice(0, 120),
-    tokenName: String(token?.name || data?.tokenName || '').trim().slice(0, 120),
-    avatar: j7TrackerHttpsUrl(author?.profileImage || author?.avatarUrl || author?.avatar || data?.avatarUrl),
-    img: j7TrackerHttpsUrl(token?.tokenImageUrl || token?.imageUrl || data?.tokenImageUrl),
-    usd: 0,
-    mc: Math.max(0, Number(token?.marketCapUsd || data?.marketCapUsd || data?.calledOutAtMcap || 0) || 0),
-    handle,
-    displayName: String(author?.displayName || author?.username || data?.displayName || handle || 'J7 Pump').trim().slice(0, 120),
-    pumpWallet: wallet,
-    profileUrl: j7TrackerHttpsUrl(author?.profileUrl) || (wallet ? `https://pump.fun/profile/${encodeURIComponent(wallet)}` : ''),
-    tx: '',
-    comment: String(data?.text || data?.comment || '').trim().slice(0, 500),
-  };
-}
-
-function normalizeJ7TrackerHistory(records) {
-  const fomo = [];
-  const pump = [];
-  for (const record of Array.isArray(records) ? records : []) {
-    const channel = String(record?.channel || '').toLowerCase();
-    const event = channel === 'fomo_event'
-      ? slimJ7TrackerFomoEvent(record)
-      : (channel === 'pump_event' ? slimJ7TrackerPumpEvent(record) : null);
-    if (!event) continue;
-    (event.source === 'j7-fomo' ? fomo : pump).push(event);
-  }
-  const finalize = (events) => Array.from(new Map(events.map((event) => [event.key, event])).values())
-    .sort((a, b) => b.ts - a.ts)
-    .slice(0, J7TRACKER_HISTORY_LIMIT);
-  return { fomo: finalize(fomo), pump: finalize(pump) };
-}
-
-async function acceptJ7TrackerLiveEvent(channel, payload, generation, token) {
-  const receivedAt = Date.now();
-  const current = await readJ7TrackerSession();
-  if (generation !== j7TrackerSessionGeneration || current?.token !== token) return false;
-  const record = { channel, payload };
-  const event = channel === 'fomo_event' ? slimJ7TrackerFomoEvent(record) : slimJ7TrackerPumpEvent(record);
-  if (!event) return false;
-  const cache = event.source === 'j7-fomo' ? j7TrackerFomoCache : j7TrackerPumpCache;
-  const merged = [event, ...cache.filter((item) => item.key !== event.key)]
-    .sort((a, b) => b.ts - a.ts)
-    .slice(0, J7TRACKER_HISTORY_LIMIT);
-  if (event.source === 'j7-fomo') {
-    j7TrackerFomoCache = merged;
-    notifyTrackerTabs('gdh-fomo-push', { event, epoch: j7TrackerEpoch, receivedAt }, generation);
-  } else {
-    j7TrackerPumpCache = merged;
-    notifyTrackerTabs('gdh-pump-push', { event, epoch: j7TrackerEpoch, receivedAt }, generation);
-  }
-  void persistJ7TrackerCache(current, generation);
-  return true;
-}
-
-async function ensureJ7TrackerLiveSocket(session, generation) {
-  const fingerprint = await j7TrackerFingerprint(session);
-  if (generation !== j7TrackerSessionGeneration) return;
-  j7TrackerEpoch = fingerprint;
-  if (typeof io !== 'function' || !session?.token) return;
-  if (j7TrackerLiveSocket && j7TrackerLiveToken === session.token && j7TrackerLiveGeneration === generation) return;
-  try { j7TrackerLiveSocket?.disconnect(); } catch {}
-  const socket = io(J7TRACKER_SOCKET_ORIGIN, {
-    path: J7TRACKER_SOCKET_PATH,
-    transports: ['websocket'],
-    upgrade: false,
-    reconnection: true,
-    reconnectionDelay: 2000,
-    reconnectionDelayMax: 30000,
-    timeout: 8000,
-    auth: { token: session.token },
-  });
-  j7TrackerLiveSocket = socket;
-  j7TrackerLiveToken = session.token;
-  j7TrackerLiveGeneration = generation;
-  // Engine.IO server advertises 30s pingInterval: not safely below MV3's 30s idle.
-  // Reuse the documented/implemented social_history request, NOT an invented ping event.
-  clearInterval(j7TrackerHeartbeat);
-  let heartbeatPending = false;
-  j7TrackerHeartbeat = setInterval(() => {
-    if (generation === j7TrackerSessionGeneration && socket.connected && !heartbeatPending) {
-      heartbeatPending = true;
-      socket.timeout(8000).emit('social_history', { limit: 1 }, () => { heartbeatPending = false; });
-    }
-  }, 25000);
-  j7TrackerHeartbeat?.unref?.();
-  socket.on('connect', () => {
-    notifyTrackerTabs('gdh-j7-status', { connected: true, epoch: j7TrackerEpoch }, generation);
-    void refreshJ7TrackerHistory(true).catch(() => {});
-  });
-  socket.on('disconnect', () => notifyTrackerTabs('gdh-j7-status', { connected: false, epoch: j7TrackerEpoch }, generation));
-  socket.on('fomo_event', (payload) => { void acceptJ7TrackerLiveEvent('fomo_event', payload, generation, session.token); });
-  socket.on('pump_event', (payload) => { void acceptJ7TrackerLiveEvent('pump_event', payload, generation, session.token); });
-  socket.on('connect_error', async (cause) => {
-    if (!/invalid token|unauthor/i.test(String(cause?.message || ''))) return;
-    const current = await readJ7TrackerSession();
-    if (generation !== j7TrackerSessionGeneration || current?.token !== session.token) return;
-    await chrome.storage.local.set({ j7TrackerSessionV1: null });
-    await setJ7TrackerDisconnected('session-expired');
-    j7TrackerHistoryError = 'not-connected';
-  });
-}
-
-async function refreshJ7TrackerHistory(force = false) {
-  if (!force && Date.now() - j7TrackerHistoryAt < J7TRACKER_HISTORY_TTL_MS) return true;
-  if (!force && Date.now() < j7TrackerRetryAt) return false;
-  const generation = j7TrackerSessionGeneration;
-  if (j7TrackerHistoryPromise && j7TrackerHistoryPromiseGeneration === generation) return j7TrackerHistoryPromise;
-  const work = (async () => {
-    const session = await readJ7TrackerSession();
-    if (!session) {
-      await setJ7TrackerDisconnected('login-required');
-      j7TrackerHistoryError = 'not-connected';
-      return false;
-    }
-    try {
-      const records = await j7TrackerSocialHistory(session);
-      const current = await readJ7TrackerSession();
-      if (generation !== j7TrackerSessionGeneration || current?.token !== session.token) return false;
-      const normalized = normalizeJ7TrackerHistory(records);
-      const oldFomo = new Set(j7TrackerFomoCache.map((event) => event.key));
-      const oldPump = new Set(j7TrackerPumpCache.map((event) => event.key));
-      const fomoChanged = normalized.fomo.some((event) => !oldFomo.has(event.key));
-      const pumpChanged = normalized.pump.some((event) => !oldPump.has(event.key));
-      j7TrackerFomoCache = mergeJ7TrackerEvents(normalized.fomo, j7TrackerFomoCache);
-      j7TrackerPumpCache = mergeJ7TrackerEvents(normalized.pump, j7TrackerPumpCache);
-      j7TrackerHistoryAt = Date.now();
-      j7TrackerHistoryError = '';
-      j7TrackerRetryAt = 0;
-      await chrome.storage.local.set({
-        j7TrackerSyncStateV1: {
-          connected: true,
-          accountId: session.accountId,
-          displayName: session.displayName,
-          fomoTrackedCount: j7TrackerFomoTrackedCount,
-          pumpTrackedCount: j7TrackerPumpTrackedCount,
-          verifiedAt: j7TrackerHistoryAt,
-        },
-      });
-      if (generation !== j7TrackerSessionGeneration) return false;
-      void persistJ7TrackerCache(session, generation);
-      if (fomoChanged) notifyTrackerTabs('gdh-fomo-push');
-      if (pumpChanged) notifyTrackerTabs('gdh-pump-push');
-      return true;
-    } catch (error) {
-      const current = await readJ7TrackerSession();
-      if (generation !== j7TrackerSessionGeneration || current?.token !== session.token) return false;
-      if (error?.status === 401 || error?.status === 403) {
-        await chrome.storage.local.set({ j7TrackerSessionV1: null });
-        await setJ7TrackerDisconnected('session-expired');
-        j7TrackerHistoryError = 'not-connected';
-      } else {
-        j7TrackerHistoryError = 'network';
-        j7TrackerRetryAt = Date.now() + J7TRACKER_RETRY_MS;
-        await chrome.storage.local.set({
-          j7TrackerSyncStateV1: { connected: false, reason: 'network', checkedAt: Date.now() },
-        });
-      }
-      return false;
-    }
-  })();
-  j7TrackerHistoryPromise = work;
-  j7TrackerHistoryPromiseGeneration = generation;
-  try {
-    return await work;
-  } finally {
-    if (j7TrackerHistoryPromise === work) {
-      j7TrackerHistoryPromise = null;
-      j7TrackerHistoryPromiseGeneration = -1;
-    }
-  }
-}
-
-async function fetchJ7TrackerFomoFeed() {
-  const configured = await refreshJ7TrackerState(false);
-  if (!configured) {
-    const reason = j7TrackerHistoryError || 'not-connected';
-    const events = reason === 'network' ? j7TrackerFomoCache.map((event) => ({ ...event, stale: true })) : [];
-    return { ok: false, reason, events, stale: events.length > 0, source: 'j7tracker', fetchedAt: j7TrackerHistoryAt || 0 };
-  }
-  const refreshed = await refreshJ7TrackerHistory(false);
-  if (!refreshed) {
-    const reason = j7TrackerHistoryError || 'network';
-    const events = reason === 'network' ? j7TrackerFomoCache.map((event) => ({ ...event, stale: true })) : [];
-    return { ok: false, reason, events, stale: events.length > 0, source: 'j7tracker', fetchedAt: j7TrackerHistoryAt || 0 };
-  }
-  return {
-    ok: true, events: j7TrackerFomoCache.slice(), source: 'j7tracker',
-    fetchedAt: j7TrackerHistoryAt || Date.now(), stale: false,
-  };
-}
-
-async function fetchJ7TrackerPumpFeed() {
-  const configured = await refreshJ7TrackerState(false);
-  if (!configured) {
-    const reason = j7TrackerHistoryError || 'not-connected';
-    const events = reason === 'network' ? j7TrackerPumpCache.map((event) => ({ ...event, stale: true })) : [];
-    return { ok: false, reason, events, stale: events.length > 0, source: 'j7tracker', fetchedAt: j7TrackerHistoryAt || 0 };
-  }
-  const refreshed = await refreshJ7TrackerHistory(false);
-  if (!refreshed) {
-    const reason = j7TrackerHistoryError || 'network';
-    const events = reason === 'network' ? j7TrackerPumpCache.map((event) => ({ ...event, stale: true })) : [];
-    return { ok: false, reason, events, stale: events.length > 0, source: 'j7tracker', fetchedAt: j7TrackerHistoryAt || 0 };
-  }
-  return {
-    ok: true, events: j7TrackerPumpCache.slice(), source: 'j7tracker',
-    fetchedAt: j7TrackerHistoryAt || Date.now(), stale: false,
-  };
 }
 
 const HOLDING_WATCH_PER_CHAIN_MAX = 100;
@@ -2500,20 +1894,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
       resetFomoAccountCaches(!!nextAccount && nextAccount === fomoPassive.accountId);
     }
   }
-  if (changes.j7TrackerSessionV1) {
-    resetJ7TrackerCaches();
-    if (chrome.storage.session) void wakeJ7Tracker().catch(() => {});
-  }
-});
 
-function isJ7TrackerSender(sender) {
-  try {
-    const hostname = new URL(String(sender?.url || sender?.tab?.url || '')).hostname;
-    return hostname === 'j7tracker.io';
-  } catch {
-    return false;
-  }
-}
+});
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'fomo-passive-event') {
@@ -2528,23 +1910,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     let site = '';
     try { site = new URL(sender?.url || '').hostname; } catch {}
     if (message.type === 'debug-render') {
-      if (['gmgn.ai','debot.ai'].includes(site)) globalThis.gdhDebug?.record('render', message.fields);
+      if (site === 'gmgn.ai') globalThis.gdhDebug?.record('render', message.fields);
       sendResponse({ok:true}); return false;
     }
     if (!popup || !globalThis.gdhDebug) { sendResponse({ok:false}); return false; }
     (message.type === 'debug-clear' ? globalThis.gdhDebug.clear() : globalThis.gdhDebug.export())
       .then(data => sendResponse({ok:message.type!=='debug-clear' || data===true,data})).catch(() => sendResponse({ok:false}));
-    return true;
-  }
-  if (message?.type === 'j7tracker-session-updated') {
-    if (!isJ7TrackerSender(sender)) {
-      sendResponse({ ok: false });
-      return false;
-    }
-    resetJ7TrackerCaches();
-    refreshJ7TrackerState(true)
-      .then((ok) => sendResponse({ ok: Boolean(ok) }))
-      .catch(() => sendResponse({ ok: false }));
     return true;
   }
   if (message?.type === 'fomo-page-heartbeat') {
@@ -2564,7 +1935,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch(() => sendResponse({ ok: false }));
     return true;
   }
-
 
   if (message?.type === 'holding-watch-update') {
     updateHoldingWatchList(message.payload || {})
@@ -2594,13 +1964,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message?.type === 'fomo-feed') {
-    snapshotJ7TrackerFeed('fomo')
-      .then(sendResponse)
-      .catch((error) => sendResponse({ ok: false, reason: 'error', message: String(error?.message || '') }));
-    return true;
-  }
-
   if (message?.type === 'fomo-followed-feed') {
     fetchFomoFollowedFeed()
       .then(sendResponse)
@@ -2610,13 +1973,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === 'fomo-followed-holders') {
     fetchFomoFollowedHolders(message.payload || {})
-      .then(sendResponse)
-      .catch((error) => sendResponse({ ok: false, reason: 'error', message: String(error?.message || '') }));
-    return true;
-  }
-
-  if (message?.type === 'pump-feed') {
-    snapshotJ7TrackerFeed('pump')
       .then(sendResponse)
       .catch((error) => sendResponse({ ok: false, reason: 'error', message: String(error?.message || '') }));
     return true;
@@ -2645,6 +2001,3 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   return false;
 });
-
-// Executed on every MV3 evaluation, including alarm/message wake (not only browser startup).
-if (chrome.storage.session) void wakeJ7Tracker().catch(() => {});

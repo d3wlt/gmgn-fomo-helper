@@ -20,6 +20,8 @@ try {
     // Fail DNS for all real hosts; routed synthetic pages still load without DNS.
     args:[`--disable-extensions-except=${root}`, `--load-extension=${root}`, '--host-resolver-rules=MAP * ~NOTFOUND'],
   });
+  const retiredTraffic=[];
+  context.on('request',request=>{if(/j7tracker|debot\.ai/.test(request.url()) && !request.isNavigationRequest())retiredTraffic.push(request.url());});
   let worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker', { timeout:15000 });
   const id = new URL(worker.url()).host;
   assert.equal(await worker.evaluate(() => chrome.runtime.getManifest().version), manifest.version);
@@ -29,26 +31,11 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(`chrome-extension://${id}/popup.html`);
   assert.ok((await page.locator('body').innerText()).includes('FOMO'));
-  assert.ok((await page.locator('body').innerText()).includes('J7Tracker'));
-  assert.ok((await page.locator('footer').innerText()).includes('optional signed-in FOMO/J7Tracker sessions'));
+  assert.equal(await page.locator('#enable-pump-feed, #j7tracker-sync-status').count(), 0);
+  assert.doesNotMatch(await page.locator('body').innerText(), /J7Tracker|DeBot/);
   const popupGeometry = await page.evaluate(() => ({ width: innerWidth, scrollWidth: document.documentElement.scrollWidth }));
-  assert.ok(popupGeometry.scrollWidth <= popupGeometry.width, 'J7Tracker popup copy must not overflow horizontally');
-  const j7Status = page.locator('#j7tracker-sync-status');
-  const setJ7State = state => page.evaluate(value => chrome.storage.local.set({ j7TrackerSyncStateV1: value }), state);
-  await setJ7State({ connected:false, reason:'verifying' });
-  await assert.doesNotReject(() => j7Status.waitFor({ state:'visible' }));
-  await page.waitForFunction(() => document.querySelector('#j7tracker-sync-status')?.textContent.includes('Verifying'));
-  await setJ7State({ connected:false, reason:'session-expired' });
-  await page.waitForFunction(() => document.querySelector('#j7tracker-sync-status')?.textContent.includes('expired'));
-  await setJ7State({ connected:false, reason:'network' });
-  await page.waitForFunction(() => document.querySelector('#j7tracker-sync-status')?.textContent.includes('retrying'));
-  await setJ7State({ connected:true, displayName:'Fixture User', fomoTrackedCount:0, pumpTrackedCount:0 });
-  await page.waitForFunction(() => document.querySelector('#j7tracker-sync-status')?.textContent.includes('FOMO 0 · Pump 0'));
-  assert.ok(await j7Status.evaluate(element => element.classList.contains('is-warn')));
-  await setJ7State({ connected:true, displayName:'Fixture User', fomoTrackedCount:2, pumpTrackedCount:3 });
-  await page.waitForFunction(() => document.querySelector('#j7tracker-sync-status')?.textContent.includes('FOMO 2 · Pump 3'));
-  assert.ok(await j7Status.evaluate(element => element.classList.contains('is-ok')));
-  await page.screenshot({ path: path.join(resultsDir, 'popup-j7tracker.png'), fullPage: true });
+  assert.ok(popupGeometry.scrollWidth <= popupGeometry.width, 'popup copy must not overflow horizontally');
+  await page.screenshot({ path: path.join(resultsDir, 'popup-retired-integrations.png'), fullPage: true });
   assert.deepEqual(errors, []);
 
   // Real settings controls, persistent worker logger, and native file download.
@@ -83,45 +70,41 @@ try {
   debug=await page.evaluate(()=>chrome.runtime.sendMessage({type:'debug-export'}));
   assert.ok(!debug.data.entries.some(e=>e.status===599));
 
-  await context.route('https://j7tracker.io/**', route => route.fulfill({
-    status: 200,
-    contentType: 'text/html',
-    body: `<!doctype html><html><body><script>
-      localStorage.setItem('sessionId', 'fixture-j7-session');
-      localStorage.setItem('loggedInUser', 'Fixture User');
-      localStorage.setItem('loggedInUserId', 'fixture-user-id');
-    </script><main>J7 fixture</main></body></html>`,
-  }));
-  const j7Page = await context.newPage();
-  await j7Page.goto('https://j7tracker.io/');
-  const deadline = Date.now() + 8000;
-  let j7Session = null;
-  while (Date.now() < deadline) {
-    j7Session = await worker.evaluate(async () => (await chrome.storage.local.get('j7TrackerSessionV1')).j7TrackerSessionV1 || null);
-    if (j7Session?.token === 'fixture-j7-session') break;
-    await new Promise(resolve => setTimeout(resolve, 200));
+  // Saved legacy ON/session/cache values must be inert, including after MV3 restart.
+  await page.evaluate(async () => {
+    await chrome.storage.local.set({enablePumpFeed:true, enableFomoFeed:true, debotFomoPanelOpen:true, debotFomoPanelTab:"swaps",
+      j7TrackerSessionV1:{token:'fixture-j7-session',accountId:'fixture'},
+      j7TrackerFomoConfigV1:{connected:true},j7TrackerPumpConfigV1:{connected:true}});
+    await chrome.storage.session.set({j7TrackerCacheV1:{fomo:[{id:'retired'}],pump:[{id:'retired'}]}});
+    await chrome.alarms.create('985gmgn-j7tracker-sync',{periodInMinutes:5});
+  });
+  await page.locator('#save').click();
+  assert.equal(await page.locator('#enable-fomo-feed').isChecked(), true);
+  for (const type of ['fomo-feed','pump-feed','j7tracker-session-updated']) {
+    assert.equal(await page.evaluate(async type => {
+      try { return (await chrome.runtime.sendMessage({type})) ?? null; } catch { return null; }
+    }, type), null, `retired message ${type} has no handler`);
   }
-  assert.deepEqual(JSON.parse(JSON.stringify(j7Session)), {
-    token: 'fixture-j7-session', accountId: 'fixture-user-id', displayName: 'Fixture User', at: j7Session.at,
-  });
-  assert.ok(Number(j7Session.at) > 0);
-  await context.route('https://docs.j7tracker.io/**', route => route.fulfill({
-    status: 200, contentType: 'text/html', body: '<!doctype html><html><body>J7 subdomain fixture</body></html>',
-  }));
-  const j7SubdomainPage = await context.newPage();
-  await j7SubdomainPage.goto('https://docs.j7tracker.io/');
-  assert.equal(await j7SubdomainPage.evaluate(() => typeof window.__gdhJ7SessionBridgeStarted), 'undefined', 'the apex session bridge is not injected on J7 subdomains');
-  await j7SubdomainPage.close();
-  await j7Page.close();
-
-  await worker.evaluate(async () => {
-    await wakeJ7Tracker();
-    await acceptJ7TrackerLiveEvent('fomo_event', {kind:'trade', data:{id:'mv3-persisted', timestamp:Date.now(), userHandle:'fixture', token:{symbol:'TEST',networkId:1}}}, j7TrackerSessionGeneration, 'fixture-j7-session');
-    await j7TrackerPersistQueue;
-  });
-  const savedJ7 = await page.evaluate(async () => (await chrome.storage.session.get('j7TrackerCacheV1')).j7TrackerCacheV1);
-  assert.equal(savedJ7.fomo[0].id, 'mv3-persisted');
-  assert.ok(!JSON.stringify(savedJ7).includes('fixture-j7-session'));
+  // Real MV3 injection retirement, routed synthetic DeBot token/tracker pages only.
+  await context.route('https://debot.ai/**',route=>route.fulfill({contentType:'text/html',body:
+    '<!doctype html><html><body><main id="native">Native fixture unchanged</main><table><tbody><tr id="native-row"><td><a href="/token/eth/0x1111111111111111111111111111111111111111">Native token</a></td></tr></tbody></table></body></html>'}));
+  const retiredPage=await context.newPage();
+  const retiredCdp=await context.newCDPSession(retiredPage), executionContexts=[];
+  retiredCdp.on('Runtime.executionContextCreated',({context})=>executionContexts.push(context));
+  await retiredCdp.send('Runtime.enable');
+  for(const route of ['/track?tab=track','/token/eth/0x1111111111111111111111111111111111111111']) {
+    executionContexts.length=0;
+    await retiredPage.goto(`https://debot.ai${route}`);
+    await retiredPage.waitForTimeout(1300);
+    assert.equal(await retiredPage.locator('#native').innerText(),'Native fixture unchanged');
+    assert.equal(await retiredPage.locator('[class*="gdh-"], [data-gdh-debot-track-chain], [data-gdh-debot-fomo-key]').count(),0);
+    assert.ok(!executionContexts.some(ctx=>ctx.origin===`chrome-extension://${id}`),'no extension isolated world on retired host');
+    const before=retiredPage.url();
+    await retiredPage.evaluate(()=>document.dispatchEvent(new CustomEvent('gdh-debot-navigate',{detail:{href:'/token/bsc/0x2222222222222222222222222222222222222222'}})));
+    assert.equal(retiredPage.url(),before,'retired MAIN navigation bridge absent');
+  }
+  await retiredPage.close();
+  assert.deepEqual(retiredTraffic,[],'no retired provider requests with legacy settings');
   assert.equal(await worker.evaluate(() => chrome.runtime.getManifest().minimum_chrome_version), '116');
   const cdp = await context.newCDPSession(page);
   const targets = await cdp.send('Target.getTargets');
@@ -158,15 +141,16 @@ try {
   assert.ok(worker);
   assert.equal(await worker.evaluate(() => typeof globalThis.__mv3RestartSentinel), 'undefined', 'worker memory was reset');
   assert.equal(await page.evaluate(() => chrome.runtime.getManifest().version), manifest.version);
-  const restoredJ7 = await page.evaluate(() => chrome.runtime.sendMessage({ type:'fomo-feed' }));
-  assert.ok(restoredJ7.events.some(e => e.id === 'mv3-persisted'), 'real worker restored session cache before offline network completion');
-  assert.equal(await worker.evaluate(() => !!j7TrackerLiveSocket && j7TrackerLiveToken === 'fixture-j7-session'), true, 'wake recreated authenticated socket');
+  assert.equal(await worker.evaluate(() => typeof wakeJ7Tracker), 'undefined');
+  assert.equal(await page.evaluate(async () => (await chrome.storage.session.get('j7TrackerCacheV1')).j7TrackerCacheV1 ?? null), null);
+  assert.equal(await page.evaluate(async () => (await chrome.alarms.get('985gmgn-j7tracker-sync')) ?? null), null);
   assert.equal(response.ok, false, 'offline request is failure, never successful empty data');
   debug=await page.evaluate(()=>chrome.runtime.sendMessage({type:'debug-export'}));
   assert.equal(debug.data.enabled,false);
   assert.ok(debug.data.entries.some(e=>e.kind==='render' && e.placed===2),'diagnostics survive real worker restart');
   assert.deepEqual(errors, []);
-  console.log(`MV3 ${manifest.version}: debug toggle/export/clear/sanitization/restart passed; loaded, apex-only J7 session bridged, popup states rendered at 380x600, worker stopped/reawakened, offline failure preserved.`);
+  assert.deepEqual(retiredTraffic,[]);
+  console.log(`MV3 ${manifest.version}: debug toggle/export/clear/sanitization/restart passed; loaded, legacy J7 data/messages inert and DeBot injection/traffic absent, popup Save verified at 380x600, worker stopped/reawakened, offline failure preserved.`);
 } finally {
   if (context) await context.close();
   fs.rmSync(profile, { recursive:true, force:true });

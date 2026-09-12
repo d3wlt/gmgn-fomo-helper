@@ -17,7 +17,6 @@ const DEFAULTS = {
   mergeFomoHolders: true,
   enableMarkedHolders: true,
   enableFomoFeed: true,
-  enablePumpFeed: true,
   fomoFeedChainOnly: false,
   fomoFeedTypes: { buy: true, sell: true, thesis: true },
   markedHolders: [
@@ -81,11 +80,9 @@ const colorInput = document.querySelector('#highlight-color');
 const surgeThresholdInput = document.querySelector('#holding-surge-threshold');
 const surgeCooldownInput = document.querySelector('#holding-surge-cooldown');
 const gmgnHoldingSyncStatus = document.querySelector('#gmgn-holding-sync-status');
-const j7TrackerSyncStatus = document.querySelector('#j7tracker-sync-status');
 const mergeHoldersInput = document.querySelector('#enable-merge-fomo-holders');
 const markedEnableInput = document.querySelector('#enable-marked-holders');
 const fomoFeedEnableInput = document.querySelector('#enable-fomo-feed');
-const pumpFeedEnableInput = document.querySelector('#enable-pump-feed');
 const fomoFeedChainOnlyInput = document.querySelector('#fomo-feed-chain-only');
 const fomoFeedTypeInputs = {
   buy: document.querySelector('#fomo-feed-buy'),
@@ -142,32 +139,6 @@ function renderGmgnHoldingSyncState(state) {
   gmgnHoldingSyncStatus.className = 'sync-status is-ok';
 }
 
-function shortJ7TrackerAccount(raw) {
-  const value = String(raw || '');
-  return value.length > 14 ? `${value.slice(0, 6)}…${value.slice(-5)}` : value;
-}
-
-function renderJ7TrackerSyncState(state) {
-  if (!state?.connected) {
-    j7TrackerSyncStatus.textContent = state?.reason === 'session-expired'
-      ? 'J7Tracker session expired: sign in again and open j7tracker.io'
-      : (state?.reason === 'verifying'
-        ? 'Verifying J7Tracker session…'
-        : (state?.reason === 'network'
-          ? 'J7Tracker refresh failed; retrying automatically.'
-          : 'Not connected: open j7tracker.io once while signed in'));
-    j7TrackerSyncStatus.className = 'sync-status is-warn';
-    return;
-  }
-  const account = String(state.displayName || '').trim() || shortJ7TrackerAccount(state.accountId);
-  const fomoCount = Number(state.fomoTrackedCount);
-  const pumpCount = Number(state.pumpTrackedCount);
-  const hasCounts = Number.isInteger(fomoCount) && fomoCount >= 0 && Number.isInteger(pumpCount) && pumpCount >= 0;
-  const counts = hasCounts ? ` · FOMO ${fomoCount} · Pump ${pumpCount}` : '';
-  j7TrackerSyncStatus.textContent = `J7Tracker connected${account ? `: ${account}` : ''}${counts}`;
-  j7TrackerSyncStatus.className = `sync-status ${hasCounts && fomoCount + pumpCount === 0 ? 'is-warn' : 'is-ok'}`;
-}
-
 function parseDevList(text) {
   const entries = new Map();
   const errors = [];
@@ -210,7 +181,6 @@ chrome.storage.local.get(DEFAULTS, (stored) => {
   mergeHoldersInput.checked = stored.mergeFomoHolders !== false;
   markedEnableInput.checked = stored.enableMarkedHolders !== false;
   fomoFeedEnableInput.checked = stored.enableFomoFeed !== false;
-  pumpFeedEnableInput.checked = stored.enablePumpFeed !== false;
   fomoFeedChainOnlyInput.checked = stored.fomoFeedChainOnly === true;
   const storedFomoTypes = stored.fomoFeedTypes && typeof stored.fomoFeedTypes === 'object'
     ? stored.fomoFeedTypes : DEFAULTS.fomoFeedTypes;
@@ -227,18 +197,12 @@ chrome.storage.local.get({ gmgnHoldingSignalSyncState: null }, (stored) => {
   renderGmgnHoldingSyncState(stored.gmgnHoldingSignalSyncState);
 });
 
-chrome.storage.local.get({ j7TrackerSyncStateV1: null }, (stored) => {
-  renderJ7TrackerSyncState(stored.j7TrackerSyncStateV1);
-});
-
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === 'local' && changes.debugLogging) { debugInput.checked=changes.debugLogging.newValue===true;debugLabel(); }
   if (areaName === 'local' && changes.gmgnHoldingSignalSyncState) {
     renderGmgnHoldingSyncState(changes.gmgnHoldingSignalSyncState.newValue);
   }
-  if (areaName === 'local' && changes.j7TrackerSyncStateV1) {
-    renderJ7TrackerSyncState(changes.j7TrackerSyncStateV1.newValue);
-  }
+
 });
 
 saveButton.addEventListener('click', async () => {
@@ -259,7 +223,6 @@ saveButton.addEventListener('click', async () => {
     mergeFomoHolders: mergeHoldersInput.checked,
     enableMarkedHolders: markedEnableInput.checked,
     enableFomoFeed: fomoFeedEnableInput.checked,
-    enablePumpFeed: pumpFeedEnableInput.checked,
     fomoFeedChainOnly: fomoFeedChainOnlyInput.checked,
     fomoFeedTypes: Object.fromEntries(
       Object.entries(fomoFeedTypeInputs).map(([key, input]) => [key, input.checked]),

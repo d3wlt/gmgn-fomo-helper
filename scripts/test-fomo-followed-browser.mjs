@@ -42,7 +42,7 @@ try {
     epoch: () => fomoFollowedEpoch,
     identity: trackingFeedEventIdentity,
     eligible: () => visibleTrackingFeedEvents(nativeTrackingFeedRows(trackerCards())).map(e => e.key),
-    prepare: () => { lastFullScanAt = Date.now(); scanCostEma = 60; fomoFeedLastPollAt = Date.now(); pumpFeedLastPollAt = Date.now(); },
+    prepare: () => { lastFullScanAt = Date.now(); scanCostEma = 60; },
     settings: values => { Object.assign(settings, values); rebuildBlockedTokenIndex(); },
   };`;
   await page.addStyleTag({ path:`${root}/styles.css` });

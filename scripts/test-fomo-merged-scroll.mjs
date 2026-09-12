@@ -14,7 +14,7 @@ try {
   });
   await page.addStyleTag({path:new URL('styles.css',root).pathname});
   let source=fs.readFileSync(new URL('content.js',root),'utf8');
-  source=source.replace(/\}\)\(\);\s*$/, `window.__merged={render:(cards,events)=>{settings.enabled=true;lastFullScanAt=Infinity;fomoFeedLastPollAt=Infinity;fomoFollowedLastPollAt=Infinity;pumpFeedLastPollAt=Infinity;fomoFollowedEvents=events;return renderMergedTracker(cards,visibleTrackingFeedEvents(nativeTrackingFeedRows(cards)));}, sync:syncMergedTracker, scan:scanFomoFeed, state:()=>mergedTracker, destroy:()=>{settings.enabled=false;teardownFomoFeed();}};})();`);
+  source=source.replace(/\}\)\(\);\s*$/, `window.__merged={render:(cards,events)=>{settings.enabled=true;lastFullScanAt=Infinity;fomoFollowedLastPollAt=Infinity;fomoFollowedEvents=events;return renderMergedTracker(cards,visibleTrackingFeedEvents(nativeTrackingFeedRows(cards)));}, sync:syncMergedTracker, scan:scanFomoFeed, state:()=>mergedTracker, destroy:()=>{settings.enabled=false;teardownFomoFeed();}};})();`);
   await page.addScriptTag({content:source});
   await page.waitForTimeout(100);
   await page.evaluate(()=>{

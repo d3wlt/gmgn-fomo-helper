@@ -90,7 +90,7 @@
       if (duration !== undefined) out.durationMs = duration;
     } else if (kind === 'render') {
       const source = own(fields, 'source');
-      if (source === 'gmgn' || source === 'debot') out.source = source;
+      if (source === 'gmgn') out.source = source;
     } else if (kind === 'lifecycle') {
       const event = own(fields, 'event');
       if (EVENTS.has(event)) out.event = event;

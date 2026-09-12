@@ -241,7 +241,7 @@ test('Robinhood native config false wins, missing entry falls back to master tog
   const sanitized = vm.runInNewContext(`${sanitize}\nsanitizeHoldingConfig({data:[{push_chain:'robinhood',push_switch_dict:{holding_signal:false,secret:'omit'}}]})`);
   assert.deepEqual(JSON.parse(JSON.stringify(sanitized)), [{ push_chain: 'robinhood', push_switch_dict: { holding_signal: false } }]);
   const node = {};
-  const render = popup.slice(popup.indexOf('function renderGmgnHoldingSyncState('), popup.indexOf('function shortJ7TrackerAccount('));
+  const render = popup.slice(popup.indexOf('function renderGmgnHoldingSyncState('), popup.indexOf('function parseDevList('));
   vm.runInNewContext(`${render}\nrenderGmgnHoldingSyncState({synced:true, enabledChains:[], robinhoodFallback:true});`, { gmgnHoldingSyncStatus: node });
   assert.match(node.textContent, /Robinhood uses the extension toggle/);
   assert.doesNotMatch(node.textContent, /position price alerts are disabled/);

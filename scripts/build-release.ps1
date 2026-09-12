@@ -16,19 +16,13 @@ $files = @(
   'manifest.json',
   'background.js',
   'debug-log.js',
-  'vendor/socket.io.min.js',
-  'vendor/LICENSE.socket.io-client.txt',
   'page-bridge.js',
   'native-quickbuy.js',
   'content.js',
-  'j7-content.js',
-  'debot-bridge.js',
-  'debot-content.js',
   'fomo-early.js',
   'fomo-passive.js',
   'fomo-passive-content.js',
   'styles.css',
-  'debot-styles.css',
   'popup.html',
   'popup.css',
   'popup.js',
@@ -51,7 +45,7 @@ foreach ($relativePath in $files) {
 $dist = Join-Path $root 'dist'
 New-Item -ItemType Directory -Path $dist -Force | Out-Null
 Get-ChildItem -LiteralPath $dist -File | Remove-Item -Force
-$zipPath = Join-Path $dist "985gmgn-helper-v$version.zip"
+$zipPath = Join-Path $dist "gmgn-fomo-helper-v$version.zip"
 
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem

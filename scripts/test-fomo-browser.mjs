@@ -26,16 +26,16 @@ async function boot(site, width = 1280) {
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   page.on('console', msg => { if (msg.type() === 'error') errors.push(msg.text()); });
-  await page.goto(site === 'gmgn' ? `https://gmgn.ai/eth/token/${address}` : `https://debot.ai/token/eth/${address}`);
+  await page.goto(`https://gmgn.ai/eth/token/${address}`);
   await page.evaluate(({ version, address }) => {
     const listeners = [];
     const state = {
-      enabled: true, enableFomoPanel: true, fomoPanelOpen: true, debotFomoPanelOpen: true,
+      enabled: true, enableFomoPanel: true, fomoPanelOpen: true,
       fomoTranslate: false, enableFomoFeed: true, enablePumpFeed: true,
+      j7TrackerSessionV1:{token:"SYNTHETIC_ONLY",accountId:"retired"},
+      j7TrackerFomoConfigV1:{connected:true},j7TrackerPumpConfigV1:{connected:true},
       enableHoldingSurge: false, enableManifestoTab: false, enableManifestoToast: false,
       enableMarkedHolders: false, enableFlapTax: false, markedListMigratedV2: true,
-      j7TrackerFomoConfigV1: { connected:true, trackedCount:2, at:Date.now() },
-      j7TrackerPumpConfigV1: { connected:true, trackedCount:2, at:Date.now() },
     };
     window.__fixture = { calls: [], pending: [], mode: 'success', source: 'holder-history', partial: true, followingKnown: true, address, copied: '' };
     const user = (name) => ({ id: name, userHandle: name, displayName: name });
@@ -54,15 +54,6 @@ async function boot(site, width = 1280) {
       total: 3, count: 3, items: [item('alice_fixture', true, 'buy', 'More', Date.now()-2000), item('bob_fixture', false, 'buy', 'First', Date.now()-1000), item('exit_fixture', true, 'sell', 'All', Date.now()-3000)],
       token: 'SECRET_SENTINEL', message: 'SECRET_SENTINEL',
     });
-    window.__fixture.j7Fomo = () => ({ ok:true, source:'j7tracker', events:[
-      { key:'j7-fomo-buy', source:'j7-fomo', type:'buy', ts:Date.now()-1000, name:'Alice Fixture', handle:'alice_fixture', symbol:'BUY', addr:'0x3333333333333333333333333333333333333333', chain:'bsc', usd:42, mc:750000, img:'https://images.fixture/token.png' },
-      { key:'j7-fomo-sell', source:'j7-fomo', type:'sell', ts:Date.now()-2000, name:'Alice Fixture', handle:'alice_fixture', symbol:'SELL', addr:'0x4444444444444444444444444444444444444444', chain:'bsc', usd:24, mc:700000 },
-      { key:'j7-fomo-thesis', source:'j7-fomo', type:'thesis', ts:Date.now()-3000, name:'Alice Fixture', handle:'alice_fixture', symbol:'NOTE', addr:'0x5555555555555555555555555555555555555555', chain:'bsc', comment:'Synthetic J7Tracker narrative' },
-    ] });
-    window.__fixture.j7Pump = () => ({ ok:true, source:'j7tracker', events:[
-      { key:'j7-pump-callout', source:'j7-pump', type:'callout', ts:Date.now()-4000, name:'Bob Fixture', handle:'bob_fixture', symbol:'CALL', addr:'0x6666666666666666666666666666666666666666', chain:'bsc', mc:650000, comment:'Synthetic J7Tracker callout' },
-      { key:'j7-pump-reply', source:'j7-pump', type:'reply', ts:Date.now()-5000, name:'Bob Fixture', handle:'bob_fixture', symbol:'REPLY', addr:'0x7777777777777777777777777777777777777777', chain:'bsc', comment:'Synthetic J7Tracker reply' },
-    ] });
     function sendMessage(message, callback) {
       window.__fixture.calls.push(message.type);
       let promise;
@@ -73,8 +64,7 @@ async function boot(site, width = 1280) {
         else if (f.mode === 'network') promise = Promise.resolve({ ok: false, reason: 'network', message: 'SECRET_SENTINEL' });
         else if (f.mode === 'rate') promise = Promise.resolve({ ok: false, reason: 'http-429', status: 429, retryAt: Date.now() + 60000 });
         else promise = Promise.resolve(f.response());
-      } else if (message.type === 'fomo-feed') promise = Promise.resolve(window.__fixture.j7Fomo());
-      else if (message.type === 'pump-feed') promise = Promise.resolve(window.__fixture.j7Pump());
+      }
       else if (message.type === 'fomo-followed-feed') promise = Promise.resolve({ ok:true, events:[], coverageGap:true, gapReason:'page-cap', updatedAt:Date.now(), fetchedAt:Date.now() });
       else promise = Promise.resolve({ ok: false, reason: 'fixture-disabled', items: [], events: [] });
       if (callback) { promise.then(callback, () => callback(undefined)); return; }
@@ -94,20 +84,18 @@ async function boot(site, width = 1280) {
     Object.defineProperty(navigator, 'clipboard', { configurable:true, value:{ writeText: async text => { window.__fixture.copied = text; } } });
   }, { version: manifest.version, address });
   if (site === 'gmgn') await installNativeBridge(page);
-  const file = site === 'gmgn' ? 'content.js' : 'debot-content.js';
-  const hooks = site === 'gmgn'
-    ? 'window.__test = { shift: setFomoFeedRowShift, gap: renderFomoFollowedGap, relativeTime: fomoFeedRelTime, feedCard: event => fomoFeedCardFor(event), pollJ7Fomo: () => pollFomoFeed(), pollJ7Pump: () => pollPumpFeed(), scanJ7Feed: () => scanFomoFeed(), load: () => loadFomoData(true), sync: () => scanVisibleCards(), tab: value => {fomoTab=value;return loadFomoData(true);}, close: () => {setFomoOpen(false);scanVisibleCards();}, open: () => {setFomoOpen(true);scanVisibleCards();} };'
-    : 'window.__test = { gap: renderFomoFollowedGap, feedCard: event => buildFeedCard(event), load: () => loadPanel(true), sync: () => syncRoute(), tab: value => {panelTab=value;return loadPanel(true);}, close: () => {settings.debotFomoPanelOpen=false;syncPanel();}, open: () => {settings.debotFomoPanelOpen=true;syncPanel();} };';
+  const file = 'content.js';
+  const hooks = 'window.__test = { shift: setFomoFeedRowShift, gap: renderFomoFollowedGap, relativeTime: fomoFeedRelTime, feedCard: event => fomoFeedCardFor(event), load: () => loadFomoData(true), sync: () => scanVisibleCards(), tab: value => {fomoTab=value;return loadFomoData(true);}, close: () => {setFomoOpen(false);scanVisibleCards();}, open: () => {setFomoOpen(true);scanVisibleCards();} };';
   const source = fs.readFileSync(path.join(root, file), 'utf8').replace(/\}\)\(\);\s*$/, `${hooks}\n})();`);
-  await page.addStyleTag({ path: path.join(root, site === 'gmgn' ? 'styles.css' : 'debot-styles.css') });
+  await page.addStyleTag({ path: path.join(root, 'styles.css') });
   await page.addScriptTag({ content: source });
-  const panel = site === 'gmgn' ? '.gdh-fomo-panel' : '.gdh-debot-fomo';
+  const panel = '.gdh-fomo-panel';
   await page.locator(panel).waitFor({ timeout: 10000 });
   return { context, page, errors, panel };
 }
 
 try {
-  for (const site of ['gmgn', 'debot']) {
+  for (const site of ['gmgn']) {
     const { context, page, errors, panel } = await boot(site);
     try {
       await page.getByRole('button', { name: 'Trades', exact: true }).click();
@@ -132,66 +120,6 @@ try {
       await page.evaluate(() => { window.__fixture.followingKnown = true; return window.__test.load(); });
       await page.screenshot({ path: path.join(output, `${site}-trust-desktop.png`) });
       reports.push({ site, scenario: 'source and partial coverage rendered', passed:true });
-      const callout = await page.evaluate(() => {
-        const built = window.__test.feedCard({
-          key: 'j7-callout-fixture', source: 'j7-pump', type: 'callout',
-          ts: Date.now() - 2000, name: 'J7 Fixture', handle: 'j7_fixture',
-          addr: '0x3333333333333333333333333333333333333333', chain: 'bsc',
-          ticker: 'J7T', mc: 750000, comment: 'Synthetic J7Tracker callout text',
-        });
-        // This isolated renderer fixture must not be removed by feed-map maintenance.
-        const card = built.cloneNode(true);
-        built.remove();
-        card.dataset.j7Fixture = '1';
-        if (card.classList.contains('gdh-debot-feed__row')) {
-          card.style.gridTemplateColumns = '220px 160px 100px 100px 100px 80px';
-        }
-        document.body.appendChild(card);
-        const rect = card.getBoundingClientRect();
-        const computed = getComputedStyle(card);
-        return { text: card.innerText, className: card.className, height: rect.height, gridRows: computed.gridTemplateRows, position: computed.position };
-      });
-      assert.match(callout.text, /J7 · Pump/);
-      assert.match(callout.text, /Callout/);
-      assert.match(callout.text, /Synthetic J7Tracker callout text/);
-      assert.match(callout.className, /is-callout/);
-      assert.ok(callout.height <= 120, `${site}: J7 callout card is unexpectedly ${callout.height}px tall (${callout.gridRows}, ${callout.position})`);
-      await page.locator('[data-j7-fixture="1"]').screenshot({ path: path.join(output, `${site}-j7-callout.png`) });
-      await page.evaluate(() => document.querySelector('[data-j7-fixture="1"]')?.remove());
-      reports.push({ site, scenario: 'J7Tracker Pump callout label and narrative render in a real card', passed:true });
-      if (site === 'gmgn') {
-        const integrated = await page.evaluate(async () => {
-          window.__mountNativeFixture({count:1});
-          const native=document.querySelector('[data-sentry-component="TrackerListItem"]');
-          window.__test.pollJ7Fomo(); window.__test.pollJ7Pump();
-          await new Promise(resolve => setTimeout(resolve, 20));
-          window.__test.scanJ7Feed();
-          await new Promise(resolve => requestAnimationFrame(resolve));
-          const cards = [...document.querySelectorAll('.gdh-fomofeed')];
-          const result = { count:cards.length, text:cards.map(card => card.innerText).join('\n'), nativeStillMounted:native.isConnected };
-          const staleEvent = { ...window.__fixture.j7Fomo().events[0], stale:true };
-          window.__fixture.j7Fomo = () => ({ ok:false, reason:'network', stale:true, events:[staleEvent] });
-          window.__test.pollJ7Fomo();
-          await new Promise(resolve => setTimeout(resolve, 20));
-          window.__test.scanJ7Feed();
-          await new Promise(resolve => requestAnimationFrame(resolve));
-          result.staleText = [...document.querySelectorAll('.gdh-fomofeed')].map(card => card.innerText).join('\n');
-          document.querySelectorAll('.gdh-fomofeed').forEach(card => card.remove()); document.querySelector('#native-fixture').remove();
-          window.__test.scanJ7Feed();
-          return result;
-        });
-        assert.equal(integrated.count, 5);
-        assert.match(integrated.text, /Alice Fixture/);
-        assert.match(integrated.text, /Buy/);
-        assert.match(integrated.text, /Sell/);
-        assert.match(integrated.text, /Narrative/);
-        assert.match(integrated.text, /Callout/);
-        assert.match(integrated.text, /Reply/);
-        assert.match(integrated.staleText, /J7 · FOMO · stale/);
-        assert.match(integrated.staleText, /Alice Fixture/);
-        assert.equal(integrated.nativeStillMounted, true);
-        reports.push({ site, scenario:'J7Tracker polling callback inserts FOMO and Pump event families beside a native tracking row', passed:true, integrated });
-      }
       await page.evaluate(() => { window.__fixture.mode = 'network'; return window.__test.load(); });
       assert.match(await page.locator(panel).innerText(), /stale/i);
       assert.match(await list.innerText(), /alice_fixture/);
@@ -333,10 +261,21 @@ try {
         assert.deepEqual(hover,{onBody:false,onBadge:true,afterClick:false});
         reports.push({site,scenario:'real DOM badge-only developer hover and click dismissal',passed:true});
       }
+      await page.evaluate(() => {
+        window.__fixture.storageChange({j7TrackerSessionV1:{newValue:{token:'RETIRED_CHANGED'}},
+          j7TrackerFomoConfigV1:{newValue:{connected:true}},enablePumpFeed:{newValue:true}});
+        if(window.__mountNativeFixture)window.__mountNativeFixture({count:3});
+        window.__test.sync();
+      });
+      await page.waitForTimeout(1200); // run production maintenance with legacy ON/auth values
+      assert.ok(!(await page.evaluate(()=>window.__fixture.calls)).some(type=>['fomo-feed','pump-feed','j7tracker-session-updated'].includes(type)));
+      assert.equal(await page.locator('.is-pump').count(),0);
+      if(site==='gmgn')assert.equal(await page.locator('[data-sentry-component="TrackerListItem"]').count(),3);
+      reports.push({site,scenario:'legacy provider ON/auth and storage changes cannot request or render retired feeds; native content retained',passed:true});
       assert.deepEqual(errors, []);
     } finally { await context.close(); }
   }
-  for (const site of ['gmgn', 'debot']) {
+  for (const site of ['gmgn']) {
     for (const width of [390, 768]) {
       const { context, page, panel, errors } = await boot(site, width);
       try {

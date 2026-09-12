@@ -125,7 +125,6 @@
     ],
     enableMarkedHolders: true,
     enableFomoFeed: true,
-    enablePumpFeed: true,
     fomoFeedChainOnly: false,
     fomoFeedTypes: { buy: true, sell: true, thesis: true },
     specialWallets: [],
@@ -153,7 +152,6 @@
   let activeCard = null;
   let tooltip = null;
   let suppressedTooltipCard = null;
-
 
   function setBoundedMap(map, key, value, max) {
     if (map.has(key)) map.delete(key);
@@ -274,7 +272,6 @@
     if (SOL_ADDR_RE.test(v)) return v;
     return EVM_ADDR_RE.test(v) ? v.toLowerCase() : '';
   }
-
 
   function walletAddressFromHref(href) {
     const seg = String(href || '').match(/\/address\/([^/?#]+)/)?.[1] || '';
@@ -1122,7 +1119,6 @@
     onchainBalances = { key, list: merged, loaded: merged.length };
   }
 
-
   function onchainRank(amount) {
     if (!Number.isFinite(amount) || amount <= 0) return null;
     const route = currentTokenRoute();
@@ -1217,7 +1213,6 @@
     trackToastTimer = window.setTimeout(() => toast.remove(), 2000);
   }
 
-
   function findTrackerSymbolNode(card, symbol) {
     if (!symbol) return null;
     const target = symbol.trim();
@@ -1230,8 +1225,6 @@
     }
     return null;
   }
-
-
 
   function markBlockedHosts(card, blocked) {
     let el = card;
@@ -1313,7 +1306,6 @@
     return !!(fixed && fixed.h > 0 && fixed.h <= 50);
   }
 
-
   function trackerCards() {
     const found = new Set();
     document.querySelectorAll(TRACKER_ITEM_SELECTOR).forEach((el) => found.add(el));
@@ -1331,7 +1323,6 @@
   }
   const WALLET_TABLE_SELECTOR = '[data-sentry-component="WalletTable"]';
   const TRACK_TAB_CELL = '[data-testid="follow-tracking-wallet-tab"], [data-testid="follow-tracking-tab"]';
-
 
   function walletTableScopes() {
     const scopes = new Set();
@@ -1521,7 +1512,6 @@
     closeColorPalette();
   }, true);
   document.addEventListener('scroll', () => closeColorPalette(), true);
-
 
   function findCardActionContainer(card) {
     const span = [...card.querySelectorAll('span')].find((el) => (
@@ -1757,7 +1747,6 @@
     }
   }
 
-
   async function followWalletOnChain(chain, address, name) {
     const apiQuery = gmgnApiQuery();
     if (!apiQuery) return { ok: false, reason: 'Page parameters are not ready; try again shortly' };
@@ -1785,7 +1774,6 @@
       return { ok: false, reason: String(error?.message || 'Network error').slice(0, 40) };
     }
   }
-
 
   function detectAddressChain(value) {
     const v = String(value || '').trim();
@@ -2058,7 +2046,6 @@
     renderSpecialManageList(modal);
     renderBlockedTokenList(modal);
   }
-
 
   function renderBlockedTokenList(modal) {
     const box = modal.querySelector('.gdh-sp-manage__blocked');
@@ -2911,14 +2898,12 @@
     return `${n < 0 ? '-' : ''}$${s}`;
   }
 
-
   function fomoPrice(value) {
     const n = Number(value);
     if (!Number.isFinite(n) || n <= 0) return '';
     if (n >= 1) return `$${n.toFixed(2)}`;
     return `$${n.toPrecision(3).replace(/0+$/, '').replace(/\.$/, '')}`;
   }
-
 
   function fomoDur(seconds) {
     const s = Number(seconds);
@@ -2935,7 +2920,6 @@
     }
     return undefined;
   }
-
 
   function deepPick(obj, keyRe, kind, depth = 0, seen = new Set()) {
     if (!obj || typeof obj !== 'object' || depth > 3 || seen.has(obj)) return undefined;
@@ -2964,7 +2948,6 @@
     }
     return undefined;
   }
-
 
   function fomoUser(item) {
     return (item && typeof item.user === 'object' && item.user) || item || {};
@@ -3083,7 +3066,6 @@
   const FOMO_TR_STUCK_MS = 15000;
   const FOMO_TRANSLATION_SOURCE_SELECTOR = '.gdh-fomo__text, .gdh-fomo__htext, .gdh-fomofeed__thesis';
 
-
   function browserKind() {
     try {
       const brands = navigator.userAgentData?.brands || [];
@@ -3092,7 +3074,6 @@
     }
     return / Edg\//.test(navigator.userAgent) ? 'edge' : 'chrome';
   }
-
 
   function syncFomoTrButton() {
     const btn = fomoPanelEl && fomoPanelEl.querySelector('.gdh-fomo__tr');
@@ -3126,7 +3107,6 @@
 
   const fomoTrApi = () => { try { return globalThis.Translator || null; } catch { return null; } };
   const fomoDetApi = () => { try { return globalThis.LanguageDetector || null; } catch { return null; } };
-
 
   function fomoLanguageProbe(text) {
     return String(text || '')
@@ -3190,7 +3170,6 @@
       return fallback;
     }
   }
-
 
   function primeFomoTranslatorFromGesture(lang) {
     const api = fomoTrApi();
@@ -3309,7 +3288,6 @@
     return translator;
   }
 
-
   function paintTranslation(el, english, generation = fomoTrGeneration) {
     if (!settings.fomoTranslate || generation !== fomoTrGeneration || !english || !el.parentNode) return;
     let translationEl = el.nextElementSibling;
@@ -3351,7 +3329,6 @@
     fomoTrRunning = false;
   }
 
-
   function queueFomoTranslate(el, text) {
     if (!settings.fomoTranslate || !fomoTrApi()) return;
     const raw = String(text || '').trim();
@@ -3361,7 +3338,6 @@
     fomoTrQueue.push({ el, text: raw, generation: fomoTrGeneration });
     if (!fomoTrRunning) setTimeout(runFomoTranslate, 0);
   }
-
 
   function refreshFomoTranslations() {
     const nodes = document.querySelectorAll(FOMO_TRANSLATION_SOURCE_SELECTOR);
@@ -3443,7 +3419,6 @@
     }
   }
 
-
   function watchFomoTag(el, userId) {
     const hit = fomoPnlCache.get(userId);
     if (hit && Date.now() - hit.at < FOMO_PNL_TTL) return void paintFomoTag(el, hit.data);
@@ -3465,7 +3440,6 @@
       pumpFomoPnl();
     }, { root, rootMargin: '120px' });
   }
-
 
   function renderFomoHolders(list, items) {
     list.replaceChildren();
@@ -3667,7 +3641,6 @@
     }
   }
 
-
   function describeFomoToken(stored) {
     if (!stored?.token) return { cls: 'is-bad', text: 'No session found' };
     const exp = Number(stored.exp) || 0;
@@ -3681,7 +3654,6 @@
       text: `Valid for about ${mins >= 60 ? `${Math.round(mins / 60)} hours` : `${mins} minutes`}${stored.renewed ? ' (auto-renewed)' : ''}`,
     };
   }
-
 
   async function buildFomoErrorBox(res, isCurrentRequest = () => true) {
     const box = document.createElement('div');
@@ -3804,7 +3776,6 @@
     box.append(l, v, sEl);
     return box;
   }
-
 
   function holderTokenAmount(item) {
     const direct = Number(item?.humanAmount);
@@ -4123,7 +4094,6 @@
     return panel;
   }
 
-
   function applyFomoFold(target) {
     const panel = target || fomoPanelEl;
     if (!panel) return;
@@ -4234,7 +4204,6 @@
     if (value === 0 || value === '0' || value === 'false' || value === 'off' || value === 'close') return false;
     return null;
   }
-
 
   function parseGmgnHoldingSignalConfig(payload) {
     const candidates = [payload, payload?.data, payload?.result];
@@ -4547,7 +4516,6 @@
     return { ...result, present: expectedKey ? result.seen?.has(expectedKey) === true : null };
   }
 
-
   function collectHoldingRows() {
     if (!isTabVisibleForHolding()) return;
     let changed = false;
@@ -4844,34 +4812,11 @@
   const FOMO_FEED_MARKERS = {
     followed: { label: 'Following', icon: '★' },
   };
-  let fomoFeedEvents = [];
   let fomoFollowedEvents = [];
-  let pumpFeedEvents = [];
   const fomoFeedCards = new Map();
   const fomoFeedSeen = new Set();
   const FOMO_FEED_SEEN_MAX = 600;
-  let fomoFeedLastPollAt = 0;
   let fomoFollowedLastPollAt = 0;
-  let pumpFeedLastPollAt = 0;
-  let j7TrackerFomoCfg = { connected: false, trackedCount: 0, at: 0 };
-  let j7TrackerPumpCfg = { connected: false, trackedCount: 0, at: 0 };
-
-  function loadJ7TrackerFomoCfg(raw) {
-    j7TrackerFomoCfg = {
-      connected: raw?.connected === true,
-      trackedCount: Math.max(0, Number(raw?.trackedCount) || 0),
-      at: Number(raw?.at) || 0,
-    };
-  }
-
-  function loadJ7TrackerPumpCfg(raw) {
-    j7TrackerPumpCfg = {
-      connected: raw?.connected === true,
-      trackedCount: Math.max(0, Number(raw?.trackedCount) || 0),
-      at: Number(raw?.at) || 0,
-    };
-  }
-
   function currentChainSlug() {
     const match = location.pathname.match(/^\/(sol|bsc|eth|base|tron|blast|monad|megaeth|hyperevm|xlayer|robinhood|arc|stable|arbitrum)(\/|$)/);
     if (match) return match[1];
@@ -4884,13 +4829,7 @@
     if (types[ev.type] === false) return false;
     if (ev.addr && isTokenBlocked(ev.addr)) return false;
     if (ev?.source === 'fomo-followed') return ev.followed === true;
-    return ev?.source === 'j7-fomo' && j7TrackerFomoCfg.connected;
-  }
-
-  function pumpFeedEventAllowed(ev) {
-    if (ev?.source !== 'j7-pump' || !j7TrackerPumpCfg.connected) return false;
-    if (ev.addr && isTokenBlocked(ev.addr)) return false;
-    return true;
+    return false;
   }
 
   function trackingFeedNormalizedAddress(raw) {
@@ -4922,7 +4861,7 @@
     const source = String(ev?.source || 'fomo');
     const addr = trackingFeedNormalizedAddress(ev?.addr);
     const side = String(ev?.type || '');
-    const principal = trackingFeedNormalizedAddress(ev?.pumpWallet || ev?.handle);
+    const principal = trackingFeedNormalizedAddress(ev?.handle);
     const ts = Math.round((Number(ev?.ts) || 0) / 1000);
     const usd = Math.round((Number(ev?.usd) || 0) * 100);
     if (addr && side && principal && ts) return `event:${source}:${addr}:${side}:${principal}:${ts}:${usd}`;
@@ -4961,10 +4900,6 @@
     if (chain && row.chain && chain !== row.chain) return false;
     const ts = Number(ev?.ts) || 0;
     if (!ts || !row.ts || Math.abs(ts - row.ts) > 15000) return false;
-    if (ev?.source === 'j7-pump') {
-      const wallet = trackingFeedNormalizedAddress(ev?.pumpWallet);
-      if (!wallet || !row.maker || wallet !== row.maker) return false;
-    }
     const usd = Number(ev?.usd) || 0;
     if (!usd || !row.usd) return false;
     return Math.abs(usd - row.usd) <= Math.max(1, Math.max(usd, row.usd) * 0.05);
@@ -4979,17 +4914,6 @@
         if (chain && ev.chain && ev.chain !== chain) continue;
         out.push(ev);
       }
-      for (const ev of fomoFeedEvents) {
-        if (!ev?.key || !ev.ts || !fomoFeedEventAllowed(ev)) continue;
-        if (chain && ev.chain && ev.chain !== chain) continue;
-        out.push(ev);
-      }
-    }
-    if (settings.enablePumpFeed !== false) {
-      for (const ev of pumpFeedEvents) {
-        if (!ev?.key || !ev.ts || !pumpFeedEventAllowed(ev)) continue;
-        out.push(ev);
-      }
     }
     const seen = new Set();
     return out.sort((a, b) => b.ts - a.ts).filter((ev) => {
@@ -5000,50 +4924,13 @@
     }).slice(0, FOMO_FEED_RENDER_CAP);
   }
 
-  let j7UiGeneration = 0;
-  let j7UiEpoch = '';
-  let j7FeedRaf = 0;
-  let j7RecoveryMs = 2000;
-  const j7PendingLatency = new Map();
-  const j7LatencyMetrics = []; // local, bounded numeric allowlist; no identifiers or payloads
-  function scheduleJ7FeedRender() {
-    if (j7FeedRaf || document.visibilityState === 'hidden') return;
-    j7FeedRaf = requestAnimationFrame(() => {
-      j7FeedRaf = 0;
-      scanFomoFeed(); // deliberately bypass scanVisibleCards and its adaptive throttle
-      for (const [key, receivedAt] of j7PendingLatency) {
-        if (!fomoFeedCards.get(key)?.isConnected) continue;
-        j7LatencyMetrics.push({ receiveToInsertionMs: Math.max(0, Date.now() - receivedAt) });
-        if (j7LatencyMetrics.length > 100) j7LatencyMetrics.shift();
-        j7PendingLatency.delete(key);
-      }
+  let trackingFeedRaf = 0;
+  function scheduleTrackingFeedRender() {
+    if (trackingFeedRaf || document.visibilityState === 'hidden') return;
+    trackingFeedRaf = requestAnimationFrame(() => {
+      trackingFeedRaf = 0;
+      scanFomoFeed();
     });
-  }
-  function mergeJ7UiEvents(events, current) {
-    return Array.from(new Map([...events, ...current].map(e => [e.key, e])).values())
-      .sort((a, b) => b.ts - a.ts).slice(0, 500);
-  }
-  function pollFomoFeed() {
-    if (!settings.enabled || settings.enableFomoFeed === false) return;
-    if (!document.querySelector(TRACK_TAB_CELL) && !trackerCards().length) return;
-    fomoFeedLastPollAt = Date.now();
-    const generation = j7UiGeneration;
-    try {
-      chrome.runtime.sendMessage({ type: 'fomo-feed' }, (resp) => {
-        if (generation !== j7UiGeneration || chrome.runtime.lastError) return;
-        if (resp?.epoch && j7UiEpoch && resp.epoch !== j7UiEpoch) return;
-        if (resp?.epoch) j7UiEpoch = resp.epoch;
-        j7RecoveryMs = resp?.liveConnected ? 60000 : Math.min(18000, (j7RecoveryMs > 18000 ? 2000 : j7RecoveryMs) * 1.5);
-        if (!resp?.ok) {
-          fomoFeedEvents = resp?.stale && Array.isArray(resp.events) ? resp.events : [];
-          scheduleJ7FeedRender();
-          return;
-        }
-        fomoFeedEvents = mergeJ7UiEvents(Array.isArray(resp.events) ? resp.events : [], fomoFeedEvents);
-        scheduleJ7FeedRender();
-      });
-    } catch {
-    }
   }
 
   let fomoFollowedRaf = 0;
@@ -5137,7 +5024,6 @@
     });
   }
 
-
   function gdhSpaNavigate(url) {
     if (location.pathname === url) return;
     const before = location.pathname;
@@ -5154,16 +5040,6 @@
   }
 
   function trackingFeedProfileMeta(ev) {
-    if (ev?.source === 'j7-pump') {
-      return { source: `J7 · Pump${ev?.stale ? ' · stale' : ''}`, title: 'Tracked on J7Tracker', url: ev?.profileUrl || 'https://j7tracker.io/' };
-    }
-    if (ev?.source === 'j7-fomo') {
-      return {
-        source: `J7 · FOMO${ev?.stale ? ' · stale' : ''}`,
-        title: `@${ev?.handle || ''} · Tracked on J7Tracker`,
-        url: ev?.profileUrl || 'https://j7tracker.io/',
-      };
-    }
     if (ev?.source === 'fomo-followed') {
       return {
         source: `${FOMO_FEED_MARKERS.followed.icon} ${FOMO_FEED_MARKERS.followed.label}`,
@@ -5194,7 +5070,6 @@
       container.appendChild(position);
     }
   }
-
 
   function fomoFeedUserLabel(ev) {
     const name = String(ev.name || '').trim();
@@ -5326,7 +5201,7 @@
     const tag = FOMO_FEED_TAGS[ev.type] || { label: 'fomo', cls: '' };
     const profile = trackingFeedProfileMeta(ev);
     const card = document.createElement('div');
-    card.className = `gdh-fomofeed ${tag.cls}${ev.source === 'j7-pump' ? ' is-pump' : ''}${ev.source === 'fomo-followed' ? ' is-followed' : ''}`;
+    card.className = `gdh-fomofeed ${tag.cls}${ev.source === 'fomo-followed' ? ' is-followed' : ''}`;
     card.dataset.gdhFomoKey = ev.key;
     card.dataset.gdhFeedSource = ev.source || 'fomo';
     card.dataset.gdhFomoStale = ev.stale ? '1' : '0';
@@ -5443,7 +5318,6 @@
     return card;
   }
 
-
   function attachFomoFeedCardBehavior(ev, card) {
     if (ev.source === 'fomo-followed' && ev.addr && ev.chain) {
       const buy = document.createElement('div');
@@ -5530,30 +5404,6 @@
     fomoFeedShifted.clear();
   }
 
-  function pollPumpFeed() {
-    if (!settings.enabled || settings.enablePumpFeed === false) return;
-    if (!document.querySelector(TRACK_TAB_CELL) && !trackerCards().length) return;
-    pumpFeedLastPollAt = Date.now();
-    const generation = j7UiGeneration;
-    try {
-      chrome.runtime.sendMessage({ type: 'pump-feed' }, (resp) => {
-        if (generation !== j7UiGeneration || chrome.runtime.lastError) return;
-        if (resp?.epoch && j7UiEpoch && resp.epoch !== j7UiEpoch) return;
-        if (resp?.epoch) j7UiEpoch = resp.epoch;
-        j7RecoveryMs = resp?.liveConnected ? 60000 : Math.min(18000, (j7RecoveryMs > 18000 ? 2000 : j7RecoveryMs) * 1.5);
-        if (!resp?.ok) {
-          pumpFeedEvents = resp?.stale && Array.isArray(resp.events) ? resp.events : [];
-          scheduleJ7FeedRender();
-          return;
-        }
-        pumpFeedEvents = mergeJ7UiEvents(Array.isArray(resp.events) ? resp.events : [], pumpFeedEvents);
-        scheduleJ7FeedRender();
-      });
-    } catch {
-    }
-  }
-
-
   function refreshFomoFeedFixedRowShifts() {
     if (mergedTracker) { syncMergedTracker(); return; }
     const cards = trackerCards().filter((card) => card.isConnected);
@@ -5589,7 +5439,6 @@
       refreshFomoFeedFixedRowShifts();
     });
   }
-
 
   function fomoFeedFixedRow(cardEl) {
     let wrap = cardEl.parentElement;
@@ -5643,7 +5492,7 @@
       logTrackingRender([], 'disabled');
       return;
     }
-    if (settings.enableFomoFeed === false && settings.enablePumpFeed === false) {
+    if (settings.enableFomoFeed === false) {
       teardownFomoFeed();
       collapseBlockedTrackerRows();
       logTrackingRender([], 'disabled');
@@ -5652,9 +5501,7 @@
     const mode = isTrackerTableMode() ? 'table' : 'card';
     if (fomoFeedLastMode !== null && fomoFeedLastMode !== mode) teardownFomoFeed();
     fomoFeedLastMode = mode;
-    if (settings.enableFomoFeed !== false && Date.now() - fomoFeedLastPollAt > j7RecoveryMs) pollFomoFeed();
     if (settings.enableFomoFeed !== false && Date.now() - fomoFollowedLastPollAt > FOMO_FEED_POLL_MS) pollFomoFollowedFeed();
-    if (settings.enablePumpFeed !== false && Date.now() - pumpFeedLastPollAt > j7RecoveryMs) pollPumpFeed();
 
     const cards = trackerCards().filter((c) => c.isConnected);
     const events = visibleTrackingFeedEvents(nativeTrackingFeedRows(cards));
@@ -5803,7 +5650,7 @@
           return previous !== geometry || (shift && el.style.translate !== `0px ${shift.amount}px`);
         }).some(Boolean);
         if (!changed) return;
-        scheduleJ7FeedRender();
+        scheduleTrackingFeedRender();
         syncMergedTracker();
       });
       observer.observe(spacer, { childList:true, subtree:true, attributes:true, attributeFilter:['style','data-gdh-native-index','data-gdh-track-ts','data-gdh-token-blocked'] });
@@ -6172,11 +6019,6 @@
     scheduleScan();
   });
 
-  chrome.storage.local.get({ j7TrackerFomoConfigV1: null, j7TrackerPumpConfigV1: null }, (stored) => {
-    if (stored?.j7TrackerFomoConfigV1) loadJ7TrackerFomoCfg(stored.j7TrackerFomoConfigV1);
-    if (stored?.j7TrackerPumpConfigV1) loadJ7TrackerPumpCfg(stored.j7TrackerPumpConfigV1);
-  });
-
   chrome.storage.local.get({
     [NOTIFICATION_HISTORY_KEY]: [],
     [NOTIFICATION_HISTORY_READ_AT_KEY]: 0,
@@ -6259,14 +6101,6 @@
         renderFomoStats();
         continue;
       }
-      if (key === 'j7TrackerFomoConfigV1') {
-        loadJ7TrackerFomoCfg(change.newValue);
-        continue;
-      }
-      if (key === 'j7TrackerPumpConfigV1') {
-        loadJ7TrackerPumpCfg(change.newValue);
-        continue;
-      }
       if (key === 'markedListMigratedV2') continue;
       if (key === 'holdingWatchPurgedV1') continue;
       if (key === 'gmgnHoldingSignalSyncState') continue;
@@ -6302,28 +6136,6 @@
     if (initialFomoFollowedGeneration === fomoUiAuthGeneration) void updateFomoFollowedEpoch(stored?.fomoToken);
   });
 
-  async function updateJ7UiSession(session) {
-    const generation = ++j7UiGeneration;
-    j7UiEpoch = '';
-    j7PendingLatency.clear();
-    fomoFeedEvents = []; pumpFeedEvents = [];
-    teardownFomoFeed();
-    if (!session?.token) return;
-    const bytes = new TextEncoder().encode(`${String(session.accountId || '').trim().slice(0, 160)}\n${String(session.token).trim()}`);
-    const hash = await crypto.subtle.digest('SHA-256', bytes);
-    if (generation !== j7UiGeneration) return;
-    j7UiEpoch = Array.from(new Uint8Array(hash), n => n.toString(16).padStart(2, '0')).join('');
-    fomoFeedLastPollAt = 0; pumpFeedLastPollAt = 0; j7RecoveryMs = 2000;
-    pollFomoFeed(); pollPumpFeed();
-  }
-  const initialJ7Generation = j7UiGeneration;
-  chrome.storage.local.get('j7TrackerSessionV1', stored => {
-    if (initialJ7Generation === j7UiGeneration) void updateJ7UiSession(stored?.j7TrackerSessionV1);
-  });
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.j7TrackerSessionV1) void updateJ7UiSession(changes.j7TrackerSessionV1.newValue);
-  });
-
   try {
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg?.type === 'fomo-followed-feed-update') {
@@ -6334,28 +6146,6 @@
         applyFomoFollowedResponse(msg.data);
         return;
       }
-      if (msg?.type === 'gdh-j7-status' && msg.epoch === j7UiEpoch) {
-        j7RecoveryMs = msg.connected ? 60000 : 2000;
-        if (!msg.connected) { fomoFeedLastPollAt = 0; pumpFeedLastPollAt = 0; }
-      }
-      if (msg?.event && ['gdh-fomo-push', 'gdh-pump-push'].includes(msg.type)) {
-        if (!j7UiEpoch || msg.epoch !== j7UiEpoch) return;
-        const pump = msg.type === 'gdh-pump-push';
-        if (msg.event.source !== (pump ? 'j7-pump' : 'j7-fomo')) return;
-        if (pump) pumpFeedEvents = mergeJ7UiEvents([msg.event], pumpFeedEvents);
-        else fomoFeedEvents = mergeJ7UiEvents([msg.event], fomoFeedEvents);
-        if (!fomoFeedCards.get(msg.event.key)?.isConnected) setBoundedMap(j7PendingLatency, msg.event.key, Number(msg.receivedAt) || Date.now(), 100);
-        scheduleJ7FeedRender();
-        return;
-      }
-      if (msg?.type === 'gdh-fomo-push') {
-        fomoFeedLastPollAt = 0;
-        pollFomoFeed();
-      }
-      if (msg?.type === 'gdh-pump-push') {
-        pumpFeedLastPollAt = 0;
-        pollPumpFeed();
-      }
     });
   } catch {
   }
@@ -6363,14 +6153,12 @@
   window.setInterval(() => {
     if (document.visibilityState !== 'hidden') {
       if (Date.now() - fomoFollowedLastPollAt >= FOMO_FEED_POLL_MS) pollFomoFollowedFeed();
-      if (Date.now() - fomoFeedLastPollAt > j7RecoveryMs) pollFomoFeed();
-      if (Date.now() - pumpFeedLastPollAt > j7RecoveryMs) pollPumpFeed();
       refreshFomoFeedTimes();
       scanVisibleCards();
     }
   }, 1000);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') dismissTooltipForLifecycle();
-    else { scheduleFomoFollowedRender(); scheduleJ7FeedRender(); scheduleScan(); }
+    else { scheduleFomoFollowedRender(); scheduleTrackingFeedRender(); scheduleScan(); }
   });
 })();

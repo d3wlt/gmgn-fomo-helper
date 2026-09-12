@@ -8,11 +8,7 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const read = (name) => fs.readFileSync(path.join(root, name), 'utf8');
 const background = read('background.js');
 const content = read('content.js');
-const j7Content = read('j7-content.js');
 const bridge = read('page-bridge.js');
-const debotContent = read('debot-content.js');
-const debotBridge = read('debot-bridge.js');
-const debotStyles = read('debot-styles.css');
 const manifest = JSON.parse(read('manifest.json'));
 const releaseBuild = read('scripts/build-release.ps1');
 const releaseWorkflow = read('.github/workflows/release.yml');
@@ -87,7 +83,7 @@ function backgroundHarness(route) {
     chrome: {
       runtime: { onInstalled: ignore, onStartup: ignore, onMessage: ignore },
       alarms: { get: async () => ({}), create() {}, onAlarm: ignore },
-      storage: { local: { get: async () => ({}), set: async () => {} }, onChanged: ignore },
+      storage: { local: { remove: async () => {}, get: async () => ({}), set: async () => {} }, onChanged: ignore },
     },
   });
   vm.runInContext(background, context, { filename: 'background.js' });
@@ -186,23 +182,6 @@ await test('Position surge requires a confirmed positive balance', async () => {
   assert.ok(sync.includes('present: expectedKey ? result.seen?.has(expectedKey) === true : null'));
   const start = extractFunction(content, 'startHoldingPoll');
   assert.ok(start.includes('await syncHoldingWatchFromApi()'));
-});
-
-await test('J7 history ignores unsupported system events instead of mislabeling them', () => {
-  const functions = [
-    extractFunction(background, 'j7TrackerHttpsUrl'),
-    extractFunction(background, 'j7TrackerChain'),
-    extractFunction(background, 'j7TrackerTimestamp'),
-    extractFunction(background, 'slimJ7TrackerFomoEvent'),
-  ];
-  const raw = {
-    channel: 'fomo_event', payload: { kind: 'new_account', data: {
-      id: 'account-1', timestamp: '2026-09-06T12:00:00Z', userHandle: 'alice',
-    } },
-  };
-  assert.equal(evaluate(functions, `slimJ7TrackerFomoEvent(${JSON.stringify(raw)})`, { URL, Date }), null);
-  assert.ok(content.includes("callout: { label: 'Callout'"));
-  assert.ok(content.includes("reply: { label: 'Reply'"));
 });
 
 await test('FOMO popup keeps sell activity and labels position changes', () => {
@@ -543,12 +522,12 @@ await test('Tracking-feed mutation layout is frame-coalesced', () => {
   assert.ok(!content.includes('refreshFomoFeedFixedRowShifts();\n      }\n      scheduleScan();'));
   assert.ok(content.includes("if (document.visibilityState === 'hidden') return;"));
   assert.ok(bridge.includes("if (document.visibilityState === 'hidden') return;"));
-  assert.match(content, /if \(document\.visibilityState !== 'hidden'\) \{\s*if \(Date.now\(\) - fomoFollowedLastPollAt >= FOMO_FEED_POLL_MS\) pollFomoFollowedFeed\(\);\s*if \(Date.now\(\) - fomoFeedLastPollAt > j7RecoveryMs\) pollFomoFeed\(\);\s*if \(Date.now\(\) - pumpFeedLastPollAt > j7RecoveryMs\) pollPumpFeed\(\);\s*refreshFomoFeedTimes\(\);\s*scanVisibleCards\(\);\s*\}/);
+  assert.match(content, /if \(document\.visibilityState !== 'hidden'\) \{\s*if \(Date.now\(\) - fomoFollowedLastPollAt >= FOMO_FEED_POLL_MS\) pollFomoFollowedFeed\(\);\s*refreshFomoFeedTimes\(\);\s*scanVisibleCards\(\);\s*\}/);
   assert.ok(content.includes("root.querySelectorAll('[data-gdh-fomo-ts]')"));
   assert.ok(content.includes("time.className = 'gdh-fomofeed__tcell gdh-fomofeed__ttime';\n    time.dataset.gdhFomoTs = String(ev.ts);"));
 });
 
-await test('FOMO and Pump cards inherit the GMGN theme', () => {
+await test('FOMO cards inherit the GMGN theme', () => {
   assert.match(styles, /\.gdh-fomofeed\s*\{[\s\S]*?color:\s*inherit;/);
   assert.match(styles, /\.gdh-fomofeed__name\s*\{[\s\S]*?color:\s*inherit;/);
   assert.match(styles, /\.gdh-fomofeed__sym\s*\{[\s\S]*?color:\s*inherit;/);
@@ -558,80 +537,13 @@ await test('FOMO and Pump cards inherit the GMGN theme', () => {
   assert.ok(!styles.includes('.gdh-fomofeed__sym {\n  color: #e8ecf3;'));
 });
 
-await test('J7 Pump callouts use validated fields and GMGN chain mapping', () => {
-  const functions = [
-    extractFunction(background, 'j7TrackerHttpsUrl'),
-    extractFunction(background, 'j7TrackerChain'),
-    extractFunction(background, 'j7TrackerTimestamp'),
-    extractFunction(background, 'slimJ7TrackerPumpEvent'),
-  ];
-  const event = {
-    channel: 'pump_event', payload: { kind: 'callout', data: {
-      id: 'pump-1', timestamp: '2026-08-31T00:00:01Z', text: 'Early call',
-      calledOutAtMcap: 7354,
-      author: { wallet: 'BY58Z7N5Adarkx5ed78AzKvR7Kxrq795aa1boZsYyVBT', username: 'QuantJB', profileImage: 'http://unsafe.example/avatar.png' },
-      token: { address: 'HbF1o9Mgwibv9JcQzEVUs52d9z1ibYQpdx8bY8Ntpump', symbol: 'DUVAL', network: 'Solana', tokenImageUrl: 'https://ipfs.io/ipfs/token' },
-    } },
-  };
-  const result = evaluate(functions, `slimJ7TrackerPumpEvent(${JSON.stringify(event)})`, { Date, URL });
-  assert.equal(result.source, 'j7-pump');
-  assert.equal(result.chain, 'sol');
-  assert.equal(result.type, 'callout');
-  assert.equal(result.usd, 0);
-  assert.equal(result.mc, 7354);
-  assert.equal(result.avatar, '');
-  assert.equal(result.name, 'QuantJB');
-  assert.equal(result.img, 'https://ipfs.io/ipfs/token');
-  assert.equal(result.pumpWallet, event.payload.data.author.wallet);
-  assert.equal(result.comment, 'Early call');
-  assert.equal(evaluate(functions, `slimJ7TrackerPumpEvent(${JSON.stringify({ ...event, payload: { kind: 'new_account', data: event.payload.data } })})`, { Date, URL }), null);
-});
-
-await test('J7 FOMO trades share native GMGN transaction identity', () => {
-  const functions = [
-    extractFunction(content, 'trackingFeedNormalizedAddress'),
-    extractFunction(content, 'trackingFeedNormalizedTx'),
-    extractFunction(content, 'trackingFeedEventIdentity'),
-  ];
-  const tx = '0xABCDEF1234';
-  const j7 = { key: 'j7:fomo:a', source: 'j7-fomo', type: 'buy', tx };
-  const native = { key: 'native:b', source: 'native', type: 'buy', tx: tx.toLowerCase() };
-  const j7Id = evaluate(functions, `trackingFeedEventIdentity(${JSON.stringify(j7)})`);
-  const nativeId = evaluate(functions, `trackingFeedEventIdentity(${JSON.stringify(native)})`);
-  assert.equal(j7Id, nativeId);
-  assert.equal(j7Id, 'tx:0xabcdef1234');
-});
-
-await test('J7 history refresh notifications target both supported tracking sites', () => {
-  const fn = extractFunction(background, 'notifyTrackerTabs');
-  const state = { query: null, sent: [] };
-  evaluate([fn], `(() => {
-    notifyTrackerTabs('gdh-fomo-push');
-    notifyTrackerTabs('gdh-pump-push');
-  })()`, {
-    state,
-    j7TrackerSessionGeneration: 0,
-    chrome: {
-      runtime: { lastError: null },
-      tabs: {
-        query(options, callback) { state.query = options; callback([{ id: 1 }, { id: 2 }]); },
-        sendMessage(id, message, callback) { state.sent.push([id, message.type]); callback(); },
-      },
-    },
-  });
-  assert.deepEqual(JSON.parse(JSON.stringify(state.query)), { url: ['https://gmgn.ai/*', 'https://debot.ai/*'] });
-  assert.deepEqual(state.sent, [
-    [1, 'gdh-fomo-push'], [2, 'gdh-fomo-push'], [1, 'gdh-pump-push'], [2, 'gdh-pump-push'],
-  ]);
-});
-
 await test('Inserted events deduplicate against native GMGN trades', () => {
   const functions = [
     extractFunction(content, 'trackingFeedNormalizedAddress'),
     extractFunction(content, 'trackingFeedNormalizedTx'),
     extractFunction(content, 'trackingFeedIsNativeDuplicate'),
   ];
-  const exact = { source: 'j7-fomo', type: 'buy', tx: '0xABC' };
+  const exact = { source: 'fomo', type: 'buy', tx: '0xABC' };
   assert.equal(evaluate(functions, `trackingFeedIsNativeDuplicate(${JSON.stringify(exact)}, { tx: '0xabc' })`), true);
 
   const fomo = { source: 'fomo', type: 'buy', addr: '0xABCDEF', chain: 'bsc', ts: 100000, usd: 100 };
@@ -640,10 +552,6 @@ await test('Inserted events deduplicate against native GMGN trades', () => {
   assert.equal(evaluate(functions, `trackingFeedIsNativeDuplicate(${JSON.stringify({ ...fomo, type: 'thesis' })}, ${JSON.stringify(row)})`), false);
   assert.equal(evaluate(functions, `trackingFeedIsNativeDuplicate(${JSON.stringify({ ...fomo, usd: 130 })}, ${JSON.stringify(row)})`), false);
 
-  const pump = { source: 'j7-pump', type: 'sell', addr: 'SolMint', chain: 'sol', ts: 100000, usd: 50, pumpWallet: 'Maker1' };
-  const pumpRow = { addr: 'SolMint', chain: 'sol', side: 'sell', ts: 101000, usd: 50, maker: 'Maker1' };
-  assert.equal(evaluate(functions, `trackingFeedIsNativeDuplicate(${JSON.stringify(pump)}, ${JSON.stringify(pumpRow)})`), true);
-  assert.equal(evaluate(functions, `trackingFeedIsNativeDuplicate(${JSON.stringify({ ...pump, pumpWallet: 'Maker2' })}, ${JSON.stringify(pumpRow)})`), false);
 });
 
 await test('The page bridge publishes and clears native trade fingerprints', () => {
@@ -681,410 +589,6 @@ await test('Tracking supports card, table, and no-testid layouts', () => {
   assert.ok(bridge.includes('scanUnmarkedTrackerRows'));
   assert.match(bridge, /if \(!trackerSeen\.size\) scanUnmarkedTrackerRows\(trackerSeen, trackerData\)/);
   assert.match(bridge, /value\.maker[\s\S]*side === 'buy'[\s\S]*timestamp > 0/);
-});
-
-await test('DeBot injects only its tracking bridge, feed script, and FOMO styles', () => {
-  assert.ok(manifest.host_permissions.includes('https://debot.ai/*'));
-  const debotScripts = manifest.content_scripts.filter((entry) => entry.matches.includes('https://debot.ai/*'));
-  assert.equal(debotScripts.length, 2);
-  const main = debotScripts.find((entry) => entry.world === 'MAIN');
-  const isolated = debotScripts.find((entry) => entry.world !== 'MAIN');
-  assert.deepEqual(main.js, ['debot-bridge.js']);
-  assert.deepEqual(isolated.js, ['debot-content.js']);
-  assert.deepEqual(isolated.css, ['debot-styles.css']);
-  assert.ok(!isolated.js.includes('content.js'));
-  for (const file of ['debot-bridge.js', 'debot-content.js', 'debot-styles.css']) {
-    assert.ok(releaseBuild.includes(`'${file}'`), `release missing ${file}`);
-  }
-});
-
-await test('DeBot extracts token addresses from signed-in and signed-out routes', () => {
-  const fn = extractFunction(debotContent, 'debotTokenRoute');
-  const evm = '0xfdae23ce76018da62507bb5ef20e6ef5450e8312';
-  const base = { FOMO_NETWORK_ID: { robinhood: 4663, sol: 1399811149 } };
-  const direct = evaluate([fn], 'debotTokenRoute()', {
-    ...base, location: { pathname: `/token/robinhood/${evm}` }, decodeURIComponent,
-  });
-  const invited = evaluate([fn], 'debotTokenRoute()', {
-    ...base, location: { pathname: `/token/robinhood/invite985_${evm}` }, decodeURIComponent,
-  });
-  const sol = 'HbF1o9Mgwibv9JcQzEVUs52d9z1ibYQpdx8bY8Ntpump';
-  const solRoute = evaluate([fn], 'debotTokenRoute()', {
-    ...base, location: { pathname: `/token/sol/invite985_${sol}` }, decodeURIComponent,
-  });
-  assert.deepEqual(JSON.parse(JSON.stringify(direct)), { chain: 'robinhood', address: evm, networkId: 4663 });
-  assert.deepEqual(JSON.parse(JSON.stringify(invited)), { chain: 'robinhood', address: evm, networkId: 4663 });
-  assert.deepEqual(JSON.parse(JSON.stringify(solRoute)), { chain: 'sol', address: sol, networkId: 1399811149 });
-});
-
-await test('The DeBot main-world bridge accepts only complete trades', () => {
-  const functions = [
-    extractFunction(debotBridge, 'safeString'),
-    extractFunction(debotBridge, 'eventTimeMs'),
-    extractFunction(debotBridge, 'normalizeTrackRecord'),
-  ];
-  const record = {
-    token: '0xfdae23ce76018da62507bb5ef20e6ef5450e8312',
-    chain: 'robinhood', trader: '0x1111111111111111111111111111111111111111',
-    time: 1788220800, op: 'buy', volume: 123.45, tx: '0xabc', mc: 8_100_000,
-  };
-  const result = evaluate(functions, `normalizeTrackRecord(${JSON.stringify(record)})`);
-  assert.equal(result.chain, 'robinhood');
-  assert.equal(result.side, 'buy');
-  assert.equal(result.ts, 1788220800000);
-  assert.equal(result.usd, 123.45);
-  assert.equal(evaluate(functions, `normalizeTrackRecord(${JSON.stringify({ ...record, trader: '' })})`), null);
-  assert.equal(evaluate(functions, `normalizeTrackRecord(${JSON.stringify({ ...record, op: 'transfer' })})`), null);
-  assert.ok(debotBridge.includes('const wallet = safeString(value.trader || value.wallet'));
-  assert.ok(debotBridge.includes('const usd = Number(value.volume)'));
-});
-
-await test('DeBot feed integration does not write unknown React table rows', () => {
-  const layout = extractFunction(debotContent, 'layoutFeed');
-  assert.ok(layout.includes("scroller.appendChild(card)"));
-  assert.ok(layout.includes('row.style.translate'));
-  assert.ok(layout.includes('table.style.marginBottom'));
-  assert.ok(!layout.includes('tbody.appendChild'));
-  assert.ok(debotContent.includes("type: 'fomo-feed'"));
-  assert.ok(debotContent.includes("type: 'pump-feed'"));
-  assert.ok(!debotContent.includes('new WebSocket'));
-  assert.ok(!debotContent.includes('EventSource'));
-  assert.ok(!debotContent.includes('/api/events-stream'));
-  assert.equal((background.match(/wallets\/socket\.io\//g) || []).length, 1);
-  assert.match(background, /\['https:\/\/gmgn\.ai\/\*', 'https:\/\/debot\.ai\/\*'\]/);
-  assert.ok(debotStyles.includes('.gdh-debot-feed__row.is-absolute'));
-});
-
-await test('DeBot events anchor by time and cap top insertions', () => {
-  const fn = extractFunction(debotContent, 'debotFeedPlacementPlan');
-  const rowTimes = [100_000, 80_000, 60_000, 40_000];
-  const events = [
-    ...Array.from({ length: 8 }, (_, index) => ({ key: `head-${index}`, ts: 110_000 - index })),
-    { key: 'middle-a', ts: 90_000 },
-    { key: 'middle-b', ts: 70_000 },
-    { key: 'old', ts: 20_000 },
-  ];
-  const plan = evaluate([fn], `debotFeedPlacementPlan(${JSON.stringify(rowTimes)}, ${JSON.stringify(events)})`, {
-    FEED_HEAD_CAP: 6,
-    FEED_VISIBLE_CAP: 12,
-  });
-  assert.deepEqual(JSON.parse(JSON.stringify(plan.map((item) => [item.event.key, item.anchor]))), [
-    ['head-0', 0], ['head-1', 0], ['head-2', 0], ['head-3', 0], ['head-4', 0], ['head-5', 0],
-    ['middle-a', 1], ['middle-b', 2],
-  ]);
-});
-
-await test('The DeBot sidebar integrates events outside React lists', () => {
-  const routeFn = extractFunction(debotContent, 'isTrackShellPage');
-  const tokenRouteFn = extractFunction(debotContent, 'debotTokenRoute');
-  const tokenAddress = '0x65eeaf07b545c9560dcbd8a72f239fa1ab961501';
-  const routeContext = { FOMO_NETWORK_ID: { robinhood: 4663 }, decodeURIComponent };
-  assert.equal(evaluate([routeFn, tokenRouteFn], 'isTrackShellPage()', {
-    ...routeContext, location: { pathname: '/track' },
-  }), true);
-  assert.equal(evaluate([routeFn, tokenRouteFn], 'isTrackShellPage()', {
-    ...routeContext, location: { pathname: `/token/robinhood/${tokenAddress}` },
-  }), true);
-  assert.equal(evaluate([routeFn, tokenRouteFn], 'isTrackShellPage()', {
-    ...routeContext, location: { pathname: '/market' },
-  }), false);
-
-  const planFn = extractFunction(debotContent, 'sidebarFeedPlacementPlan');
-  const rowTimes = [100_000, 80_000, 60_000];
-  const events = [
-    ...Array.from({ length: 5 }, (_, index) => ({ key: `head-${index}`, ts: 110_000 - index })),
-    { key: 'middle', ts: 70_000 },
-  ];
-  const plan = evaluate([planFn], `sidebarFeedPlacementPlan(${JSON.stringify(rowTimes)}, ${JSON.stringify(events)})`, {
-    SIDEBAR_FEED_HEAD_CAP: 3,
-    SIDEBAR_FEED_VISIBLE_CAP: 8,
-  });
-  assert.deepEqual(JSON.parse(JSON.stringify(plan.map((item) => [item.event.key, item.anchor]))), [
-    ['head-0', 0], ['head-1', 0], ['head-2', 0], ['middle', 2],
-  ]);
-  const layout = extractFunction(debotContent, 'layoutSidebarFeed');
-  assert.ok(debotContent.includes('[data-edge-dock-panel="track"]'));
-  assert.ok(debotContent.includes('[data-testid="virtuoso-item-list"]'));
-  assert.ok(layout.includes('layout.scroller.appendChild(card)'));
-  assert.ok(layout.includes('row.style.translate'));
-  assert.ok(layout.includes('layout.list.style.marginBottom'));
-  assert.ok(!layout.includes('layout.list.appendChild'));
-  assert.ok(debotContent.includes(':scope > tr[data-index][data-known-size]'));
-  assert.ok(layout.includes("const mode = rows[0].tagName === 'TR' ? 'list' : 'card'"));
-  assert.ok(layout.includes('Number(rows[0].dataset.knownSize)'));
-  assert.ok(layout.includes("sidebarFeedCard(event, { mode, rowHeight, sampleRow: rows[0] })"));
-  assert.match(debotContent, /async function pollFomo[\s\S]*if \(!isTrackShellPage\(\)/);
-  assert.match(debotContent, /async function pollPump[\s\S]*if \(!isTrackShellPage\(\)/);
-  assert.ok(debotStyles.includes('.gdh-debot-sidefeed__row'));
-});
-
-await test('DeBot event cards preserve invite routes and use SPA navigation', () => {
-  const mainCard = extractFunction(debotContent, 'buildFeedCard');
-  const sidebarCard = extractFunction(debotContent, 'sidebarFeedCard');
-  assert.ok(mainCard.includes("document.createElement('a')"));
-  assert.ok(mainCard.includes('card.href = debotTokenHref(event.chain, event.addr)'));
-  assert.ok(sidebarCard.includes("document.createElement('a')"));
-  assert.ok(sidebarCard.includes('card.href = debotTokenHref(event.chain, event.addr)'));
-  assert.ok(sidebarCard.includes('bindDebotNavigation(card)'));
-  assert.ok(!mainCard.includes('location.assign'));
-  assert.ok(!sidebarCard.includes('location.assign'));
-  assert.ok(debotContent.includes("document.dispatchEvent(new CustomEvent('gdh-debot-navigate'"));
-  assert.ok(debotBridge.includes("document.addEventListener('gdh-debot-navigate', navigateTokenRoute)"));
-  assert.ok(debotBridge.includes("history.pushState(state, '',"));
-  assert.ok(debotBridge.includes("window.dispatchEvent(new PopStateEvent('popstate'"));
-  assert.ok(debotStyles.includes('text-decoration: none'));
-
-  const prefixFn = extractFunction(debotContent, 'debotInvitePrefix');
-  const hrefFn = extractFunction(debotContent, 'debotTokenHref');
-  const token = '0x65eeaf07b545c9560dcbd8a72f239fa1ab961501';
-  const href = evaluate([prefixFn, hrefFn], `debotTokenHref('robinhood', '${token}')`, {
-    location: { origin: 'https://debot.ai', pathname: '/token/robinhood/0x8c63b6adfb469bbd0cd5d6ee64f73407f15f4c6c' },
-    document: { querySelectorAll: () => [{ getAttribute: () => `/token/robinhood/231141_${token}` }] },
-    safeText: (value, max) => String(value || '').slice(0, max),
-    URL,
-    decodeURIComponent,
-    encodeURIComponent,
-  });
-  assert.equal(href, `/token/robinhood/231141_${token}`);
-});
-
-await test('DeBot layouts share watch, color, pin, and block settings', () => {
-  assert.ok(debotContent.includes('enableSpecialWallet: true'));
-  assert.ok(debotContent.includes('specialWallets: []'));
-  assert.ok(debotContent.includes('function rebuildSpecialWalletMap()'));
-  assert.ok(debotContent.includes('function applySpecialRow(row)'));
-  assert.ok(debotContent.includes("row.tagName === 'TR'"));
-  assert.ok(debotContent.includes('function pinSidebarRow(row)'));
-  assert.ok(debotContent.includes('SPECIAL_PIN_MS = 10000'));
-  assert.ok(debotContent.includes('function blockToken(address, symbol'));
-  assert.ok(debotContent.includes('function unblockToken(address)'));
-  assert.ok(debotStyles.includes('.gdh-debot-special-manage'));
-  assert.ok(debotStyles.includes('.gdh-debot-special-pin-strip'));
-  assert.ok(debotStyles.includes('.gdh-debot-sidefeed__row.is-list'));
-});
-
-await test('DeBot special-watch deduplication uses stable trade identity', () => {
-  const timestampFn = extractFunction(debotContent, 'debotAbsoluteTimestamp');
-  const safeText = (value, max) => String(value ?? '').trim().slice(0, max);
-  const now = new Date(2026, 8, 2, 6, 0, 0).getTime();
-  const first = evaluate([timestampFn], `debotAbsoluteTimestamp('09/02 05:53:36', ${now})`, { safeText, Date });
-  const later = evaluate([timestampFn], `debotAbsoluteTimestamp('09/02 05:53:36', ${now + 5000})`, { safeText, Date });
-  assert.equal(first, later);
-  assert.equal(first, new Date(2026, 8, 2, 5, 53, 36).getTime());
-  const signature = extractFunction(debotContent, 'sidebarRowSignature');
-  assert.ok(signature.includes('Math.round(ts / 1000)'));
-  assert.ok(signature.includes('dataset.gdhDebotTrackTx'));
-});
-
-await test('DeBot narrative cards preserve multiline text and measured height', () => {
-  const multilineFn = extractFunction(debotContent, 'safeMultilineText');
-  assert.equal(evaluate([multilineFn], "safeMultilineText('first line\\r\\nsecond line')"), 'first line\nsecond line');
-  const sidebarCard = extractFunction(debotContent, 'sidebarFeedCard');
-  const mainCard = extractFunction(debotContent, 'buildFeedCard');
-  const heightFn = extractFunction(debotContent, 'measuredFeedCardHeight');
-  const mainLayout = extractFunction(debotContent, 'layoutFeed');
-  const sidebarLayout = extractFunction(debotContent, 'layoutSidebarFeed');
-  assert.ok(sidebarCard.includes("comment.className = 'gdh-debot-sidefeed__comment'"));
-  assert.ok(mainCard.includes("comment.className = 'gdh-debot-feed__comment'"));
-  assert.ok(mainLayout.includes('measuredFeedCardHeight(card, FEED_ROW_HEIGHT)'));
-  assert.ok(sidebarLayout.includes('measuredFeedCardHeight(card, rowHeight)'));
-  assert.ok(debotStyles.includes('white-space: pre-wrap'));
-  assert.ok(debotStyles.includes('.gdh-debot-sidefeed__row.has-comment'));
-  assert.ok(background.includes(".slice(0, 1500)"));
-  assert.equal(evaluate([heightFn], "measuredFeedCardHeight({ classList: { contains: () => true }, getBoundingClientRect: () => ({ height: 91.2 }), scrollHeight: 94 }, 67)"), 94);
-  assert.equal(evaluate([heightFn], "measuredFeedCardHeight({ classList: { contains: () => false } }, 67)"), 67);
-});
-
-await test('DeBot pinned rows clone native content', () => {
-  const clone = extractFunction(debotContent, 'cloneNativeSidebarRow');
-  const pin = extractFunction(debotContent, 'pinSidebarRow');
-  assert.ok(clone.includes('row.cloneNode(true)'));
-  assert.ok(clone.includes(".gdh-debot-special-star, .gdh-debot-special-swatch"));
-  assert.ok(pin.includes('cloneNativeSidebarRow(row)'));
-  assert.ok(pin.includes("document.createElement('div')"));
-  assert.ok(!pin.includes('item.textContent ='));
-  assert.ok(debotStyles.includes('.gdh-debot-special-pin-native'));
-});
-
-await test('The DeBot FOMO panel reuses APIs without showing a referral code', () => {
-  assert.ok(debotContent.includes("type: 'fomo-token-feed'"));
-  assert.ok(debotContent.includes("type: 'fomo-user-pnl'"));
-  assert.ok(debotContent.includes("type: 'token-supply'"));
-  assert.ok(debotContent.includes("open.href = 'https://fomo.family/';"));
-  assert.ok(debotContent.includes("window.open('https://fomo.family/r/Unipioneer'"));
-  assert.ok(!debotContent.includes("textContent = 'Unipioneer'"));
-  assert.ok(debotContent.includes("['holders', 'Holders']"));
-  assert.ok(debotContent.includes("['thesis', 'Narratives']"));
-  assert.ok(debotContent.includes("['swaps', 'Trades']"));
-});
-
-await test('DeBot FOMO share prefers same-origin token supply', async () => {
-  const fn = extractFunction(debotContent, 'loadDebotTokenSupply');
-  const address = '0xfdae23ce76018da62507bb5ef20e6ef5450e8312';
-  const cache = new Map();
-  const supply = await evaluate([fn], `loadDebotTokenSupply({ chain: 'robinhood', address: '${address}' })`, {
-    debotSupplyCache: cache,
-    location: { origin: 'https://debot.ai' },
-    normalizeAddress: (value) => String(value || '').toLowerCase(),
-    fetch: async (url, options) => {
-      assert.equal(url.origin, 'https://debot.ai');
-      assert.equal(url.pathname, '/api/dashboard/token/detail');
-      assert.equal(url.searchParams.get('chain'), 'robinhood');
-      assert.equal(url.searchParams.get('token'), address);
-      assert.match(url.searchParams.get('request_id'), /^gdh_/);
-      assert.equal(options.credentials, 'include');
-      return {
-        ok: true,
-        json: async () => ({ code: 0, data: { pair: { chain: 'robinhood', tokenAddress: address, totalSupply: 1_000_000_000 } } }),
-      };
-    },
-    URL,
-    Date,
-    Math,
-  });
-  assert.equal(supply, 1_000_000_000);
-  assert.equal(cache.get(`robinhood|${address}`).supply, 1_000_000_000);
-  assert.match(privacy, /`debot\.ai`: augments token and tracking interfaces/);
-});
-
-await test('J7 Pump cards require a verified account and respect local token blocks', () => {
-  const functions = [extractFunction(content, 'pumpFeedEventAllowed')];
-  const event = { source: 'j7-pump', type: 'callout', addr: 'HbF1o9Mgwibv9JcQzEVUs52d9z1ibYQpdx8bY8Ntpump' };
-  const run = (connected, blocked = false, value = event) => evaluate(
-    functions,
-    `pumpFeedEventAllowed(${JSON.stringify(value)})`,
-    { j7TrackerPumpCfg: { connected }, isTokenBlocked: () => blocked },
-  );
-  assert.equal(run(true), true);
-  assert.equal(run(false), false);
-  assert.equal(run(true, true), false);
-  assert.equal(run(true, false, { ...event, source: 'pump' }), false);
-});
-
-await test('J7 social history normalizes tracked FOMO and Pump activity', () => {
-  const functions = [
-    extractFunction(background, 'j7TrackerHttpsUrl'),
-    extractFunction(background, 'j7TrackerChain'),
-    extractFunction(background, 'j7TrackerTimestamp'),
-    extractFunction(background, 'slimJ7TrackerFomoEvent'),
-    extractFunction(background, 'slimJ7TrackerPumpEvent'),
-    extractFunction(background, 'normalizeJ7TrackerHistory'),
-  ];
-  const records = [
-    { channel: 'fomo_event', payload: { kind: 'trade', data: {
-      id: 'fomo-1', side: 'buy', timestamp: '2026-09-06T12:00:00.000Z', userHandle: 'alice', displayName: 'Alice',
-      usdAmount: 42, token: { address: '0x1111111111111111111111111111111111111111', symbol: 'ONE', name: 'Token One', tokenImageUrl: 'https://images.example/one.png', networkId: 56, marketCapUsd: 500000 },
-    } } },
-    { channel: 'fomo_event', payload: { kind: 'thesis', data: {
-      id: 'fomo-2', timestamp: '2026-09-06T12:01:00.000Z', userHandle: 'alice', thesis: 'Early narrative',
-      token: { address: 'So11111111111111111111111111111111111111112', symbol: 'TWO', network: 'solana' },
-    } } },
-    { channel: 'pump_event', payload: { kind: 'callout', data: {
-      id: 'pump-1', timestamp: '2026-09-06T12:02:00.000Z', text: 'First call',
-      author: { username: 'bob', displayName: 'Bob', wallet: 'PumpWallet1' },
-      token: { address: 'PumpMint1', symbol: 'PUMP', network: 'solana', calledOutAtMcap: 10000 },
-    } } },
-  ];
-  const result = evaluate(functions, `normalizeJ7TrackerHistory(${JSON.stringify(records)})`, {
-    URL, J7TRACKER_HISTORY_LIMIT: 500,
-  });
-  const plain = JSON.parse(JSON.stringify(result));
-  assert.deepEqual(plain.fomo.map((event) => [event.source, event.type, event.chain]), [
-    ['j7-fomo', 'thesis', 'sol'], ['j7-fomo', 'buy', 'bsc'],
-  ]);
-  assert.deepEqual(plain.pump.map((event) => [event.source, event.type, event.chain]), [
-    ['j7-pump', 'callout', 'sol'],
-  ]);
-  assert.equal(plain.fomo[0].comment, 'Early narrative');
-  assert.equal(plain.fomo[1].name, 'Alice');
-  assert.equal(plain.fomo[1].tokenName, 'Token One');
-  assert.equal(plain.fomo[1].img, 'https://images.example/one.png');
-  assert.equal(plain.pump[0].comment, 'First call');
-  assert.equal(evaluate([extractFunction(background, 'j7TrackerTimestamp')], 'j7TrackerTimestamp(1788696000)', { Date }), 1788696000000);
-});
-
-await test('J7 social history uses the verified Socket.IO contract and disconnects', async () => {
-  const calls = [];
-  const state = { disconnected: 0 };
-  const io = (origin, options) => {
-    const handlers = {};
-    const socket = {
-      on(name, handler) {
-        handlers[name] = handler;
-        if (name === 'error') queueMicrotask(() => handlers.connect());
-        return socket;
-      },
-      emit(name, payload, callback) {
-        calls.push({ name, payload });
-        callback({ events: [{ channel: 'fomo_event', payload: { kind: 'trade', data: { id: 'fixture' } } }] });
-      },
-      disconnect() { state.disconnected += 1; },
-    };
-    calls.push({ origin, options });
-    return socket;
-  };
-  const events = await evaluate(
-    [extractFunction(background, 'j7TrackerSocialHistory')],
-    "j7TrackerSocialHistory({ token: 'fixture-j7-token' })",
-    {
-      io, setTimeout, clearTimeout, queueMicrotask,
-      J7TRACKER_SOCKET_ORIGIN: 'https://nj.j7tracker.io',
-      J7TRACKER_SOCKET_PATH: '/wallets/socket.io/', J7TRACKER_HISTORY_LIMIT: 500,
-    },
-  );
-  assert.equal(calls[0].origin, 'https://nj.j7tracker.io');
-  assert.equal(calls[0].options.path, '/wallets/socket.io/');
-  assert.deepEqual(JSON.parse(JSON.stringify(calls[0].options.transports)), ['websocket']);
-  assert.equal(calls[0].options.auth.token, 'fixture-j7-token');
-  assert.deepEqual(JSON.parse(JSON.stringify(calls[1])), { name: 'social_history', payload: { limit: 500 } });
-  assert.equal(events.length, 1);
-  assert.equal(state.disconnected, 1);
-});
-
-await test('J7 Pump activity has an independent setting and account-filtered history', () => {
-  assert.ok(popupHtml.includes('id="enable-pump-feed"'));
-  assert.ok(popup.includes('enablePumpFeed: true'));
-  assert.ok(content.includes("chrome.runtime.sendMessage({ type: 'pump-feed' }"));
-  assert.ok(background.includes("channel === 'pump_event'"));
-  assert.ok(background.includes("notifyTrackerTabs('gdh-pump-push')"));
-  assert.ok(background.includes("socket.emit('social_history'"));
-  assert.ok(background.includes("auth: { token: session.token }"));
-});
-
-await test('J7Tracker uses a separate read-only session bridge and pinned local Socket.IO client', () => {
-  assert.ok(j7Content.includes("readValue('sessionId')"));
-  assert.ok(j7Content.includes('j7TrackerSessionV1'));
-  assert.ok(background.includes("importScripts('vendor/socket.io.min.js')"));
-  assert.ok(background.includes("'/wallets/socket.io/'"));
-  assert.ok(background.includes('/api/fomo/list'));
-  assert.ok(background.includes('/api/pump/list'));
-  assert.match(background, /Authorization:\s*`[A-Za-z]+\s+\$\{session\.token\}`/);
-  assert.ok(popupHtml.includes('id="j7tracker-sync-status"'));
-  assert.ok(manifest.host_permissions.includes('https://nj.j7tracker.io/*'));
-  assert.ok(!manifest.host_permissions.includes('https://*.j7tracker.io/*'));
-  const bridge = manifest.content_scripts.find((entry) => entry.js?.includes('j7-content.js'));
-  assert.deepEqual(bridge?.matches, ['https://j7tracker.io/*']);
-  assert.equal(bridge?.run_at, 'document_start');
-  assert.ok(releaseBuild.includes("'j7-content.js'"));
-  assert.ok(releaseBuild.includes("'vendor/socket.io.min.js'"));
-  assert.ok(releaseBuild.includes("'vendor/LICENSE.socket.io-client.txt'"));
-});
-
-await test('J7 FOMO cards apply connection, event-type, and local block filters', () => {
-  const functions = [extractFunction(content, 'fomoFeedEventAllowed')];
-  const ev = { source: 'j7-fomo', handle: 'alice', type: 'buy', addr: '0x1111111111111111111111111111111111111111' };
-  const settings = { fomoFeedTypes: { buy: true } };
-  const run = (connected, event = ev, blocked = false, types = settings.fomoFeedTypes) => evaluate(functions, `fomoFeedEventAllowed(${JSON.stringify(event)})`, {
-    j7TrackerFomoCfg: { connected },
-    settings: { fomoFeedTypes: types },
-    DEFAULTS: { fomoFeedTypes: types },
-    isTokenBlocked: () => blocked,
-  });
-  assert.equal(run(true), true);
-  assert.equal(run(false), false);
-  assert.equal(run(true, ev, true), false);
-  assert.equal(run(true, ev, false, { buy: false }), false);
-  assert.equal(run(true, { ...ev, source: 'fomo' }), false);
 });
 
 await test('The FOMO keeper uses a real non-discardable background page', async () => {
@@ -1212,10 +716,9 @@ await test('FOMO share obtains cross-chain supply from same-origin GMGN', async 
   assert.equal(renders, 1);
 });
 
-await test('Translation probes preserve mixed script evidence in both runtimes', () => {
+await test('Translation probes preserve mixed script evidence', () => {
   const runtimes = [
     [content, 'fomoLanguageProbe', 'fomoFallbackLang'],
-    [debotContent, 'translationLanguageProbe', 'translationFallbackLang'],
   ];
   const cases = [
     ['\\u7b80\\u4f53', 'zh'],
@@ -1241,7 +744,6 @@ await test('Translation probes preserve mixed script evidence in both runtimes',
 await test('Language tags and detector candidates normalize before translation', () => {
   const runtimes = [
     [content, 'normalizeFomoLanguageTag', 'selectFomoDetectedLanguage'],
-    [debotContent, 'normalizeTranslationLanguage', 'selectDetectedTranslationLanguage'],
   ];
   for (const [source, normalizeName, selectName] of runtimes) {
     const normalize = extractFunction(source, normalizeName);
@@ -1293,29 +795,6 @@ await test('Detection skips confirmed English and keeps safe failure fallbacks',
     fomoDetApi: () => detector([{ detectedLanguage: 'ja-JP', confidence: 0.93 }]),
   }), 'ja');
 
-  const debotFunctions = [
-    extractFunction(debotContent, 'translationLanguageProbe'),
-    extractFunction(debotContent, 'translationFallbackLang'),
-    extractFunction(debotContent, 'normalizeTranslationLanguage'),
-    extractFunction(debotContent, 'selectDetectedTranslationLanguage'),
-    extractFunction(debotContent, 'detectTranslationLanguage'),
-  ];
-  assert.equal(await evaluate(debotFunctions, "detectTranslationLanguage('plain English')", {
-    translationDetector: null,
-    LanguageDetector: detector([{ detectedLanguage: 'en-GB', confidence: 0.9 }]),
-  }), 'en');
-  assert.equal(await evaluate(debotFunctions, "detectTranslationLanguage('\\u3059\\u3054\\u3044 English')", {
-    translationDetector: null,
-    LanguageDetector: null,
-  }), 'ja');
-  assert.equal(await evaluate(debotFunctions, "detectTranslationLanguage('\\u6771\\u4eac')", {
-    translationDetector: null,
-    LanguageDetector: detector([{ detectedLanguage: 'ja-JP', confidence: 0.93 }]),
-  }), 'ja');
-  assert.equal(await evaluate(debotFunctions, "detectTranslationLanguage('unknown latin text')", {
-    translationDetector: null,
-    LanguageDetector: { create: async () => { throw new Error('temporary'); } },
-  }), '');
 });
 
 await test('Confirmed English is cached without creating a translator', async () => {
@@ -1332,17 +811,6 @@ await test('Confirmed English is cached without creating a translator', async ()
   assert.equal(fomoCache.get('plain English'), '');
   assert.equal(fomoTranslatorCalls, 0);
 
-  const debotCache = new Map();
-  let debotTranslatorCalls = 0;
-  await evaluate([extractFunction(debotContent, 'translateText')], "translateText({ dataset: {} }, 'plain English')", {
-    settings: { fomoTranslate: true }, translationGeneration: 7, translationCache: debotCache,
-    safeMultilineText: (value) => String(value || ''), translationLanguageProbe: (value) => value,
-    detectTranslationLanguage: async () => 'en',
-    translatorFor: async () => { debotTranslatorCalls += 1; return null; }, paintTranslatedText: () => {},
-    Translator: {},
-  });
-  assert.equal(debotCache.get('plain English'), '');
-  assert.equal(debotTranslatorCalls, 0);
 });
 
 await test('Transient detection failures are not negative-cached', async () => {
@@ -1356,14 +824,6 @@ await test('Transient detection failures are not negative-cached', async () => {
   });
   assert.equal(fomoCache.has('unknown Latin'), false);
 
-  const debotCache = new Map();
-  await evaluate([extractFunction(debotContent, 'translateText')], "translateText({ dataset: {} }, 'unknown Latin')", {
-    settings: { fomoTranslate: true }, translationGeneration: 1, translationCache: debotCache,
-    safeMultilineText: (value) => String(value || ''), translationLanguageProbe: (value) => value,
-    detectTranslationLanguage: async () => '', translatorFor: async () => null,
-    paintTranslatedText: () => {}, Translator: {},
-  });
-  assert.equal(debotCache.has('unknown Latin'), false);
 });
 
 await test('Translator availability and creation always use normalized source to English', async () => {
@@ -1392,34 +852,11 @@ await test('Translator availability and creation always use normalized source to
   assert.equal(await evaluate(contentFunctions, "fomoTranslatorFor('en-GB')", contentContext), null);
   assert.equal(contentCalls.length, 2);
 
-  const debotCalls = [];
-  const debotTranslator = { translate: async (text) => text };
-  const debotApi = {
-    availability: async (options) => { debotCalls.push(['availability', options]); return 'available'; },
-    create: async (options) => { debotCalls.push(['create', options]); return debotTranslator; },
-  };
-  const debotFunctions = [
-    extractFunction(debotContent, 'normalizeTranslationLanguage'),
-    extractFunction(debotContent, 'translatorFor'),
-  ];
-  const debotContext = {
-    Translator: debotApi, translators: new Map(), translationGesture: false,
-    translationPendingLangs: new Set(), translationNeedsGesture: false,
-    syncTranslationButton: () => {},
-  };
-  assert.equal(await evaluate(debotFunctions, "translatorFor('ES_mx')", debotContext), debotTranslator);
-  assert.deepEqual(JSON.parse(JSON.stringify(debotCalls)), [
-    ['availability', { sourceLanguage: 'es', targetLanguage: 'en' }],
-    ['create', { sourceLanguage: 'es', targetLanguage: 'en' }],
-  ]);
-  assert.equal(await evaluate(debotFunctions, "translatorFor('en-US')", debotContext), null);
-  assert.equal(debotCalls.length, 2);
 });
 
 await test('Translation painting preserves originals and is idempotent', () => {
   const runtimes = [
     [content, 'paintTranslation', 'gdh-fomo__zh', 'fomoTrGeneration'],
-    [debotContent, 'paintTranslatedText', 'gdh-debot-fomo__zh', 'translationGeneration'],
   ];
   for (const [source, paintName, className, generationName] of runtimes) {
     const paint = extractFunction(source, paintName);
@@ -1449,17 +886,12 @@ await test('Translation painting preserves originals and is idempotent', () => {
 
 await test('Turning translation off invalidates in-flight paint jobs', () => {
   const contentRun = extractFunction(content, 'runFomoTranslate');
-  const debotRun = extractFunction(debotContent, 'translateText');
   assert.match(contentRun, /await translator\.translate\(text\)[\s\S]*?generation !== fomoTrGeneration/);
-  assert.match(debotRun, /await translator\.translate\(raw\)[\s\S]*?generation === translationGeneration/);
   assert.ok(extractFunction(content, 'applyFomoTranslationSetting').includes('fomoTrGeneration += 1'));
-  assert.ok(extractFunction(debotContent, 'applyTranslationSetting').includes('translationGeneration += 1'));
   assert.ok(extractFunction(content, 'refreshFomoTranslations').includes("querySelectorAll('.gdh-fomo__zh')"));
-  assert.ok(extractFunction(debotContent, 'refreshVisibleTranslations').includes("querySelectorAll('.gdh-debot-fomo__zh')"));
 
   const staleCases = [
     [content, 'paintTranslation', 'fomoTrGeneration'],
-    [debotContent, 'paintTranslatedText', 'translationGeneration'],
   ];
   for (const [source, paintName, generationName] of staleCases) {
     const element = { parentNode: {}, nextElementSibling: null, after: () => { throw new Error('stale paint'); } };
@@ -1470,22 +902,14 @@ await test('Turning translation off invalidates in-flight paint jobs', () => {
   }
 });
 
-await test('Every FOMO and DeBot narrative render path queues an English sibling', () => {
+await test('Every FOMO narrative render path queues an English sibling', () => {
   assert.ok(extractFunction(content, 'renderFomoHolders').includes('queueFomoTranslate(t, thesis)'));
   assert.ok(extractFunction(content, 'renderFomoItems').includes('queueFomoTranslate(body, text)'));
   assert.ok(extractFunction(content, 'buildFomoFeedTableRow').includes('queueFomoTranslate(text, ev.comment)'));
   assert.ok(extractFunction(content, 'buildFomoFeedCard').includes('queueFomoTranslate(text, ev.comment)'));
-  assert.ok(extractFunction(debotContent, 'renderHolders').includes('translateText(text, thesis)'));
-  assert.ok(extractFunction(debotContent, 'renderItems').includes('translateText(text, textValue)'));
-  assert.ok(extractFunction(debotContent, 'buildFeedCard').includes("comment.className = 'gdh-debot-feed__comment'"));
-  assert.ok(extractFunction(debotContent, 'feedCard').includes('translateText(comment, comment.textContent)'));
-  assert.ok(extractFunction(debotContent, 'sidebarFeedCard').includes('translateText(comment, comment.textContent)'));
   assert.ok(content.includes("const FOMO_TRANSLATION_SOURCE_SELECTOR = '.gdh-fomo__text, .gdh-fomo__htext, .gdh-fomofeed__thesis'"));
-  assert.ok(debotContent.includes("const TRANSLATION_SOURCE_SELECTOR = '.gdh-debot-fomo__text, .gdh-debot-feed__comment, .gdh-debot-sidefeed__comment'"));
   assert.ok(content.includes("if (key === 'fomoTranslate') {\n        applyFomoTranslationSetting(change.newValue);"));
-  assert.ok(debotContent.includes("else if (key === 'fomoTranslate') applyTranslationSetting(change.newValue);"));
   assert.ok(!content.includes("new Set(['zh'"));
-  assert.ok(!debotContent.includes("new Set(['zh'"));
   assert.ok(content.includes("`${fomoStats.thesisCount} narratives`"));
 });
 
@@ -1842,10 +1266,10 @@ await test('Maintained sources are English-only and the release surface is ZIP-o
   assert.equal(fs.existsSync(path.join(root, 'scripts', 'build-native-' + 'installer.ps1')), false);
   assert.match(manifest.version, /^\d+\.\d+\.\d+(?:\.\d+)?$/);
   assert.ok(popupHtml.startsWith('<!doctype html>\n<html lang="en">\n'));
-  assert.ok(readme.includes(`Version ${manifest.version}`));
+  assert.ok(readme.replaceAll('**', '').includes(`Version ${manifest.version}`));
   assert.ok(releaseNote.startsWith(`# better gmgn v${manifest.version}\n`));
   assert.ok(fs.existsSync(path.join(root, 'release-notes', `v${manifest.version}.md`)), 'current release note exists alongside historical notes');
-  assert.ok(releaseBuild.includes('985gmgn-helper-v$version.zip'));
+  assert.ok(releaseBuild.includes('gmgn-fomo-helper-v$version.zip'));
   assert.ok(releaseBuild.includes('"$zipPath.sha256"'));
   assert.ok(releaseBuild.includes('Get-ChildItem -LiteralPath $dist -File | Remove-Item -Force'));
   assert.ok(releaseWorkflow.includes("Where-Object { $_.Name -match '\\.zip(?:\\.sha256)?$' }"));
