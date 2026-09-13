@@ -20,7 +20,7 @@
   const signature = value => value && JSON.stringify(value);
 
   function nativeContext() {
-    const native = document.querySelector('[data-sentry-component="TrackerListItem"]');
+    const native = document.querySelector('[data-sentry-component="TrackerListItem"], [data-sentry-component="TrackerTable"] [data-sentry-component="TableItem"]');
     if (!native) return null;
     const key = Object.keys(native).find(k => k.startsWith('__reactFiber$'));
     let f = native[key];
@@ -93,10 +93,11 @@
     const value = identity(host), contexts = nativeContext();
     if (active?.host === host && active.signature === signature(value) && sameContexts(active.contexts, contexts)) return;
     dispose();
-    if (!value || !contexts) { unavailable(host); return; }
+    if (!value) { unavailable(host, 'Token/event identity is invalid or stale. Open the token page instead.'); return; }
+    if (!contexts) { unavailable(host, 'Native tracker account context unavailable. Open the token page instead.'); return; }
     let api;
     try { api = loadRuntime(); } catch { api = null; }
-    if (!api) { unavailable(host); return; }
+    if (!api) { unavailable(host, 'Native GMGN quick-buy component unavailable or changed. Open the token page instead.'); return; }
     const { React, DOM, QuickBuy } = api;
     const ticket = generation;
     host.replaceChildren(); host.dataset.state = 'loading';

@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import {chromium} from 'playwright';
 const browser=await chromium.launch({headless:true});
 try {
+ for (const layout of ['card','table']) {
  const page=await browser.newPage();await page.route('**/*',r=>r.abort());
  await page.setContent('<div id="native" data-sentry-component="TrackerListItem"></div><div class="gdh-fomofeed" data-gdh-fomo-key="event1"><div class="gdh-native-buy-host" data-event-key="event1" data-chain="eth" data-address="0x1111111111111111111111111111111111111111" data-symbol="ONE" tabindex="0">Buy</div></div>');
+ if(layout==='table') await page.evaluate(()=>{const n=document.querySelector('#native'),table=document.createElement('div');table.dataset.sentryComponent='TrackerTable';n.before(table);table.append(n);n.dataset.sentryComponent='TableItem';});
  await page.evaluate(()=>{
   window.actions=[];window.mounts=[];window.amount='0.04';window.nav=0;
   const context={$$typeof:Symbol.for('react.context')};context.Provider=context;
@@ -65,4 +67,6 @@ try {
  assert.equal(await page.locator('[data-testid=quickbuy]').count(),0,'unknown chain fails closed');
  assert.equal(await page.evaluate(()=>actions.length),4);
  console.log('PASS native quick-buy adapter synthetic offline: Robinhood exact identity and cross-chain rebinding; no trade on mount; exact token/chain; live amount; one action per click; no navigation; untrusted input, stale context, invalid identity and stale event rejected. Native execution itself is not exercised.');
+ await page.close();
+ }
 }finally{await browser.close();}
