@@ -24,7 +24,7 @@
   window.addEventListener('message', event => {
     if (event.source !== window || event.origin !== location.origin) return;
     const raw = event.data;
-    if (!raw || raw.source !== SOURCE || !['account','following','activity','connection','logout'].includes(raw.kind)
+    if (!raw || raw.source !== SOURCE || !['account','following','activity','connection','logout','trending'].includes(raw.kind)
       || !Number.isSafeInteger(raw.seq) || raw.seq <= lastSeq || !Number.isSafeInteger(raw.epoch) || raw.epoch < 0 || queued >= 32) return;
     const accountId = typeof raw.accountId === 'string' && /^[a-zA-Z0-9:_-]{1,100}$/.test(raw.accountId) ? raw.accountId : '';
     const data = { source:SOURCE, kind:raw.kind, bridgeId, epoch:raw.epoch, seq:raw.seq, accountId,
@@ -33,6 +33,16 @@
       if (!Array.isArray(raw.items) || raw.items.length > 100) return;
       data.items = raw.items.map(item => slim(item)).filter(item => item && typeof item === 'object');
       if (JSON.stringify(data.items).length > 250000) return;
+    }
+    if (raw.kind === 'trending') {
+      data.available = raw.available === true;
+      data.nativeSnapshot = raw.nativeSnapshot === true;
+      data.viewMode = raw.viewMode === 'native-view' ? 'native-view' : 'stream';
+      const keys = ['chain','networkId','address','symbol','name','price','marketCap','change24Percent','rank','priceSource'];
+      if (!Array.isArray(raw.items) || raw.items.length > 100 || JSON.stringify(raw.items).length > 100000) {
+        data.available = false; data.items = [];
+      } else data.items = raw.items.map(row => Object.fromEntries(keys.map(key => [key,
+        typeof row?.[key] === 'string' ? row[key].slice(0,120) : typeof row?.[key] === 'number' && Number.isFinite(row[key]) ? row[key] : null])));
     }
     if (raw.kind === 'following') {
       if (!Array.isArray(raw.followingIds) || raw.followingIds.length > 10000 || raw.followingIds.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9:_-]{1,100}$/.test(id))) return;

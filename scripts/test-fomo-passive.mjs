@@ -11,20 +11,23 @@ const source = await fs.readFile(new URL('../fomo-passive.js', import.meta.url),
 const manifest = JSON.parse(await fs.readFile(new URL('../manifest.json', import.meta.url), 'utf8'));
 assert(manifest.content_scripts.some(s => s.world === 'MAIN' && s.run_at === 'document_start' && s.js.includes('fomo-passive.js')));
 assert(!manifest.content_scripts.some(s => s.js?.includes('fomo-early.js')));
-// VM installation tests: zero provider I/O, idempotence, no inbound postMessage command surface.
+// VM installation tests: zero provider I/O, idempotence, memory-only ready handshake.
 {
-  let io = 0; const messages = [], timers = [];
+  let io = 0; const messages = [], timers = [], inbound = [];
   class XHR { open() { io++; } send() { io++; } }
   class WS { constructor() { io++; } }
   const context = { URL, Date, Set, WeakMap, Proxy, Reflect, Object, Array, Number, String, JSON,
     location: { origin: 'https://fomo.family', href: 'https://fomo.family/' },
     document: { visibilityState: 'visible', addEventListener() {} },
     XMLHttpRequest: XHR, WebSocket: WS, fetch() { io++; },
-    postMessage(m) { messages.push(m); }, addEventListener(type) { assert.notEqual(type, 'message'); },
+    postMessage(m) { messages.push(m); }, addEventListener(type,fn) { if(type==='message') inbound.push(fn); },
     setInterval(fn, ms) { assert.equal(ms, 20000); timers.push(fn); } };
   context.window = context; context.top = context;
   vm.runInNewContext(source, context); vm.runInNewContext(source, context);
   timers[0](); assert.equal(io, 0); assert.equal(timers.length, 1);
+  assert.equal(inbound.length,1,'one bounded local ready listener, not a request command channel');
+  for (const source of ['fetch','subscribe','gdh-fomo-passive-ready-v1','gdh-fomo-passive-ready-v1']) inbound[0]({source:context.window,origin:context.location.origin,data:{source,url:'https://prod-api.fomo.family/proxy/trendingTokens'}});
+  assert.equal(io,0,'page messages and repeated handshake cannot perform provider I/O');
   assert(messages.every(m => m.connected === false));
 }
 const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'fomo-passive-'));

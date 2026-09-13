@@ -1867,6 +1867,7 @@
   let discoveryTrendingGeneration = 0;
   let discoveryTrendingData = null;
   let discoveryTrendingDead = false;
+  let discoveryTrendingSelected = false;
   function resetDiscoveryAccount() {
     deactivateDiscoveryTrending();
     discoveryTrendingData = null;
@@ -1884,7 +1885,8 @@
     const body = [...main.children].find(child => child !== header && !child.classList.contains('gdh-discovery-trending'));
     return header && body ? { nativeTab, tabs, main, header, body } : null;
   }
-  function deactivateDiscoveryTrending(remove = false) {
+  function deactivateDiscoveryTrending(remove = false, preserveSelection = false) {
+    if (!preserveSelection) discoveryTrendingSelected = false;
     const state = discoveryTrending;
     discoveryTrendingGeneration++;
     if (!state) return;
@@ -1909,11 +1911,18 @@
     const bar = document.createElement('div'); bar.className = 'gdh-discovery-bar';
     const status = document.createElement('span'); status.setAttribute('role', 'status');
     status.textContent = state.loading ? 'Loading FOMO Trending…' : data?.reason === 'not-connected' ? 'Sign in on FOMO, then refresh.'
+      : data?.reason === 'waiting-native-trending' ? 'Open FOMO → Tokens → Trending, then Refresh.'
       : data && !data.ok ? (stale ? 'Stale · refresh unavailable' : 'Trending unavailable · try Refresh')
-      : stale ? `Stale · ${Math.floor(age / 60000)}m ago` : data?.fetchedAt ? 'FOMO order · just updated' : 'Open Refresh to load';
+      : stale ? `Stale · ${Math.floor(age / 60000)}m ago` : data?.fetchedAt ? `${data.viewMode === 'native-view' ? 'Native view' : 'Stream snapshot'} · <1m ago` : 'Select Refresh to read native data';
+    status.title = data?.viewMode === 'native-view'
+      ? `Observed native list, including its hidden-token filtering and hover-frozen order. Displayed prices captured for ${data.nativePriceRows || 0} mounted rows (${data.nativeChartOverrides || 0} chart overrides); other prices use stream/frozen snapshots. Offscreen-only commits may not be observed immediately. Refresh reads memory only.`
+      : 'Observed native stream order. Native view could not be validated: local hidden-token filters, hover freezing and chart-price overrides are not applied. Refresh reads memory only.';
     if (data?.retryAt > Date.now()) status.textContent += ' · cooling down';
     const refresh = document.createElement('button'); refresh.type = 'button'; refresh.textContent = 'Refresh'; refresh.disabled = state.loading || data?.retryAt > Date.now(); refresh.addEventListener('click', () => void loadDiscoveryTrending());
     bar.append(status, refresh); panel.append(bar);
+    const columns = document.createElement('div'); columns.className = 'gdh-discovery-columns'; columns.setAttribute('aria-hidden','true');
+    for (const label of ['', 'Token', 'Market cap', '24h']) { const cell=document.createElement('span'); cell.textContent=label; columns.append(cell); }
+    panel.append(columns);
     const list = document.createElement('div'); list.className = 'gdh-discovery-trending-list';
     // Stale rows have a five-minute maximum lifetime, including while the tab stays open.
     const items = age <= 300000 && data?.reason !== 'not-connected' && Array.isArray(data?.items) ? data.items : [];
@@ -1926,11 +1935,12 @@
       const rank = document.createElement('span'); rank.className = 'gdh-discovery-rank'; rank.textContent = Number.isInteger(item.rank) && item.rank > 0 ? String(item.rank) : '—';
       const identity = document.createElement('span'); identity.className = 'gdh-discovery-token';
       const name = document.createElement('strong'); name.textContent = discoveryText(item.symbol) || discoveryText(item.name) || `${ref.address.slice(0, 6)}…${ref.address.slice(-4)}`;
-      const chain = document.createElement('small'); chain.textContent = `${ref.chain.toUpperCase()}${item.name ? ' · ' + discoveryText(item.name) : ''}`; identity.title = `${item.name || item.symbol || 'Unknown name'}\n${ref.chain} · ${ref.address}`; identity.append(name, chain);
+      const chain = document.createElement('small'); chain.textContent = `${ref.chain === 'robinhood' ? 'RH' : ref.chain.toUpperCase()}${item.name && item.name.toLowerCase() !== (item.symbol || '').toLowerCase() ? ' · ' + discoveryText(item.name) : ''}`; identity.title = `${item.name || item.symbol || 'Unknown name'}\n${ref.chain} · ${ref.address}`; identity.append(name, chain);
       const values = document.createElement('span'); values.className = 'gdh-discovery-values';
-      const price = document.createElement('strong'); price.textContent = money(item.price); price.title = 'USD price';
-      const mc = document.createElement('small'); mc.textContent = 'MC ' + money(item.marketCap); values.append(price, mc);
+      const price = document.createElement('small'); price.className='gdh-discovery-price'; price.textContent = money(item.price); price.title = `USD price: ${item.price ?? 'unknown'} · ${item.priceSource || 'stream snapshot'}`;
+      const mc = document.createElement('strong'); mc.className='gdh-discovery-mc'; mc.textContent = money(item.marketCap); mc.title = 'Market cap (USD)'; mc.dataset.known=String(typeof item.marketCap === 'number' && Number.isFinite(item.marketCap) && item.marketCap >= 0); values.append(mc, price);
       const change = document.createElement('span'); change.className = 'gdh-discovery-change';
+      change.dataset.direction = typeof item.change24Percent === 'number' && Number.isFinite(item.change24Percent) ? item.change24Percent > 0 ? 'gain' : item.change24Percent < 0 ? 'loss' : 'flat' : 'unknown';
       change.textContent = typeof item.change24Percent === 'number' && Number.isFinite(item.change24Percent) ? `${item.change24Percent > 0 ? '+' : ''}${new Intl.NumberFormat('en', { maximumFractionDigits: 1, notation: Math.abs(item.change24Percent) >= 1000 ? 'compact' : 'standard' }).format(item.change24Percent)}%` : '—'; change.title = `24h change${item.change24Percent == null ? '' : ': ' + item.change24Percent + '%'}`;
       row.append(rank, identity, values, change); list.append(row);
     }
@@ -1940,13 +1950,13 @@
   async function loadDiscoveryTrending() {
     const state = discoveryTrending;
     if (!state?.active || state.loading || discoveryTrendingDead || document.visibilityState === 'hidden' || !discoveryVisible(state.main)) return;
-    if (discoveryTrendingData?.ok && Date.now() - discoveryTrendingData.fetchedAt < 60000) { renderDiscoveryTrending(); return; }
+    // A user gesture reads the newest passive worker snapshot, never an API.
     const generation = ++discoveryTrendingGeneration, auth = fomoUiAuthGeneration;
     state.loading = true; renderDiscoveryTrending();
     try {
       const data = await Promise.resolve().then(() => chrome.runtime.sendMessage({ type: 'fomo-trending' }));
       if (generation !== discoveryTrendingGeneration || auth !== fomoUiAuthGeneration || discoveryTrending !== state || !state.active || document.visibilityState === 'hidden' || !discoveryVisible(state.main)) return;
-      discoveryTrendingData = data && typeof data.ok === 'boolean' ? data : { ok: false, reason: 'invalid-response', items: [] };
+      discoveryTrendingData = data && typeof data.ok === 'boolean' && (!data.ok || data.provenance === 'native-stream') ? data : { ok: false, reason: 'invalid-response', items: [] };
     } catch (error) {
       if (generation !== discoveryTrendingGeneration || auth !== fomoUiAuthGeneration) return;
       if (/extension context invalidated/i.test(String(error?.message || error))) discoveryTrendingDead = true;
@@ -1956,18 +1966,22 @@
     }
   }
   function scanDiscoveryTrending() {
-    if (document.visibilityState === 'hidden' || settings.enableFomoPanel === false) { deactivateDiscoveryTrending(true); return; }
+    if (settings.enableFomoPanel === false) { deactivateDiscoveryTrending(true); return; }
+    if (document.visibilityState === 'hidden') { deactivateDiscoveryTrending(true, true); return; }
     const mount = discoveryTrendingMount();
-    if (!mount) { deactivateDiscoveryTrending(true); return; }
-    if (discoveryTrending && (mount.main !== discoveryTrending.main || mount.body !== discoveryTrending.body || mount.tabs !== discoveryTrending.tabs || !discoveryTrending.tab.isConnected)) deactivateDiscoveryTrending(true);
+    if (!mount) { deactivateDiscoveryTrending(true, true); return; }
+    if (discoveryTrending && (mount.main !== discoveryTrending.main || mount.body !== discoveryTrending.body || mount.tabs !== discoveryTrending.tabs || !discoveryTrending.tab.isConnected)) deactivateDiscoveryTrending(true, true);
     if (!discoveryTrending) {
-      const tab = document.createElement('button'); tab.type = 'button'; tab.className = 'gdh-discovery-trending-tab'; tab.textContent = 'FOMO'; tab.title = 'FOMO Trending · loads only when opened or refreshed'; tab.setAttribute('aria-pressed', 'false');
+      const tab = document.createElement('button'); tab.type = 'button'; tab.className = 'gdh-discovery-trending-tab'; tab.textContent = 'FOMO'; tab.title = 'Native FOMO Trending · reads observed data on open or Refresh'; tab.setAttribute('aria-pressed', 'false');
       const panel = document.createElement('section'); panel.className = 'gdh-discovery-trending'; panel.hidden = true; panel.setAttribute('aria-label', 'FOMO Trending');
       const state = { ...mount, tab, panel, active: false, loading: false, renderKey: '' };
       state.onNativeClick = event => { if (!tab.contains(event.target)) deactivateDiscoveryTrending(); };
       mount.header.addEventListener('click', state.onNativeClick, true);
-      tab.addEventListener('click', event => { event.stopPropagation(); if (state.active) { deactivateDiscoveryTrending(); return; } state.active = true; state.renderKey = ''; tab.setAttribute('aria-pressed', 'true'); state.tabs.classList.add('gdh-discovery-tabs-active'); state.body.classList.add('gdh-discovery-native-hidden'); panel.hidden = false; renderDiscoveryTrending(); void loadDiscoveryTrending(); });
+      const activate = () => { discoveryTrendingSelected = true; state.active = true; state.renderKey = ''; tab.setAttribute('aria-pressed', 'true'); state.tabs.classList.add('gdh-discovery-tabs-active'); state.body.classList.add('gdh-discovery-native-hidden'); panel.hidden = false; renderDiscoveryTrending(); };
+      tab.addEventListener('click', event => { event.stopPropagation(); if (state.active) { deactivateDiscoveryTrending(); return; } activate(); void loadDiscoveryTrending(); });
       mount.tabs.append(tab); mount.main.append(panel); discoveryTrending = state;
+      // Restore the user's view from memory, not by starting another request.
+      if (discoveryTrendingSelected) activate();
     }
     renderDiscoveryTrending();
   }
@@ -5595,7 +5609,8 @@
 
   const initialFomoFollowedGeneration = fomoUiAuthGeneration;
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') { deactivateDiscoveryTrending(true); closeDiscoveryCompare(); }
+    if (document.visibilityState === 'hidden') { deactivateDiscoveryTrending(true, true); closeDiscoveryCompare(); }
+    else scanDiscoveryTrending();
   });
   chrome.storage.local.get('fomoToken', stored => {
     if (initialFomoFollowedGeneration === fomoUiAuthGeneration) void updateFomoFollowedEpoch(stored?.fomoToken);
@@ -5604,6 +5619,12 @@
   try {
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg?.type === 'fomo-discovery-reset') { resetDiscoveryAccount(); return; }
+      if (msg?.type === 'fomo-trending-invalidated') {
+        discoveryTrendingGeneration++;
+        discoveryTrendingData = {ok:false,reason:'waiting-native-trending',items:[]};
+        if (discoveryTrending) { discoveryTrending.loading = false; discoveryTrending.renderKey = ''; }
+        renderDiscoveryTrending(); return;
+      }
       if (msg?.type === 'fomo-followed-feed-update') {
         if (!canDisplayFomoFollowedFeed()) return;
         if (!msg.epoch) { pollFomoFollowedFeed(); return; }

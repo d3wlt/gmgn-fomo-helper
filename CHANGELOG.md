@@ -4,6 +4,12 @@ Entries describe behavior at that version, not current support. Recent published
 
 ## Unreleased
 
+## 0.53.26 - 2026-09-14
+
+- Correct Trending to use passively observed native snapshots/deltas, not REST. Native-view mode mirrors validated committed hidden filtering/frozen membership and mounted-row prices; explicit stream fallback handles unsupported or stale views. No provider requests/account lookups/socket subscriptions are added.
+- Match GMGN-native Trending density/typography, gold market cap and signed change colors, with responsive browser assertions and genuine MV3 hidden/visible lifecycle coverage.
+- Remember the selected FOMO view across browser visibility changes and native remounts without fetching. Explicit native-tab selection, close, disable and account invalidation clear it.
+
 ## 0.53.25 - 2026-09-13
 
 - Add small exact-token (`=`) and similar-name (`≈`) indicators to observed native/FOMO tracker rows relative to the open token. Identity is chain plus contract address, preserving Solana case; similar names are not identity or safety judgments. Optional Compare opens a compact, dismissible view using bounded local observations, with no market polling or blocking.

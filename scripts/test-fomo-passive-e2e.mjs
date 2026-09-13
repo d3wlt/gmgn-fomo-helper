@@ -71,12 +71,32 @@ try {
   assert.ok(snapshot.events.every(e=>e.avatar===base.profilePictureLink&&e.symbol==='NATIVE'));
   assert.deepEqual(nativeRequests.sort(),['/feed/tradingActivity','/v2/users/current','/v2/users/current/followingIds'].sort());
   assert.deepEqual(await worker.evaluate(()=>__passiveOutbound),[]);
+  // Native Trending crosses the real trusted socket/MAIN/isolated/MV3 chain.
+  const ca='0x1111111111111111111111111111111111111111',sol='So11111111111111111111111111111111111111112';
+  const trend=(address,networkId,symbol)=>({token:{address,networkId,symbol,info:{totalSupply:'1000000'}},priceUSD:'0.25',marketCap:999,change24:'0.12'});
+  const trendRows=[trend(ca,56,'BSC'),trend(ca,4663,'RH'),trend(sol,1399811149,'SOL')];
+  const frame=payload=>nativeSocket.send(JSON.stringify({type:'data',topicType:'trending_tokens',topicId:'56,4663,1399811149',payload}));
+  async function waitTrending(predicate) {
+    const deadline=Date.now()+10000;let result;
+    do {result=await worker.evaluate(()=>fetchFomoTrending());if(predicate(result))return result;await popup.waitForTimeout(25);}while(Date.now()<deadline);
+    throw new Error('Native Trending MV3 snapshot timeout');
+  }
+  frame({kind:'snapshot',tokens:trendRows});
+  let rankings=await waitTrending(s=>s.ok&&s.items.length===3);
+  assert.equal(rankings.provenance,'native-stream');assert.deepEqual(rankings.items.map(r=>r.chain),['bsc','robinhood','sol']);assert.equal(rankings.items[0].marketCap,250000,'MC is supply times price, not raw marketCap');assert.equal(rankings.items[0].change24Percent,12);
+  frame({kind:'update',tokenKey:sol+':1399811149',index:0,update:trendRows[2]});
+  rankings=await waitTrending(s=>s.ok&&s.items[0]?.chain==='sol');assert.deepEqual(rankings.items.map(r=>r.rank),[1,2,3]);
+  frame({kind:'remove',tokenKey:ca+':56'});
+  rankings=await waitTrending(s=>s.ok&&s.items.length===2);assert.deepEqual(rankings.items.map(r=>r.chain),['sol','robinhood']);
+  assert.deepEqual(await worker.evaluate(()=>__passiveOutbound),[],'Trending never requests REST/account data');
   unauthorized=true;
   await native.evaluate(()=>fetch('https://prod-api.fomo.family/v2/users/current'));
   await waitSnapshot(s=>s.events?.length===0);
   nativeSocket.send(JSON.stringify({type:'data',topicType:'trading_activity',topicId:'account-a',payload:first}));
   snapshot=await popup.evaluate(()=>chrome.runtime.sendMessage({type:'fomo-followed-feed'}));
   assert.equal(snapshot.events.length,0,'old native socket cannot resurrect logout data');
+  frame({kind:'snapshot',tokens:trendRows});
+  assert.equal((await worker.evaluate(()=>fetchFomoTrending())).ok,false,'native logout rejects old Trending socket');
   await native.close();
   snapshot=await popup.evaluate(()=>chrome.runtime.sendMessage({type:'fomo-followed-feed'}));
   assert.notEqual(snapshot.passiveStatus,'connected');

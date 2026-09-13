@@ -534,6 +534,7 @@ function fomoPassiveUrl(value) {
   try { const u = new URL(value); return u.origin === 'https://fomo.family' && !u.username && !u.password; } catch { return false; }
 }
 function clearFomoPassive(disconnected = false) {
+  invalidateFomoTrending();
   for (const record of fomoPassiveDocuments.values()) record.retired = true;
   fomoPassive = { owner: null, accountId: '', ids: null, events: [], pending: [], at: 0, connected: false,
     disconnected, revision: fomoPassive.revision + 1 };
@@ -611,7 +612,7 @@ function mergePassiveFomo(items) {
 async function ingestPassiveFomo(data, sender) {
   const revision = fomoPassive.revision;
   if (!Number.isInteger(sender?.tab?.id) || sender.frameId !== 0 || !fomoPassiveUrl(sender.url) || !fomoPassiveUrl(sender.tab.url) || sender.url !== sender.tab.url) return { ok:false, reason:'invalid-sender' };
-  if (!data || data.source !== 'gdh-fomo-passive-v1' || !['account','following','activity','connection','logout'].includes(data.kind)
+  if (!data || data.source !== 'gdh-fomo-passive-v1' || !['account','following','activity','connection','logout','trending'].includes(data.kind)
     || !Number.isSafeInteger(data.epoch) || data.epoch < 0 || !Number.isSafeInteger(data.seq) || data.seq < 1
     || typeof data.bridgeId !== 'string' || !/^[a-zA-Z0-9-]{8,80}$/.test(data.bridgeId)) return {ok:false,reason:'invalid-envelope'};
   try {
@@ -646,9 +647,10 @@ async function ingestPassiveFomo(data, sender) {
     }
     if (fomoPassive.owner !== key || fomoPassive.accountId !== accountId || record.epoch !== data.epoch) {
       if (fomoPassive.owner === key && record.epoch === data.epoch && fomoPassive.accountId !== accountId) return {ok:false,reason:'account-epoch-required'};
+      invalidateFomoTrending();
       if (fomoPassive.accountId !== accountId) {
         fomoTrendingObservedAccount = accountId;
-        invalidateFomoTrending();
+        invalidateFomoTrending(true);
       }
       for (const [other, r] of fomoPassiveDocuments) if (other !== key) r.retired = true;
       fomoPassive = { owner:key, tabId:sender.tab.id, accountId, ids:null, events:[], pending:[], at:Date.now(), connected:false, revision:fomoPassive.revision+1 };
@@ -657,11 +659,23 @@ async function ingestPassiveFomo(data, sender) {
   } else if (fomoPassive.owner !== key || (data.kind === 'logout' ? data.epoch < record.epoch : record.epoch !== data.epoch) || (data.kind !== 'logout' && accountId !== fomoPassive.accountId)) {
     return {ok:false,reason:'account-not-bound'};
   }
+  if (data.seq !== record.seq + 1) { invalidateFomoTrending(); record.trendingGap = true; }
   record.seq = data.seq; record.epoch = data.epoch;
   const p = fomoPassive;
-  if (data.kind === 'logout') { fomoTrendingObservedAccount = ''; invalidateFomoTrending(); clearFomoPassive(true); }
+  if (data.kind === 'logout') { fomoTrendingObservedAccount = ''; invalidateFomoTrending(true); clearFomoPassive(true); }
   else {
     p.at = Date.now(); p.revision++;
+    if (data.kind === 'trending') {
+      const viewMode = data.viewMode === 'native-view' ? 'native-view' : 'stream';
+      const items = nativeTrendingItems(data.items, viewMode), age = Date.now() - data.observedAt;
+      if (data.available !== true || !items || !Number.isFinite(age) || age < 0 || age >= FOMO_TRENDING_TTL ||
+          (record.trendingGap && data.nativeSnapshot !== true)) {
+        invalidateFomoTrending(); record.trendingGap = true;
+      } else {
+        record.trendingGap = false;
+        fomoTrendingCache = {owner:key, accountId, items, viewMode, at:data.observedAt, documentId:sender.documentId, url:sender.url};
+      }
+    }
     if (data.kind === 'connection') {
       p.connected = data.connected === true;
       if (p.connected) p.everConnected = true;
@@ -677,7 +691,7 @@ async function ingestPassiveFomo(data, sender) {
     }
   }
   globalThis.gdhDebug?.record('passive', { event:data.kind, status:passiveFomoSnapshot().passiveStatus, received:data.items?.length || 0, retained:fomoPassive.events.length });
-  void pushPassiveFomo();
+  if (data.kind !== 'trending') void pushPassiveFomo();
   return {ok:true, passiveStatus:passiveFomoSnapshot().passiveStatus};
 }
 chrome.tabs?.onRemoved?.addListener(tabId => {
@@ -1237,98 +1251,60 @@ async function fomoAuthedFetchImpl(path, options) {
 }
 
 // On-demand only. Memory is bound to the account epoch, never an anonymous cache.
-const FOMO_TRENDING_TTL = 60000;
+// Memory-only observed native ranking; never authenticates or requests provider data.
+const FOMO_TRENDING_TTL = 300000;
 let fomoTrendingCache = null;
-let fomoTrendingInflight = null;
-let fomoTrendingEpoch = 0;
-// null: no passive account observation yet; empty string: observed logout.
 let fomoTrendingObservedAccount = null;
-function invalidateFomoTrending() {
-  fomoTrendingEpoch++;
-  fomoTrendingInflight?.controller?.abort();
+let fomoTrendingNoticeEpoch = 0, fomoTrendingResetPending = false;
+function invalidateFomoTrending(resetAccount = false) {
+  const hadCache = !!fomoTrendingCache;
   fomoTrendingCache = null;
-  fomoTrendingInflight = null;
-  const epoch = fomoTrendingEpoch;
-  if (chrome.tabs?.query) void chrome.tabs.query({ url: ['https://gmgn.ai/*'] }).then(tabs => {
-    if (epoch !== fomoTrendingEpoch) return;
-    for (const tab of tabs) void chrome.tabs.sendMessage(tab.id, { type: 'fomo-discovery-reset' }).catch(() => {});
+  if (!hadCache && !resetAccount) return;
+  const epoch = ++fomoTrendingNoticeEpoch;
+  fomoTrendingResetPending ||= resetAccount;
+  if (chrome.tabs?.query) void chrome.tabs.query({url:['https://gmgn.ai/*']}).then(tabs => {
+    if (epoch !== fomoTrendingNoticeEpoch) return;
+    const type = fomoTrendingResetPending ? 'fomo-discovery-reset' : 'fomo-trending-invalidated';
+    fomoTrendingResetPending = false;
+    for (const tab of tabs) void chrome.tabs.sendMessage(tab.id,{type}).catch(() => {});
   }).catch(() => {});
 }
-function normalizeFomoTrending(body) {
-  if (!Array.isArray(body?.responseObject)) throw fomoFailure('invalid-response');
-  const seen = new Set();
-  const items = [];
-  for (const [index, raw] of body.responseObject.slice(0, 200).entries()) {
-    const token = raw?.token;
-    if (!['number', 'string'].includes(typeof token?.networkId)) continue;
-    const networkId = Number(token?.networkId);
-    const chain = FOMO_NETWORK_SLUG[networkId];
-    const address = typeof token?.address === 'string' ? token.address.trim() : '';
-    if (!chain || !(chain === 'sol' ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/ : /^0x[a-fA-F0-9]{40}$/).test(address)) continue;
-    const ca = chain === 'sol' ? address : address.toLowerCase();
-    const key = `${chain}:${ca}`;
-    if (seen.has(key)) continue;
+function nativeTrendingItems(rows, viewMode = 'stream') {
+  if (!Array.isArray(rows) || rows.length > 100) return null;
+  const seen = new Set(), out = [];
+  for (const [i, r] of rows.entries()) {
+    if (!r || !Number.isSafeInteger(r.networkId) || !FOMO_NETWORK_SLUG[r.networkId]) return null;
+    const chain = FOMO_NETWORK_SLUG[r.networkId], address = r.address;
+    if (typeof address !== 'string' || !(chain === 'sol' ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/ : /^0x[a-fA-F0-9]{40}$/).test(address)) return null;
+    const ca = chain === 'sol' ? address : address.toLowerCase(), key = `${chain}:${ca}`;
+    if (seen.has(key) || r.rank !== i + 1) return null;
     seen.add(key);
-    const text = value => typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 120) : '';
-    const number = (value, signed = false) => {
-      if (value == null || (typeof value === 'string' && !value.trim()) || !['number', 'string'].includes(typeof value)) return null;
-      const n = Number(value);
-      return Number.isFinite(n) && Math.abs(n) <= Number.MAX_SAFE_INTEGER && (signed || n >= 0) ? n : null;
-    };
-    // Official native Qt formatter treats change24 as a ratio, not percentage points.
-    const ratio = number(raw.change24, true);
-    const change24Percent = ratio !== null && Number.isFinite(ratio * 100) ? ratio * 100 : null;
-    items.push({ chain, networkId, address: ca, symbol: text(token.symbol), name: text(token.name),
-      price: number(raw.priceUSD), marketCap: number(raw.marketCap), change24Percent,
-      rank: index + 1, source: 'fomo-trending' });
+    const text = v => typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, '').slice(0,120) : '';
+    const number = (v, signed = false) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= Number.MAX_SAFE_INTEGER && (signed || v >= 0) ? v : null;
+    out.push({chain, networkId:r.networkId, address:ca, symbol:text(r.symbol), name:text(r.name),
+      price:number(r.price), marketCap:number(r.marketCap), change24Percent:number(r.change24Percent,true), rank:i+1, source:'fomo-trending',
+      ...(viewMode === 'native-view' ? {priceSource:['native-row','native-chart','native-frozen'].includes(r.priceSource) ? r.priceSource : 'stream'} : {})});
   }
-  // A nonempty, wholly unrecognizable response is not a confirmed empty ranking.
-  if (body.responseObject.length && !items.length) throw fomoFailure('invalid-response');
-  return items;
+  return out;
 }
 async function fetchFomoTrending() {
-  const generation = fomoAuthGeneration;
-  const epoch = fomoTrendingEpoch;
-  const valid = () => generation === fomoAuthGeneration && epoch === fomoTrendingEpoch;
-  const stored = (await chrome.storage.local.get('fomoToken')).fomoToken;
-  if (!valid() || !stored?.token || fomoTrendingObservedAccount === '') return { ok: false, reason: 'not-connected', items: [] };
-  if (fomoTrendingCache?.generation === generation && Date.now() - fomoTrendingCache.at < FOMO_TRENDING_TTL) return fomoTrendingCache.data;
-  if (fomoTrendingInflight?.generation === generation) return fomoTrendingInflight.promise;
-  const controller = new AbortController();
-  const promise = (async () => {
-    try {
-      // Privy JWT sub and FOMO application user ID are different namespaces.
-      // Resolve only on this user-triggered load, never through Following polling.
-      if (fomoTrendingObservedAccount !== null && fomoAccountIdentity(stored) !== fomoTrendingObservedAccount) {
-        const { res: accountResponse } = await fomoAuthedFetch('/v2/users/current', { signal: controller.signal });
-        const accountBody = await accountResponse.json().catch(() => null);
-        if (!valid()) return { ok: false, reason: 'not-connected', items: [] };
-        fomoCheckResponse(accountResponse, accountBody);
-        if (typeof accountBody?.responseObject?.id !== 'string') throw fomoFailure('invalid-response');
-        if (accountBody.responseObject.id !== fomoTrendingObservedAccount) return { ok: false, reason: 'not-connected', items: [] };
-      }
-      const { res } = await fomoAuthedFetch('/proxy/trendingTokens', { method: 'POST', signal: controller.signal });
-      const body = await res.json().catch(() => null);
-      if (!valid()) return { ok: false, reason: 'not-connected', items: [] };
-      if ([401, 403, 430, 431].includes(res.status) || fomoBodyUnauthed(body)) {
-        fomoTrendingCache = null;
-        return { ok: false, reason: 'not-connected', items: [] };
-      }
-      if (!res.ok || fomoBodyFailed(body)) throw fomoFailure(res.status === 429 ? 'backoff' : 'fetch-failed');
-      const items = normalizeFomoTrending(body);
-      const data = { ok: true, items, fetchedAt: Date.now(), source: 'fomo-trending' };
-      fomoTrendingCache = { generation, at: data.fetchedAt, data };
-      return data;
-    } catch (error) {
-      if (!valid()) return { ok: false, reason: 'not-connected', items: [] };
-      if (error.reason === 'not-connected') { fomoTrendingCache = null; return { ok: false, reason: 'not-connected', items: [] }; }
-      const cached = fomoTrendingCache?.generation === generation && Date.now() - fomoTrendingCache.at <= 300000 ? fomoTrendingCache.data : null;
-      return { ok: false, reason: error.reason || 'network', items: cached?.items || [], fetchedAt: cached?.fetchedAt || 0,
-        stale: !!cached, retryAt: fomoApiRetryAt };
+  const waiting = () => ({ok:false, reason:'waiting-native-trending', source:'fomo-trending', provenance:'native-stream', items:[], fetchedAt:0});
+  const cache = fomoTrendingCache, owner = fomoPassive;
+  if (!cache || cache.owner !== owner.owner || cache.accountId !== owner.accountId) return waiting();
+  try {
+    const tab = await chrome.tabs.get(owner.tabId);
+    if (cache !== fomoTrendingCache || owner !== fomoPassive || !fomoPassiveUrl(tab.url)) return waiting();
+    if (chrome.webNavigation?.getFrame && cache.documentId) {
+      const frame = await chrome.webNavigation.getFrame({tabId:owner.tabId, frameId:0});
+      if (!frame || frame.documentId !== cache.documentId || frame.url !== cache.url) return waiting();
     }
-  })().finally(() => { if (fomoTrendingInflight?.promise === promise) fomoTrendingInflight = null; });
-  fomoTrendingInflight = { generation, promise, controller };
-  return promise;
+  } catch { if (cache === fomoTrendingCache) invalidateFomoTrending(); return waiting(); }
+  const age = Date.now() - cache.at;
+  if (cache !== fomoTrendingCache || age < 0 || age >= FOMO_TRENDING_TTL) { if (cache === fomoTrendingCache) invalidateFomoTrending(); return waiting(); }
+  return {ok:true, source:'fomo-trending', provenance:'native-stream', items:cache.items, fetchedAt:cache.at,
+    viewMode:cache.viewMode || 'stream', nativeHiddenFilters:cache.viewMode === 'native-view', nativeHoverFreeze:cache.viewMode === 'native-view',
+    nativePriceRows:cache.items.filter(r => ['native-row','native-chart'].includes(r.priceSource)).length,
+    nativeChartOverrides:cache.items.filter(r => r.priceSource === 'native-chart').length};
 }
 
 const FOMO_FOLLOWED_HOLDERS_TTL_MS = 60000;
@@ -1985,7 +1961,7 @@ async function recordFomoPageHeartbeat(message, sender) {
 function resetFomoAccountCaches(preservePassive = false) {
   if (!preservePassive) clearFomoPassive(true);
   fomoAuthGeneration += 1;
-  invalidateFomoTrending();
+  invalidateFomoTrending(true);
   void pushPassiveFomo();
   fomoCollector = emptyFomoCollector();
   fomoCollectorHydration = null;
@@ -2027,7 +2003,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     let allowed = false;
     try { allowed = new URL(sender?.url || '').origin === 'https://gmgn.ai'; } catch { /* fail closed */ }
     if (!allowed) { sendResponse({ ok: false, reason: 'not-allowed', items: [] }); return false; }
-    fetchFomoTrending().then(sendResponse).catch(() => sendResponse({ ok: false, reason: 'network', items: [] }));
+    fetchFomoTrending().then(sendResponse).catch(() => sendResponse({ ok: false, reason: 'waiting-native-trending', source: 'fomo-trending', provenance: 'native-stream', fetchedAt: 0, items: [] }));
     return true;
   }
   if (message?.type === 'fomo-passive-event') {

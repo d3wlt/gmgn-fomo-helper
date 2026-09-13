@@ -20,6 +20,7 @@ $files = @(
   'native-quickbuy.js',
   'content.js',
   'fomo-early.js',
+  'fomo-native-view.js',
   'fomo-passive.js',
   'fomo-passive-content.js',
   'styles.css',
