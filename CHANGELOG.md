@@ -2,6 +2,13 @@
 
 Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
 
+## Unreleased
+
+- Give the FOMO token panel one scrolling content region, remove horizontal holder overflow through reflow, and put full holder names above wrapping badges. Keep tabs, filters, diagnostics, fold/close and all loaded rows reachable.
+- Remove EN control; keep UI and local translation target English regardless of legacy saved preferences. Browser-local translations still depend on API/language-pack availability and retain original text.
+- Allocate compact FOMO tracker space to full available handles, with two-line wrapping in unchanged 45px table/64.5px card slots. Preserve native GMGN recycler rows/actions; exceptionally long names get a grapheme-safe `...` prefix and full-name hover/keyboard tooltip instead of clipping.
+- Add isolated production-source Chromium layout/locale/action regressions at narrow and normal widths, with screenshots. No live accounts or trading actions are used.
+
 ## 0.53.19 - 2026-09-12
 
 - Remove special-wallet watch entirely: stars across tracking/wallet/address views, colored highlights, management UI, add-wallet watch preferences and pinned activity. Legacy saved settings are inert; watched developers, callout blocklists, holder rankings and native cross-chain wallet following remain.

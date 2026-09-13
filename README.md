@@ -24,6 +24,7 @@ For an update, replace the files in your existing unpacked extension folder, sel
 - Handles fractional native row heights and asynchronous row recycling without rebuilding the panel during normal scrolling.
 - Preserves your reading position when new activity arrives below the top. Unsupported geometry or persistently stale index data fails closed instead of guessing native row positions.
 - Keeps original native GMGN row actions and followed-user highlighting. Extension token blocking has been removed; callout-account blocklists remain.
+- FOMO trader names use the full available handle and wrap within existing card/table slots instead of a 72px ellipsis column. Compact rows allocate more room to names without overlapping amount/market-cap columns. The two-line name budget preserves 45px compact and 64.5px card geometry. Only names that exceed the available slot receive a grapheme-safe prefix plus `...`, with the full name in a viewport-bounded hover/keyboard-focus tooltip; resizing refits the prefix. Normal names remain fully readable. Native GMGN names/actions/row heights are not rewritten.
 - FOMO cards can expose GMGN's **native QuickBuy** on hover, including Robinhood. It uses GMGN's Following wallet/amount settings and validates the current account, chain and token.
 
 **Clicking native QuickBuy can execute a real trade.** The helper does not submit trades automatically or implement its own trading API. Native controls stay unavailable if their supported context cannot be verified.
@@ -45,7 +46,8 @@ Keep a FOMO tab open and signed in so the native application receives activity. 
 - On GMGN, **👥N** on the open token page's FOMO button at the end of its information header shows current holders among people you follow on FOMO. Hover shows returned names.
 - Holder-count requests cover only the open token and exact chain, with one-minute successful-result caching while visible. No token-list or tracker holder-count scanning. Unavailable data is distinct from confirmed zero.
 - Holder-history reconstruction is a limited sample of current holders, not complete token history. Fully exited users can be missing; neither a badge nor a successful response proves there have been no sells.
-- Supported non-English narratives can use the browser's local Translation API while retaining the original text.
+- The token panel has one vertical scrolling content region for status, filters and all loaded rows; the title and holder summary stay above it. Holder names get a full-width wrapping identity line, with ranking/Following/P&L badges below rather than squeezing the name.
+- Panel UI and the local narrative translation target are always English, even with legacy saved translation-off/language preferences; there is no EN toggle. Original narrative text remains visible. Supported browsers add local English translations; selecting the panel can initialize/retry a required local language pack. If the browser does not provide a usable Translation API, original text remains available (no remote translation fallback).
 
 The token panel and holder count may make their own scoped requests using your browser-local FOMO session. The **passive-only** guarantee describes the Following tracker, not every token-panel feature.
 
