@@ -4145,9 +4145,9 @@
     }[ev.mcSource] || 'Provider market cap';
   }
 
-  // Native lite GMGN uses a 9-unit threshold and an inclusive 0..9
-  // code-point prefix (10 + "..."). Keep our approved full two-line names;
-  // only names that exceed the fixed slot need an ellipsis.
+  // Keep the full provider name in the DOM. CSS alone clamps exceptional names
+  // to two lines; font ink overflow must never be interpreted as missing space
+  // and destructively replace a normal username with dots.
   const fomoNameNodes = new Map();
   let fomoNameObserver, fomoNameCleanup, fomoNameTip, fomoNameTipTarget;
   let fomoNameTipSerial = 0, fomoNamePointerDismissed = false;
@@ -4169,24 +4169,13 @@
     name.tabIndex = 0;
     name.setAttribute('role', 'link');
     name.setAttribute('aria-label', fullName);
-    // Chromium supports grapheme segmentation: never bisect emoji/combining marks.
-    const parts = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(fullName), p => p.segment);
-    let fittedWidth = 0;
     const fit = () => {
-      if (!name.isConnected || !name.clientWidth || name.clientWidth === fittedWidth) return;
-      fittedWidth = name.clientWidth;
-      if (name.textContent !== fullName) name.textContent = fullName;
-      const fits = () => name.scrollHeight <= name.clientHeight + 1 && name.scrollWidth <= name.clientWidth + 1;
-      if (!fits()) {
-        let lo = 0, hi = parts.length;
-        while (lo < hi) {
-          const mid = Math.ceil((lo + hi) / 2);
-          name.textContent = parts.slice(0, mid).join('') + '...';
-          if (fits()) lo = mid; else hi = mid - 1;
-        }
-        name.textContent = parts.slice(0, lo).join('') + '...';
-      }
-      name.dataset.truncated = String(name.textContent !== fullName);
+      if (!name.isConnected || !name.clientWidth) return;
+      // scrollHeight includes font ink outside the line box. Compare against
+      // the whole two-line budget, not a short name's one-line clientHeight.
+      // This only controls the tooltip; it never edits or shortens the name.
+      const slotHeight = parseFloat(getComputedStyle(name).maxHeight) || name.clientHeight;
+      name.dataset.truncated = String(name.scrollHeight > slotHeight + 1 || name.scrollWidth > name.clientWidth + 1);
       name.title = name.dataset.truncated === 'true' ? '' : profile.title;
       if (fomoNameTipTarget === name) {
         if (name.dataset.truncated !== 'true') hideFomoNameTip();
@@ -4205,6 +4194,9 @@
         if (fomoNameTipTarget && !fomoNameTipTarget.isConnected) hideFomoNameTip();
       });
       fomoNameCleanup.observe(document.body, { childList: true, subtree: true });
+      const refreshNames = () => { for (const refresh of fomoNameNodes.values()) refresh(); };
+      document.fonts?.ready.then(refreshNames);
+      document.fonts?.addEventListener('loadingdone', refreshNames);
       window.addEventListener('resize', positionFomoNameTip);
       window.addEventListener('mousemove', () => { fomoNamePointerDismissed = false; });
       window.addEventListener('scroll', event => {

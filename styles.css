@@ -1656,8 +1656,9 @@
   font-weight: 600; color: inherit;
   min-width: 0; flex: 1 1 auto;
   white-space: normal; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
   line-height: 14px; max-height: 28px; overflow: hidden;
-  /* JS fits only overflowing names to these unchanged two-line slots. */
+  /* Native CSS clamping preserves the full source text and reacts to layout/fonts. */
 }
 .gdh-fomofeed__name:focus-visible { outline: 1px solid currentColor; outline-offset: -1px; }
 .gdh-fomofeed-name-tooltip {
