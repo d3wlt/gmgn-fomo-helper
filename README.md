@@ -1,6 +1,6 @@
 # GMGN FOMO Helper
 
-A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.19** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
+A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.20** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
 
 **J7Tracker and DeBot integrations have been removed.** No J7Tracker account, tab or companion service is required; the extension no longer integrates with DeBot. The native GMGN tracker and passive FOMO Following feed remain separate from that retired integration.
 
@@ -24,7 +24,7 @@ For an update, replace the files in your existing unpacked extension folder, sel
 - Handles fractional native row heights and asynchronous row recycling without rebuilding the panel during normal scrolling.
 - Preserves your reading position when new activity arrives below the top. Unsupported geometry or persistently stale index data fails closed instead of guessing native row positions.
 - Keeps original native GMGN row actions and followed-user highlighting. Extension token blocking has been removed; callout-account blocklists remain.
-- FOMO trader names use the full available handle and wrap within existing card/table slots instead of a 72px ellipsis column. Compact rows allocate more room to names without overlapping amount/market-cap columns. The two-line name budget preserves 45px compact and 64.5px card geometry. Only names that exceed the available slot receive a grapheme-safe prefix plus `...`, with the full name in a viewport-bounded hover/keyboard-focus tooltip; resizing refits the prefix. Normal names remain fully readable. Native GMGN names/actions/row heights are not rewritten.
+- FOMO trader names use the full available handle and wrap within existing card/table slots instead of a 72px ellipsis column. Compact rows allocate more room to names without overlapping amount/market-cap columns. The two-line name budget preserves 45px compact and 64.5px card geometry. Only exceptionally long names are visually clamped by CSS to two lines with an ellipsis and a viewport-bounded full-name hover/keyboard-focus tooltip. The complete source name stays in the DOM; no JavaScript prefix fitting can turn normal names into dots. CSS responds directly to layout and font changes. Normal names remain fully readable. Native GMGN names/actions/row heights are not rewritten.
 - FOMO cards can expose GMGN's **native QuickBuy** on hover, including Robinhood. It uses GMGN's Following wallet/amount settings and validates the current account, chain and token.
 
 **Clicking native QuickBuy can execute a real trade.** The helper does not submit trades automatically or implement its own trading API. Native controls stay unavailable if their supported context cannot be verified.
@@ -81,7 +81,7 @@ Requirements: Node.js 22+, Python 3 for the portable builder, or PowerShell for 
 npm ci
 npx playwright install chromium
 npm run verify
-python3 scripts/build-release.py --tag v0.53.19
+python3 scripts/build-release.py --tag v0.53.20
 ```
 
 On PowerShell:

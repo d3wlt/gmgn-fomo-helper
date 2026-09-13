@@ -8,7 +8,7 @@ GMGN FOMO Helper is an independent Chrome MV3 interface extension for GMGN.ai. T
 - Adds developer history, token-page followed-holder counts, passive native FOMO Following, token FOMO panels, and notification views.
 - Reads existing page and same-site API data without signing or submitting transactions.
 - Uses browser-local language detection and translation to add English translations below non-English FOMO narratives. English is fixed regardless of legacy preferences; no EN toggle. Local pack/API availability still determines whether a translation can be produced.
-- Keeps original narratives visible. Token-panel status and rows share one scrolling region, with full wrapping holder names above reflowing badges. Tracker names wrap within the existing fixed slots; only overflowed names receive a grapheme-safe `...` prefix and full-name hover/keyboard-focus tooltip, bounded to the viewport without changing native recycler geometry.
+- Keeps original narratives visible. Token-panel status and rows share one scrolling region, with full wrapping holder names above reflowing badges. Tracker names wrap within the existing fixed slots; exceptionally long names use CSS two-line clamping and a full-name hover/keyboard-focus tooltip, bounded to the viewport without changing native recycler geometry. Full source text is never replaced with a shortened JavaScript prefix.
 - Stores preferences and limited caches in browser-local extension storage.
 
 ## Distribution
