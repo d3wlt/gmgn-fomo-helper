@@ -2,6 +2,14 @@
 
 Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
 
+## 0.53.23 - 2026-09-13
+
+- Restore actual thesis post text beneath the plain Thesis label in tracker card and table layouts, correcting the earlier body removal. Keep the redundant purple THESIS position badge and tokenless placeholder suppressed; preserve genuine token/profile actions and token-panel content.
+- Reuse safe text rendering and browser-local English translation; retain variable-height FOMO layout and unchanged native recycler geometry. Cover body readability, same-identity enrichment and chronological scrolling in offline browser regressions.
+
+- Match the native default table column spacing and timestamp inset, and native MC/card timestamp font sizes without changing colors. Keep Buy/Sell and their position badge together; narrow token cells place the ticker above the whole action group. Native recycler slots stay unchanged.
+- Support native table-row context discovery for quick buy with the same committed account/identity guards. Report unavailable causes in tooltips; make the hover surface opaque and temporarily replace right-hand table metrics instead of overlapping their text. No trading behavior or amounts are supplied by the helper.
+
 ## 0.53.22 - 2026-09-13
 
 - Remove the redundant purple THESIS position-action badge from thesis tracker rows in both layouts; retain the plain Thesis label and unrelated trade position badges.

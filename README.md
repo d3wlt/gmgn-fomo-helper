@@ -1,6 +1,6 @@
 # GMGN FOMO Helper
 
-A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.22** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
+A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.23** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
 
 This project is not affiliated with GMGN, FOMO or the original upstream author.
 
@@ -40,7 +40,7 @@ Keep a FOMO tab open and signed in so the native application receives activity. 
 
 ### Token context
 
-- Tracker thesis events use the **Thesis** label without an inline narrative body or tokenless THESIS placeholder; real token metadata and actions remain available.
+- Tracker thesis events use the **Thesis** label with the actual post text, without a redundant position badge or tokenless THESIS placeholder; real token metadata and actions remain available.
 - A FOMO token panel on GMGN shows holders, narratives and trades, with buy/sell and First/More/Partial/All labels, source information, refresh time and coverage warnings.
 - On GMGN, **👥N** on the open token page's FOMO button at the end of its information header shows current holders among people you follow on FOMO. Hover shows returned names.
 - Holder-count requests cover only the open token and exact chain, with one-minute successful-result caching while visible. No token-list or tracker holder-count scanning. Unavailable data is distinct from confirmed zero.
@@ -78,7 +78,7 @@ Requirements: Node.js 22+, Python 3 for the portable builder, or PowerShell for 
 npm ci
 npx playwright install chromium
 npm run verify
-python3 scripts/build-release.py --tag v0.53.22
+python3 scripts/build-release.py --tag v0.53.23
 ```
 
 On PowerShell:
