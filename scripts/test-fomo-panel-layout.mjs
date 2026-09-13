@@ -80,7 +80,14 @@ try {
    }
   },{width,table});
   const metrics=await page.locator('#cards').evaluate(host=>({width:host.clientWidth,scroll:host.scrollWidth,rows:[...host.children].map(row=>({height:row.getBoundingClientRect().height,name:(()=>{const n=row.querySelector('.gdh-fomofeed__name');return {text:n.textContent,full:n.scrollHeight<=n.clientHeight+1&&n.scrollWidth<=n.clientWidth+1,ellipsis:getComputedStyle(n).textOverflow};})(),cells:[...row.querySelectorAll('.gdh-fomofeed__tcell')].map(el=>{const r=el.getBoundingClientRect();return {left:r.left,right:r.right,width:el.clientWidth,scroll:el.scrollWidth};})}))}));
-  assert.equal(metrics.scroll,metrics.width);assert.ok(metrics.rows.every(r=>r.name.full&&r.name.ellipsis!=='ellipsis'),JSON.stringify({width,table,metrics}));
+  assert.equal(metrics.scroll,metrics.width);assert.ok(metrics.rows.slice(0,4).every(r=>r.name.full&&r.name.ellipsis!=='ellipsis'),JSON.stringify({width,table,metrics}));
+  const longName=page.locator('#cards .gdh-fomofeed__name').last();
+  assert.equal(await longName.textContent(),'long_trader_handle_123456');
+  if (!metrics.rows.at(-1).name.full) {
+    await longName.focus();
+    await page.waitForFunction(()=>document.querySelector('.gdh-fomofeed-name-tooltip')?.textContent==='long_trader_handle_123456');
+    await page.keyboard.press('Escape');await longName.blur();
+  }
   assert.ok(metrics.rows.every(r=>Math.abs(r.height-(table?45:64.5))<.1),'fixed row heights preserved');
   for(const row of metrics.rows)for(let i=1;i<row.cells.length;i++)assert.ok(row.cells[i].left>=row.cells[i-1].right-.1,'columns do not overlap');
   await page.mouse.move(0,899);

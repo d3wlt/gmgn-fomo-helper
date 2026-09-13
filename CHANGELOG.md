@@ -2,7 +2,11 @@
 
 Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
 
-## 0.53.23 - 2026-09-13
+## 0.53.24 - 2026-09-13
+
+- Supersede unpublished v0.53.23; verify narrow long-name tooltip behavior across platform font metrics.
+
+## 0.53.23 - 2026-09-13 (unpublished)
 
 - Restore actual thesis post text beneath the plain Thesis label in tracker card and table layouts, correcting the earlier body removal. Keep the redundant purple THESIS position badge and tokenless placeholder suppressed; preserve genuine token/profile actions and token-panel content.
 - Reuse safe text rendering and browser-local English translation; retain variable-height FOMO layout and unchanged native recycler geometry. Cover body readability, same-identity enrichment and chronological scrolling in offline browser regressions.
