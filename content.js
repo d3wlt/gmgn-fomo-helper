@@ -1730,6 +1730,248 @@
     renderFomoStats();
   }
 
+  // Local token comparison: observed metadata only, no market requests.
+  const discoveryObserved = new Map();
+  const DISCOVERY_RETENTION = 30 * 60000;
+  const DISCOVERY_STALE = 5 * 60000;
+  let discoveryDialog = null;
+  let discoveryRouteKey = '';
+  let discoveryCompareButton = null;
+  function discoveryRef(chain, address) {
+    if (!Object.hasOwn(FOMO_NETWORK_ID, chain) || typeof address !== 'string') return null;
+    if (!(chain === 'sol' ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/ : /^0x[a-fA-F0-9]{40}$/).test(address)) return null;
+    const ca = chain === 'sol' ? address : address.toLowerCase();
+    return { chain, address: ca, key: `${chain}:${ca}` };
+  }
+  function discoveryHref(href) {
+    try {
+      const url = new URL(href, location.origin);
+      if (url.origin !== location.origin) return null;
+      const m = url.pathname.match(/^\/([a-z0-9]+)\/token\/([A-Za-z0-9]+)\/?$/);
+      return m ? discoveryRef(m[1], m[2]) : null;
+    } catch { return null; }
+  }
+  function discoveryText(value) {
+    return typeof value === 'string' ? value.trim().slice(0, 120) : '';
+  }
+  function discoveryNormalize(value) {
+    return discoveryText(value).normalize('NFKC').toLowerCase().replace(/^\$/, '').replace(/[\s_\-]+/g, ' ').trim();
+  }
+  function discoverySimilar(a, b) {
+    const left = discoveryNormalize(a), right = discoveryNormalize(b);
+    // Short/generic tickers are not evidence of a name match.
+    const generic = new Set(['token', 'coin', 'crypto', 'meme', 'test', 'unknown', 'wrapped', 'solana', 'ethereum', 'bitcoin', 'usdt', 'usdc']);
+    if (left.length < 5 || right.length < 5 || generic.has(left) || generic.has(right)) return false;
+    if (left === right) return true;
+    // One edit only in a long name. No substring, punctuation stripping or confusable substitution.
+    if (Math.min(left.length, right.length) < 10 || Math.abs(left.length - right.length) > 1) return false;
+    let i = 0, j = 0, edits = 0;
+    while (i < left.length && j < right.length) {
+      if (left[i] === right[j]) { i++; j++; continue; }
+      if (++edits > 1) return false;
+      if (left.length >= right.length) i++;
+      if (right.length >= left.length) j++;
+    }
+    return edits + (i < left.length || j < right.length ? 1 : 0) <= 1;
+  }
+  function discoveryRelation(current, other) {
+    if (!current || !other) return '';
+    if (current.key === other.key) return 'exact';
+    return discoverySimilar(current.name, other.name) || discoverySimilar(current.symbol, other.symbol) ? 'similar' : '';
+  }
+  function observeDiscovery(ref, metadata, source, at) {
+    if (settings.enableFomoPanel === false || !ref || !Number.isFinite(at) || at <= 0 || Date.now() - at > DISCOVERY_RETENTION) return;
+    const prior = discoveryObserved.get(ref.key);
+    if (prior && at < prior.at) return;
+    discoveryObserved.delete(ref.key);
+    discoveryObserved.set(ref.key, { ...ref, symbol: discoveryText(metadata.symbol) || prior?.symbol || '',
+      name: discoveryText(metadata.tokenName) || prior?.name || '', source, at: Math.min(Date.now(), Math.max(at, prior?.at || 0)) });
+    while (discoveryObserved.size > 500) discoveryObserved.delete(discoveryObserved.keys().next().value);
+  }
+  function closeDiscoveryCompare() {
+    discoveryDialog?.close(); discoveryDialog?.remove(); discoveryDialog = null;
+  }
+  function openDiscoveryCompare() {
+    closeDiscoveryCompare();
+    const route = discoveryHref(location.href);
+    if (!route) return;
+    const current = discoveryObserved.get(route.key) || route;
+    const dialog = document.createElement('dialog');
+    dialog.className = 'gdh-discovery-compare';
+    dialog.setAttribute('aria-label', 'Compare observed tokens');
+    const bar = document.createElement('div'); bar.className = 'gdh-discovery-bar';
+    const title = document.createElement('strong'); title.textContent = 'Compare observed tokens';
+    const close = document.createElement('button'); close.type = 'button'; close.textContent = 'Close'; close.addEventListener('click', closeDiscoveryCompare);
+    bar.append(title, close); dialog.append(bar);
+    const note = document.createElement('p');
+    note.textContent = '= Same chain/address. ≈ Similar name, different identity; not a safety judgment. Local snapshot: up to 500 tokens, retained 30 minutes; stale after 5 minutes. Ages are at opening. No price lookup.';
+    dialog.append(note);
+    const records = [current, ...[...discoveryObserved.values()].filter(item => item.key !== route.key && discoveryRelation(current, item))].slice(0, 51);
+    dialog.dataset.expiresAt = String(Math.min(Date.now() + DISCOVERY_RETENTION, ...records.filter(item => item.at).map(item => item.at + DISCOVERY_RETENTION)));
+    for (const item of records) {
+      const row = document.createElement('div'); row.className = 'gdh-discovery-compare-row';
+      const name = document.createElement('strong'); name.textContent = item.symbol || item.name || 'Unknown token name';
+      const identity = document.createElement('div'); identity.textContent = `${item.chain.toUpperCase()} · ${item.address}`;
+      const age = item.at ? `${Math.floor((Date.now() - item.at) / 60000)}m ago${Date.now() - item.at > DISCOVERY_STALE ? ' · stale' : ''} · ${item.source}` : 'No observed metadata';
+      const detail = document.createElement('small'); detail.textContent = `${item.key === route.key ? 'Open token' : 'Similar name · different identity'} · ${age}`;
+      row.append(name, identity, detail); dialog.append(row);
+    }
+    if (records.length === 1) { const empty = document.createElement('p'); empty.textContent = 'No similar names observed. This is not a complete token search.'; dialog.append(empty); }
+    dialog.addEventListener('cancel', closeDiscoveryCompare);
+    document.body.append(dialog); discoveryDialog = dialog; dialog.showModal();
+  }
+  function scanDiscoveryComparison() {
+    const now = Date.now();
+    if (discoveryDialog && now >= Number(discoveryDialog.dataset.expiresAt)) closeDiscoveryCompare();
+    if (settings.enableFomoPanel === false) {
+      discoveryObserved.clear();
+      document.querySelectorAll('.gdh-discovery-marker').forEach(node => node.remove());
+      discoveryCompareButton?.remove(); discoveryCompareButton = null; closeDiscoveryCompare(); return;
+    }
+    for (const [key, item] of discoveryObserved) if (now - item.at > DISCOVERY_RETENTION) discoveryObserved.delete(key);
+    const rows = [];
+    for (const row of document.querySelectorAll(`${TRACKER_ITEM_SELECTOR}, ${TRACKER_TABLE_ITEM_SELECTOR}`)) {
+      const ref = discoveryHref(row.getAttribute('href'));
+      const stamp = discoveryRef(row.dataset.gdhTrackChain, row.dataset.gdhTrackAddr);
+      // Bridge metadata may lag a recycled href: never borrow the previous token's symbol.
+      if (ref && stamp?.key === ref.key) observeDiscovery(ref, { symbol: row.dataset.gdhTrackSymbol }, 'GMGN tracker', Number(row.dataset.gdhTrackTs));
+      rows.push([row, ref]);
+    }
+    for (const event of fomoFollowedEvents.slice(0, 500)) observeDiscovery(discoveryRef(event.chain, event.addr), event, 'FOMO passive', Number(event.ts));
+    for (const row of document.querySelectorAll('.gdh-fomofeed')) rows.push([row, discoveryRef(row.dataset.gdhDiscoveryChain, row.dataset.gdhDiscoveryAddress)]);
+    const route = discoveryHref(location.href);
+    if ((route?.key || '') !== discoveryRouteKey) { discoveryRouteKey = route?.key || ''; closeDiscoveryCompare(); }
+    const current = route && (discoveryObserved.get(route.key) || route);
+    for (const [row, ref] of rows) {
+      const relation = discoveryRelation(current, ref && (discoveryObserved.get(ref.key) || ref));
+      let marker = row.querySelector(':scope > .gdh-discovery-marker');
+      if (!relation) { marker?.remove(); continue; }
+      if (!marker) { marker = document.createElement('span'); marker.className = 'gdh-discovery-marker'; marker.setAttribute('role', 'img'); row.append(marker); }
+      const label = relation === 'exact' ? 'Exact open token: same chain and address' : 'Similar name, different token identity. Not a safety judgment.';
+      if (marker.dataset.relation !== relation) {
+        marker.dataset.relation = relation; marker.textContent = relation === 'exact' ? '=' : '≈'; marker.title = label; marker.setAttribute('aria-label', label);
+      }
+    }
+    const anchor = [...document.querySelectorAll('[data-sentry-component="BaseInfoBar"]')].find(el => el.getBoundingClientRect().width > 0);
+    if (!route || !anchor || settings.enableFomoPanel === false) { discoveryCompareButton?.remove(); discoveryCompareButton = null; closeDiscoveryCompare(); return; }
+    if (!discoveryCompareButton?.isConnected || discoveryCompareButton.parentElement !== anchor) {
+      discoveryCompareButton?.remove();
+      discoveryCompareButton = document.createElement('button'); discoveryCompareButton.type = 'button'; discoveryCompareButton.className = 'gdh-discovery-compare-button'; discoveryCompareButton.textContent = 'Compare'; discoveryCompareButton.title = 'Compare locally observed token identities and similar names';
+      discoveryCompareButton.addEventListener('click', openDiscoveryCompare); anchor.insertBefore(discoveryCompareButton, anchor.querySelector(':scope > .gdh-fomo-launcher'));
+    }
+  }
+
+  // Native Trending mount verified against GMGN Main (index.tsx): header + one body.
+  // No broad ancestor guessing: an unknown host structure leaves native UI untouched.
+  let discoveryTrending = null;
+  let discoveryTrendingGeneration = 0;
+  let discoveryTrendingData = null;
+  let discoveryTrendingDead = false;
+  function resetDiscoveryAccount() {
+    deactivateDiscoveryTrending();
+    discoveryTrendingData = null;
+    discoveryTrending?.panel.replaceChildren();
+    discoveryObserved.clear();
+    document.querySelectorAll('.gdh-discovery-marker').forEach(node => node.remove());
+    closeDiscoveryCompare();
+  }
+  function discoveryVisible(node) { return !!node?.isConnected && node.getBoundingClientRect().width > 0 && node.getBoundingClientRect().height > 0 && getComputedStyle(node).visibility !== 'hidden'; }
+  function discoveryTrendingMount() {
+    const nativeTab = [...document.querySelectorAll('[data-testid="filter-tag-trending"]')].find(discoveryVisible);
+    const tabs = nativeTab?.parentElement, main = nativeTab?.closest('[data-sentry-component="Main"]');
+    if (!main || !tabs || main.children.length !== (discoveryTrending?.main === main ? 3 : 2)) return null;
+    const header = [...main.children].find(child => child.contains(tabs));
+    const body = [...main.children].find(child => child !== header && !child.classList.contains('gdh-discovery-trending'));
+    return header && body ? { nativeTab, tabs, main, header, body } : null;
+  }
+  function deactivateDiscoveryTrending(remove = false) {
+    const state = discoveryTrending;
+    discoveryTrendingGeneration++;
+    if (!state) return;
+    state.active = false; state.loading = false;
+    state.tabs.classList.remove('gdh-discovery-tabs-active');
+    state.body.classList.remove('gdh-discovery-native-hidden'); state.panel.hidden = true; state.tab.setAttribute('aria-pressed', 'false');
+    if (remove) {
+      state.header.removeEventListener('click', state.onNativeClick, true);
+      state.tab.remove(); state.panel.remove(); discoveryTrending = null;
+    }
+  }
+  function renderDiscoveryTrending() {
+    const state = discoveryTrending;
+    if (!state?.active) return;
+    const data = discoveryTrendingData;
+    const age = data?.fetchedAt ? Math.max(0, Date.now() - data.fetchedAt) : 0;
+    const stale = !!data?.fetchedAt && (data.stale || age >= 60000);
+    const key = JSON.stringify([state.loading, data, Math.floor(age / 60000), age > 300000, data?.retryAt > Date.now()]);
+    if (state.renderKey === key) return;
+    state.renderKey = key;
+    const panel = state.panel; panel.replaceChildren();
+    const bar = document.createElement('div'); bar.className = 'gdh-discovery-bar';
+    const status = document.createElement('span'); status.setAttribute('role', 'status');
+    status.textContent = state.loading ? 'Loading FOMO Trending…' : data?.reason === 'not-connected' ? 'Sign in on FOMO, then refresh.'
+      : data && !data.ok ? (stale ? 'Stale · refresh unavailable' : 'Trending unavailable · try Refresh')
+      : stale ? `Stale · ${Math.floor(age / 60000)}m ago` : data?.fetchedAt ? 'FOMO order · just updated' : 'Open Refresh to load';
+    if (data?.retryAt > Date.now()) status.textContent += ' · cooling down';
+    const refresh = document.createElement('button'); refresh.type = 'button'; refresh.textContent = 'Refresh'; refresh.disabled = state.loading || data?.retryAt > Date.now(); refresh.addEventListener('click', () => void loadDiscoveryTrending());
+    bar.append(status, refresh); panel.append(bar);
+    const list = document.createElement('div'); list.className = 'gdh-discovery-trending-list';
+    // Stale rows have a five-minute maximum lifetime, including while the tab stays open.
+    const items = age <= 300000 && data?.reason !== 'not-connected' && Array.isArray(data?.items) ? data.items : [];
+    const money = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? '$' + new Intl.NumberFormat('en', { maximumSignificantDigits: 4, notation: value >= 100000 ? 'compact' : 'standard' }).format(value) : '—';
+    for (const item of items.slice(0, 200)) {
+      const ref = discoveryRef(item.chain, item.address);
+      if (!ref || FOMO_NETWORK_ID[ref.chain] !== item.networkId || item.source !== 'fomo-trending') continue;
+      const row = document.createElement('a'); row.className = 'gdh-discovery-trending-row'; row.href = `/${ref.chain}/token/${ref.address}`;
+      row.addEventListener('click', event => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); deactivateDiscoveryTrending(); gdhSpaNavigate(row.getAttribute('href')); });
+      const rank = document.createElement('span'); rank.className = 'gdh-discovery-rank'; rank.textContent = Number.isInteger(item.rank) && item.rank > 0 ? String(item.rank) : '—';
+      const identity = document.createElement('span'); identity.className = 'gdh-discovery-token';
+      const name = document.createElement('strong'); name.textContent = discoveryText(item.symbol) || discoveryText(item.name) || `${ref.address.slice(0, 6)}…${ref.address.slice(-4)}`;
+      const chain = document.createElement('small'); chain.textContent = `${ref.chain.toUpperCase()}${item.name ? ' · ' + discoveryText(item.name) : ''}`; identity.title = `${item.name || item.symbol || 'Unknown name'}\n${ref.chain} · ${ref.address}`; identity.append(name, chain);
+      const values = document.createElement('span'); values.className = 'gdh-discovery-values';
+      const price = document.createElement('strong'); price.textContent = money(item.price); price.title = 'USD price';
+      const mc = document.createElement('small'); mc.textContent = 'MC ' + money(item.marketCap); values.append(price, mc);
+      const change = document.createElement('span'); change.className = 'gdh-discovery-change';
+      change.textContent = typeof item.change24Percent === 'number' && Number.isFinite(item.change24Percent) ? `${item.change24Percent > 0 ? '+' : ''}${new Intl.NumberFormat('en', { maximumFractionDigits: 1, notation: Math.abs(item.change24Percent) >= 1000 ? 'compact' : 'standard' }).format(item.change24Percent)}%` : '—'; change.title = `24h change${item.change24Percent == null ? '' : ': ' + item.change24Percent + '%'}`;
+      row.append(rank, identity, values, change); list.append(row);
+    }
+    if (!list.children.length && !state.loading && data?.ok && !stale) { const empty = document.createElement('p'); empty.textContent = 'No trending tokens returned by FOMO.'; list.append(empty); }
+    panel.append(list);
+  }
+  async function loadDiscoveryTrending() {
+    const state = discoveryTrending;
+    if (!state?.active || state.loading || discoveryTrendingDead || document.visibilityState === 'hidden' || !discoveryVisible(state.main)) return;
+    if (discoveryTrendingData?.ok && Date.now() - discoveryTrendingData.fetchedAt < 60000) { renderDiscoveryTrending(); return; }
+    const generation = ++discoveryTrendingGeneration, auth = fomoUiAuthGeneration;
+    state.loading = true; renderDiscoveryTrending();
+    try {
+      const data = await Promise.resolve().then(() => chrome.runtime.sendMessage({ type: 'fomo-trending' }));
+      if (generation !== discoveryTrendingGeneration || auth !== fomoUiAuthGeneration || discoveryTrending !== state || !state.active || document.visibilityState === 'hidden' || !discoveryVisible(state.main)) return;
+      discoveryTrendingData = data && typeof data.ok === 'boolean' ? data : { ok: false, reason: 'invalid-response', items: [] };
+    } catch (error) {
+      if (generation !== discoveryTrendingGeneration || auth !== fomoUiAuthGeneration) return;
+      if (/extension context invalidated/i.test(String(error?.message || error))) discoveryTrendingDead = true;
+      discoveryTrendingData = { ok: false, reason: 'network', items: [] };
+    } finally {
+      if (generation === discoveryTrendingGeneration && discoveryTrending === state) { state.loading = false; renderDiscoveryTrending(); }
+    }
+  }
+  function scanDiscoveryTrending() {
+    if (document.visibilityState === 'hidden' || settings.enableFomoPanel === false) { deactivateDiscoveryTrending(true); return; }
+    const mount = discoveryTrendingMount();
+    if (!mount) { deactivateDiscoveryTrending(true); return; }
+    if (discoveryTrending && (mount.main !== discoveryTrending.main || mount.body !== discoveryTrending.body || mount.tabs !== discoveryTrending.tabs || !discoveryTrending.tab.isConnected)) deactivateDiscoveryTrending(true);
+    if (!discoveryTrending) {
+      const tab = document.createElement('button'); tab.type = 'button'; tab.className = 'gdh-discovery-trending-tab'; tab.textContent = 'FOMO'; tab.title = 'FOMO Trending · loads only when opened or refreshed'; tab.setAttribute('aria-pressed', 'false');
+      const panel = document.createElement('section'); panel.className = 'gdh-discovery-trending'; panel.hidden = true; panel.setAttribute('aria-label', 'FOMO Trending');
+      const state = { ...mount, tab, panel, active: false, loading: false, renderKey: '' };
+      state.onNativeClick = event => { if (!tab.contains(event.target)) deactivateDiscoveryTrending(); };
+      mount.header.addEventListener('click', state.onNativeClick, true);
+      tab.addEventListener('click', event => { event.stopPropagation(); if (state.active) { deactivateDiscoveryTrending(); return; } state.active = true; state.renderKey = ''; tab.setAttribute('aria-pressed', 'true'); state.tabs.classList.add('gdh-discovery-tabs-active'); state.body.classList.add('gdh-discovery-native-hidden'); panel.hidden = false; renderDiscoveryTrending(); void loadDiscoveryTrending(); });
+      mount.tabs.append(tab); mount.main.append(panel); discoveryTrending = state;
+    }
+    renderDiscoveryTrending();
+  }
+
   function currentTokenRoute() {
     const m = location.pathname.match(/^\/([a-z0-9]+)\/token\/([A-Za-z0-9]+)/);
     if (!m) return null;
@@ -4332,6 +4574,9 @@
     const card = document.createElement('div');
     card.className = `gdh-fomofeed ${tag.cls}${ev.source === 'fomo-followed' ? ' is-followed' : ''}`;
     card.dataset.gdhFomoKey = ev.key;
+    card.dataset.gdhDiscoveryChain = ev.chain || '';
+    card.dataset.gdhDiscoveryAddress = ev.addr || '';
+    observeDiscovery(discoveryRef(ev.chain, ev.addr), ev, ev.source === 'fomo-followed' ? 'FOMO passive' : 'FOMO token panel', Number(ev.ts));
     card.dataset.gdhFeedSource = ev.source || 'fomo';
     card.dataset.gdhFomoStale = ev.stale ? '1' : '0';
     card.dataset.gdhFomoSignature = fomoFeedCardSignature(ev, tableMode);
@@ -4964,6 +5209,8 @@
     timed('surge', scanHoldingSurge);
     timed('fomoPanel', scanFomoPanel);
     timed('fomoFeed', scanFomoFeed);
+    timed('tokenCompare', scanDiscoveryComparison);
+    timed('fomoTrending', scanDiscoveryTrending);
     const cost = performance.now() - t0;
     scanCostEma = scanCostEma ? scanCostEma * 0.7 + cost * 0.3 : cost;
     //   document.documentElement.getAttribute('data-gdh-perf')
@@ -5289,6 +5536,7 @@
         const newIdentity = fomoStoredAccountIdentity(change.newValue);
         const sameAccount = oldIdentity && newIdentity && oldIdentity === newIdentity;
         fomoUiAuthGeneration += 1;
+        resetDiscoveryAccount();
         fomoFollowedRevision += 1;
         fomoFollowedUpdatedAt = 0;
         void updateFomoFollowedEpoch(change.newValue);
@@ -5346,12 +5594,16 @@
   });
 
   const initialFomoFollowedGeneration = fomoUiAuthGeneration;
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') { deactivateDiscoveryTrending(true); closeDiscoveryCompare(); }
+  });
   chrome.storage.local.get('fomoToken', stored => {
     if (initialFomoFollowedGeneration === fomoUiAuthGeneration) void updateFomoFollowedEpoch(stored?.fomoToken);
   });
 
   try {
     chrome.runtime.onMessage.addListener((msg) => {
+      if (msg?.type === 'fomo-discovery-reset') { resetDiscoveryAccount(); return; }
       if (msg?.type === 'fomo-followed-feed-update') {
         if (!canDisplayFomoFollowedFeed()) return;
         if (!msg.epoch) { pollFomoFollowedFeed(); return; }

@@ -2,6 +2,14 @@
 
 Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
 
+## Unreleased
+
+## 0.53.25 - 2026-09-13
+
+- Add small exact-token (`=`) and similar-name (`≈`) indicators to observed native/FOMO tracker rows relative to the open token. Identity is chain plus contract address, preserving Solana case; similar names are not identity or safety judgments. Optional Compare opens a compact, dismissible view using bounded local observations, with no market polling or blocking.
+- Add an on-demand FOMO tab inside GMGN's native Trending panel. Use the official authenticated Trending endpoint, retain provider ranking order, show unknown metrics explicitly, and preserve native rows/tabs. Requests occur only on opening the tab or manual Refresh, with a 60-second account-bound cache, coalescing, shared bounded pacing and Retry-After cooldowns.
+- Reject late account/logout/body-decode results, expire stale rankings, and restore the native panel on switch, close, hide or remount. Add production worker/browser regression coverage and responsive screenshot fixtures without changing native trade controls or tracker geometry.
+
 ## 0.53.24 - 2026-09-13
 
 - Supersede unpublished v0.53.23; verify narrow long-name tooltip behavior across platform font metrics.

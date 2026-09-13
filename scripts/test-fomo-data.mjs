@@ -571,7 +571,11 @@ await test('deadline covers a stalled response body and releases coalesced reque
     } }), {status:200});
   });
   const timers = new Map(); let timerId = 0;
-  h.ctx.setTimeout = (fn, ms) => { const id = ++timerId; timers.set(id, {fn,ms}); return id; };
+  h.ctx.setTimeout = (fn, ms) => {
+    // Control only body deadlines; the shared admission pacing must still resolve.
+    if (ms !== 15000) return setTimeout(fn, ms);
+    const id = ++timerId; timers.set(id, {fn,ms}); return id;
+  };
   h.ctx.clearTimeout = id => timers.delete(id);
   const first = h.token('holders'); const shared = h.token('holders');
   await new Promise(resolve => setImmediate(resolve));

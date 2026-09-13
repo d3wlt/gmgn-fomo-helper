@@ -646,6 +646,10 @@ async function ingestPassiveFomo(data, sender) {
     }
     if (fomoPassive.owner !== key || fomoPassive.accountId !== accountId || record.epoch !== data.epoch) {
       if (fomoPassive.owner === key && record.epoch === data.epoch && fomoPassive.accountId !== accountId) return {ok:false,reason:'account-epoch-required'};
+      if (fomoPassive.accountId !== accountId) {
+        fomoTrendingObservedAccount = accountId;
+        invalidateFomoTrending();
+      }
       for (const [other, r] of fomoPassiveDocuments) if (other !== key) r.retired = true;
       fomoPassive = { owner:key, tabId:sender.tab.id, accountId, ids:null, events:[], pending:[], at:Date.now(), connected:false, revision:fomoPassive.revision+1 };
     }
@@ -655,7 +659,7 @@ async function ingestPassiveFomo(data, sender) {
   }
   record.seq = data.seq; record.epoch = data.epoch;
   const p = fomoPassive;
-  if (data.kind === 'logout') { clearFomoPassive(true); }
+  if (data.kind === 'logout') { fomoTrendingObservedAccount = ''; invalidateFomoTrending(); clearFomoPassive(true); }
   else {
     p.at = Date.now(); p.revision++;
     if (data.kind === 'connection') {
@@ -1117,9 +1121,32 @@ function fomoDebugEndpoint(path) {
   if (/^\/trades\/[^/]+$/.test(base)) return 'trade-profile';
   return 'other';
 }
+// Shared admission gate: bounded concurrency/queue and paced request starts.
+let fomoApiActive = 0;
+let fomoApiNextStart = 0;
+const fomoApiWaiters = [];
+async function acquireFomoApiSlot() {
+  if (fomoApiActive >= 4) {
+    if (fomoApiWaiters.length >= 32) throw fomoFailure('backoff');
+    await new Promise(resolve => fomoApiWaiters.push(resolve));
+  } else fomoApiActive++;
+  // Bound the horizon too: a backwards wall-clock jump must not strand callers.
+  const start = Math.min(Date.now() + 400, Math.max(Date.now(), fomoApiNextStart));
+  fomoApiNextStart = start + 100;
+  if (start > Date.now()) await new Promise(resolve => setTimeout(resolve, start - Date.now()));
+  return () => {
+    const next = fomoApiWaiters.shift();
+    if (next) next();
+    else fomoApiActive--;
+  };
+}
 async function fomoAuthedFetch(path, options) {
   const started=Date.now();
+  const generation=fomoAuthGeneration;
+  const release=await acquireFomoApiSlot();
   try {
+    if (generation!==fomoAuthGeneration) throw fomoFailure('not-connected');
+    if (options?.signal?.aborted) throw fomoFailure('network');
     const result=await fomoAuthedFetchImpl(path,options);
     let reason=result.res.ok ? 'success' : 'http-error';
     if (globalThis.gdhDebug?.enabled && result.res.ok) {
@@ -1132,6 +1159,8 @@ async function fomoAuthedFetch(path, options) {
   } catch(error) {
     globalThis.gdhDebug?.record('request',{endpoint:fomoDebugEndpoint(path),status:error.status || 0,durationMs:Date.now()-started,reason:error.reason || 'error'});
     throw error;
+  } finally {
+    release();
   }
 }
 async function fomoAuthedFetchImpl(path, options) {
@@ -1205,6 +1234,101 @@ async function fomoAuthedFetchImpl(path, options) {
     }
   }
   return { res, stored, renewed };
+}
+
+// On-demand only. Memory is bound to the account epoch, never an anonymous cache.
+const FOMO_TRENDING_TTL = 60000;
+let fomoTrendingCache = null;
+let fomoTrendingInflight = null;
+let fomoTrendingEpoch = 0;
+// null: no passive account observation yet; empty string: observed logout.
+let fomoTrendingObservedAccount = null;
+function invalidateFomoTrending() {
+  fomoTrendingEpoch++;
+  fomoTrendingInflight?.controller?.abort();
+  fomoTrendingCache = null;
+  fomoTrendingInflight = null;
+  const epoch = fomoTrendingEpoch;
+  if (chrome.tabs?.query) void chrome.tabs.query({ url: ['https://gmgn.ai/*'] }).then(tabs => {
+    if (epoch !== fomoTrendingEpoch) return;
+    for (const tab of tabs) void chrome.tabs.sendMessage(tab.id, { type: 'fomo-discovery-reset' }).catch(() => {});
+  }).catch(() => {});
+}
+function normalizeFomoTrending(body) {
+  if (!Array.isArray(body?.responseObject)) throw fomoFailure('invalid-response');
+  const seen = new Set();
+  const items = [];
+  for (const [index, raw] of body.responseObject.slice(0, 200).entries()) {
+    const token = raw?.token;
+    if (!['number', 'string'].includes(typeof token?.networkId)) continue;
+    const networkId = Number(token?.networkId);
+    const chain = FOMO_NETWORK_SLUG[networkId];
+    const address = typeof token?.address === 'string' ? token.address.trim() : '';
+    if (!chain || !(chain === 'sol' ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/ : /^0x[a-fA-F0-9]{40}$/).test(address)) continue;
+    const ca = chain === 'sol' ? address : address.toLowerCase();
+    const key = `${chain}:${ca}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const text = value => typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 120) : '';
+    const number = (value, signed = false) => {
+      if (value == null || (typeof value === 'string' && !value.trim()) || !['number', 'string'].includes(typeof value)) return null;
+      const n = Number(value);
+      return Number.isFinite(n) && Math.abs(n) <= Number.MAX_SAFE_INTEGER && (signed || n >= 0) ? n : null;
+    };
+    // Official native Qt formatter treats change24 as a ratio, not percentage points.
+    const ratio = number(raw.change24, true);
+    const change24Percent = ratio !== null && Number.isFinite(ratio * 100) ? ratio * 100 : null;
+    items.push({ chain, networkId, address: ca, symbol: text(token.symbol), name: text(token.name),
+      price: number(raw.priceUSD), marketCap: number(raw.marketCap), change24Percent,
+      rank: index + 1, source: 'fomo-trending' });
+  }
+  // A nonempty, wholly unrecognizable response is not a confirmed empty ranking.
+  if (body.responseObject.length && !items.length) throw fomoFailure('invalid-response');
+  return items;
+}
+async function fetchFomoTrending() {
+  const generation = fomoAuthGeneration;
+  const epoch = fomoTrendingEpoch;
+  const valid = () => generation === fomoAuthGeneration && epoch === fomoTrendingEpoch;
+  const stored = (await chrome.storage.local.get('fomoToken')).fomoToken;
+  if (!valid() || !stored?.token || fomoTrendingObservedAccount === '') return { ok: false, reason: 'not-connected', items: [] };
+  if (fomoTrendingCache?.generation === generation && Date.now() - fomoTrendingCache.at < FOMO_TRENDING_TTL) return fomoTrendingCache.data;
+  if (fomoTrendingInflight?.generation === generation) return fomoTrendingInflight.promise;
+  const controller = new AbortController();
+  const promise = (async () => {
+    try {
+      // Privy JWT sub and FOMO application user ID are different namespaces.
+      // Resolve only on this user-triggered load, never through Following polling.
+      if (fomoTrendingObservedAccount !== null && fomoAccountIdentity(stored) !== fomoTrendingObservedAccount) {
+        const { res: accountResponse } = await fomoAuthedFetch('/v2/users/current', { signal: controller.signal });
+        const accountBody = await accountResponse.json().catch(() => null);
+        if (!valid()) return { ok: false, reason: 'not-connected', items: [] };
+        fomoCheckResponse(accountResponse, accountBody);
+        if (typeof accountBody?.responseObject?.id !== 'string') throw fomoFailure('invalid-response');
+        if (accountBody.responseObject.id !== fomoTrendingObservedAccount) return { ok: false, reason: 'not-connected', items: [] };
+      }
+      const { res } = await fomoAuthedFetch('/proxy/trendingTokens', { method: 'POST', signal: controller.signal });
+      const body = await res.json().catch(() => null);
+      if (!valid()) return { ok: false, reason: 'not-connected', items: [] };
+      if ([401, 403, 430, 431].includes(res.status) || fomoBodyUnauthed(body)) {
+        fomoTrendingCache = null;
+        return { ok: false, reason: 'not-connected', items: [] };
+      }
+      if (!res.ok || fomoBodyFailed(body)) throw fomoFailure(res.status === 429 ? 'backoff' : 'fetch-failed');
+      const items = normalizeFomoTrending(body);
+      const data = { ok: true, items, fetchedAt: Date.now(), source: 'fomo-trending' };
+      fomoTrendingCache = { generation, at: data.fetchedAt, data };
+      return data;
+    } catch (error) {
+      if (!valid()) return { ok: false, reason: 'not-connected', items: [] };
+      if (error.reason === 'not-connected') { fomoTrendingCache = null; return { ok: false, reason: 'not-connected', items: [] }; }
+      const cached = fomoTrendingCache?.generation === generation && Date.now() - fomoTrendingCache.at <= 300000 ? fomoTrendingCache.data : null;
+      return { ok: false, reason: error.reason || 'network', items: cached?.items || [], fetchedAt: cached?.fetchedAt || 0,
+        stale: !!cached, retryAt: fomoApiRetryAt };
+    }
+  })().finally(() => { if (fomoTrendingInflight?.promise === promise) fomoTrendingInflight = null; });
+  fomoTrendingInflight = { generation, promise, controller };
+  return promise;
 }
 
 const FOMO_FOLLOWED_HOLDERS_TTL_MS = 60000;
@@ -1861,6 +1985,7 @@ async function recordFomoPageHeartbeat(message, sender) {
 function resetFomoAccountCaches(preservePassive = false) {
   if (!preservePassive) clearFomoPassive(true);
   fomoAuthGeneration += 1;
+  invalidateFomoTrending();
   void pushPassiveFomo();
   fomoCollector = emptyFomoCollector();
   fomoCollectorHydration = null;
@@ -1898,6 +2023,13 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === 'fomo-trending') {
+    let allowed = false;
+    try { allowed = new URL(sender?.url || '').origin === 'https://gmgn.ai'; } catch { /* fail closed */ }
+    if (!allowed) { sendResponse({ ok: false, reason: 'not-allowed', items: [] }); return false; }
+    fetchFomoTrending().then(sendResponse).catch(() => sendResponse({ ok: false, reason: 'network', items: [] }));
+    return true;
+  }
   if (message?.type === 'fomo-passive-event') {
     if (fomoPassiveQueued >= 64) { sendResponse({ok:false,reason:'bridge-busy'}); return false; }
     fomoPassiveQueued++;

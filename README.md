@@ -1,6 +1,6 @@
 # GMGN FOMO Helper
 
-A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.24** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
+A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.25** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
 
 This project is not affiliated with GMGN, FOMO or the original upstream author.
 
@@ -50,6 +50,14 @@ Keep a FOMO tab open and signed in so the native application receives activity. 
 
 The token panel and holder count may make their own scoped requests using your browser-local FOMO session. The **passive-only** guarantee describes the Following tracker, not every token-panel feature.
 
+### Token comparison and FOMO Trending
+
+- Small gutter indicators on native and FOMO tracked rows show **=** for the exact open token and **≈** for a similar observed name with a different identity. Exact means **chain + contract address**; Solana addresses remain case-sensitive. Conservative name matching excludes short/generic tickers and never labels a token a scam or the same asset.
+- **Compare** in the token-information header opens a compact, dismissible comparison. It uses only observed native/passive/token-panel metadata: at most 500 identities retained for 30 minutes, stale after 5 minutes, with up to 50 similar identities shown. No permanent floating card, token blocking or additional market requests. Name matching needs previously observed metadata for the open identity; missing metadata stays unknown. This is not a complete token search.
+- Open GMGN's native **Trending** panel, then select **FOMO**. Rankings load only when you open that tab or select **Refresh**—not in the background or on a timer. Successful results are cached for 60 seconds and coalesced per account. Refresh respects that cache and shared request cooldowns.
+- Rankings retain FOMO's returned order and original rank positions after validation/deduplication. FOMO's 24-hour change ratio is converted to percentage points. Unknown or negative price/market-cap data displays **—**. Loading, confirmed empty, unavailable and stale are separate states. Stale rows expire after 5 minutes; native GMGN tabs and rows are restored on switch, close, hide or remount.
+- The tab uses the official FOMO API with the existing browser-local session, not an anonymous shared cache. Native account/logout observations and session changes invalidate old results, including responses still being decoded. Token links keep each returned chain rather than using the currently selected chain. Unsupported native panel structures remain untouched.
+
 ### GMGN utilities
 
 - Highlight watched developer wallets, show developer launch performance, save developer wallets and filter blocked callout accounts.
@@ -78,7 +86,7 @@ Requirements: Node.js 22+, Python 3 for the portable builder, or PowerShell for 
 npm ci
 npx playwright install chromium
 npm run verify
-python3 scripts/build-release.py --tag v0.53.24
+python3 scripts/build-release.py --tag v0.53.25
 ```
 
 On PowerShell:
