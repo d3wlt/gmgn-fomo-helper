@@ -88,7 +88,7 @@ try {
   await page.locator('#cards .gdh-fomofeed__name').first().click();assert.match(await page.evaluate(()=>opened.at(-1)?.[0]||''),/C0brahan_full_name/i,'original profile action retained');
   reports.push({kind:table?'table':'card',width,metrics});
  }
- // Exceptional names: literal dots, full-name hover/focus, Unicode and recycling.
+ // Exceptional names: CSS two-line ellipsis; full DOM text, hover/focus and recycling.
  for (const width of [1000,570,390,320]) for (const table of [true,false]) {
   await page.setViewportSize({width,height:900});
   const extreme = ['D'+'U'.repeat(300), '👩🏽‍💻e\u0301🇵🇱'.repeat(100), '<script>very_long_name</script>'.repeat(12)];
@@ -99,25 +99,24 @@ try {
   await page.waitForFunction(()=>[...document.querySelectorAll('#cards .gdh-fomofeed__name')].every(n=>n.dataset.truncated==='true'));
   for(let i=0;i<extreme.length;i++) {
    const name=page.locator('#cards .gdh-fomofeed__name').nth(i);
-   const text=await name.textContent();assert.ok(text.endsWith('...'));
-   const segments=Array.from(new Intl.Segmenter(undefined,{granularity:'grapheme'}).segment(extreme[i]),p=>p.segment);
-   assert.ok(segments.some((_,j)=>segments.slice(0,j+1).join('')===text.slice(0,-3)),'prefix ends on a grapheme boundary');
+   assert.equal(await name.textContent(),extreme[i],'CSS truncation never destroys source identity or splits DOM Unicode');
    await name.hover();const tip=page.locator('.gdh-fomofeed-name-tooltip');await tip.waitFor();assert.equal(await tip.textContent(),extreme[i]);
    await tip.hover();await page.waitForTimeout(180);assert.ok(await tip.isVisible(),'tooltip remains hoverable');
    await name.focus();assert.equal(await tip.textContent(),extreme[i]);
    assert.equal(await name.getAttribute('aria-describedby'),await tip.getAttribute('id'));
-   const geometry=await name.evaluate(n=>{const r=n.closest('.gdh-fomofeed').getBoundingClientRect(),t=document.querySelector('.gdh-fomofeed-name-tooltip').getBoundingClientRect();return {height:r.height,fit:n.scrollHeight<=n.clientHeight+1&&n.scrollWidth<=n.clientWidth+1,bounded:t.left>=8&&t.top>=8&&t.right<=innerWidth-7&&t.bottom<=innerHeight-7};});
+   const geometry=await name.evaluate(n=>{const r=n.closest('.gdh-fomofeed').getBoundingClientRect(),t=document.querySelector('.gdh-fomofeed-name-tooltip').getBoundingClientRect();return {height:r.height,fit:n.clientHeight<=28&&n.scrollWidth<=n.clientWidth+1&&getComputedStyle(n).webkitLineClamp==='2',bounded:t.left>=8&&t.top>=8&&t.right<=innerWidth-7&&t.bottom<=innerHeight-7};});
    assert.ok(geometry.fit&&geometry.bounded);assert.equal(geometry.height,table?45:64.5);
    if(i===0)await page.screenshot({path:output+`fomo-extreme-name-tooltip-${table?'table':'card'}-${width}.png`});
    await page.keyboard.press('Escape');assert.equal(await tip.count(),0);
    await name.evaluate(n=>n.blur());
   }
   if(width===320) {
-   const name=page.locator('#cards .gdh-fomofeed__name').first();const narrow=await name.textContent();
+   const name=page.locator('#cards .gdh-fomofeed__name').first();const narrow=await name.evaluate(n=>n.scrollHeight);
    await page.setViewportSize({width:1000,height:900});
-   await page.waitForFunction(narrow=>document.querySelector('#cards .gdh-fomofeed__name').textContent.length>narrow.length,narrow);
+   await page.waitForFunction(narrow=>document.querySelector('#cards .gdh-fomofeed__name').scrollHeight<narrow,narrow);
+   assert.equal(await name.textContent(),extreme[0]);
    await page.setViewportSize({width:320,height:900});
-   await page.waitForFunction(narrow=>document.querySelector('#cards .gdh-fomofeed__name').textContent===narrow,narrow);
+   await page.waitForFunction(narrow=>document.querySelector('#cards .gdh-fomofeed__name').scrollHeight===narrow,narrow);
   }
   const name=page.locator('#cards .gdh-fomofeed__name').first();await name.focus();await name.evaluate(n=>n.closest('.gdh-fomofeed').remove());await page.waitForFunction(()=>!document.querySelector('.gdh-fomofeed-name-tooltip'));
   reports.push({kind:'exceptional-name-tooltip',width,table,unicode:true,bounded:true,hoverAndKeyboard:true,recycleCleanup:true});

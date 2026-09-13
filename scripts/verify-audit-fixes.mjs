@@ -1250,7 +1250,8 @@ await test('Maintained sources are English-only and the release surface is ZIP-o
       if (ignored.has(entry.name)) continue;
       const full = path.join(directory, entry.name);
       if (entry.isDirectory()) walk(full);
-      else if (!/\.(?:png|ico)$/i.test(entry.name)) files.push(full);
+      // Font fixtures are binary, like icons; decoding them as source invents text.
+      else if (!/\.(?:png|ico|ttf|woff2)$/i.test(entry.name)) files.push(full);
     }
   };
   walk(root);
