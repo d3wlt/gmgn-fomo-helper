@@ -4087,7 +4087,7 @@
     icon.title = ev.type === 'sell' ? 'Followed user sold' : ev.type === 'thesis'
       ? 'Followed user posted a thesis' : 'Followed user bought';
     container.appendChild(icon);
-    if (ev.position) {
+    if (ev.position && ev.type !== 'thesis') {
       const position = document.createElement('span');
       position.className = 'gdh-fomofeed__position';
       position.textContent = ev.position;

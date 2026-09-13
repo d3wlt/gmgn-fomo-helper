@@ -206,11 +206,12 @@ try {
   for (const table of [false,true]) {
     await layout('fixed','head');
     if (table) await page.evaluate(()=>{const h=document.createElement('div');h.dataset.testid='follow-tracking-table-header';document.querySelector('#native-fixture').prepend(h);});
-    const event={...(await eventsFor('thesis-presentation','head'))[0],type:'thesis',name:'baton',handle:'baton',symbol:'THESIS',addr:'',chain:'',usd:0,comment:'Narrative body must not survive <b>as HTML</b>'};
+    const event={...(await eventsFor('thesis-presentation','head'))[0],type:'thesis',position:'THESIS',name:'baton',handle:'baton',symbol:'THESIS',addr:'',chain:'',usd:0,comment:'Narrative body must not survive <b>as HTML</b>'};
     await deliver([event],1);
     const card=page.locator('.gdh-fomofeed.is-followed');
     const assertThesis=async()=>{
       assert.equal(await card.locator('.gdh-fomofeed__tag').textContent(),'Thesis');
+      assert.equal(await card.locator('.gdh-fomofeed__position').count(),0,'no redundant purple THESIS position badge');
       assert.equal(await card.locator('.gdh-fomofeed__name').textContent(),'baton');
       assert.equal(await card.locator('.gdh-fomofeed__thesis,.gdh-fomo__translated').count(),0,'no source/translation narrative node');
       assert.ok(!(await card.textContent()).includes('Narrative'));
