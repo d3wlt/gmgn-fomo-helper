@@ -2,6 +2,11 @@
 
 Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
 
+## 0.53.21 - 2026-09-13
+
+- Label tracker thesis events “Thesis” instead of “Narrative”; omit the redundant tokenless THESIS placeholder and inline thesis body in both card and table layouts. Keep real token tickers/actions, trader profiles, other event comments and token-panel narratives unchanged.
+- Add browser regressions for placeholder removal, real THESIS tickers, metadata updates and unchanged 45px table/64.5px card geometry.
+
 ## 0.53.20 - 2026-09-13
 
 - Fix ordinary FOMO usernames turning into dots under font/zoom geometry differences. Remove destructive JavaScript prefix fitting; preserve source names and use CSS clamping only for exceptional overflow, retaining full-name hover/focus tooltips.
