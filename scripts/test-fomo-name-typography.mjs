@@ -52,11 +52,11 @@ try {
  // Height-only changes at constant width must not destroy or freeze the text.
  const widths = (await metrics()).map(n=>n.width);
  await page.locator('.gdh-fomofeed__name').evaluateAll(nodes => nodes.forEach(n => n.style.maxHeight = '1px'));
- await page.waitForTimeout(80);
+ await page.waitForFunction(()=>[...document.querySelectorAll('.gdh-fomofeed__name')].every(n=>n.dataset.truncated==='true'),null,{timeout:1000});
  assert.ok((await metrics()).every(n => n.text === n.full && n.truncated === 'true'), 'temporary collapsed height preserves source text and updates overflow');
  assert.deepEqual((await metrics()).map(n=>n.width), widths);
  await page.locator('.gdh-fomofeed__name').evaluateAll(nodes => nodes.forEach(n => n.style.removeProperty('max-height')));
- await page.waitForTimeout(80);
+ await page.waitForFunction(()=>[...document.querySelectorAll('.gdh-fomofeed__name')].every(n=>n.dataset.truncated==='false'),null,{timeout:1000});
  assert.ok((await metrics()).every(n => n.text === n.full && n.truncated === 'false'), 'height-only recovery updates overflow without a width change');
  assert.deepEqual((await metrics()).map(n=>n.width), widths);
  // Late typography and transformed ancestors do not require cached-width refits.

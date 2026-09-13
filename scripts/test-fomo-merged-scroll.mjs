@@ -54,7 +54,7 @@ try {
     };
     document.querySelector('#viewport').addEventListener('scroll',()=>window.recycle(true));
     window.recycle();
-    window.events=Array.from({length:72},(_,i)=>({key:`merged-${i}`,source:'fomo-followed',followed:true,type:'buy',userId:'alice',handle:'alice',symbol:'TEST',chain:'eth',addr:'0x3333333333333333333333333333333333333333',ts:window.stamps[i*2]-500,usd:1,...(i%3===0?{type:'refund',comment:'Variable refund '.repeat(1+i%11)}:{})}));
+    window.events=Array.from({length:72},(_,i)=>({key:`merged-${i}`,source:'fomo-followed',followed:true,type:'buy',userId:'alice',handle:'alice',symbol:'TEST',chain:'eth',addr:'0x3333333333333333333333333333333333333333',ts:window.stamps[i*2]-500,usd:1,...(i%3===0?{type:'thesis',comment:'Variable thesis '.repeat(1+i%11)}:{})}));
     window.render=()=>window.__merged.render([...document.querySelectorAll('[data-sentry-component="TrackerListItem"]')],window.events);
   },height);
   assert.equal(await page.evaluate(()=>window.render()),true);
@@ -148,9 +148,8 @@ try {
   await page.evaluate(()=>{window.events.unshift({...window.events[0],key:'arrival-2',ts:window.stamps[0]+1000});window.render();});
   await page.waitForTimeout(250);
   assert.ok(Math.abs(await page.evaluate(()=>document.querySelector(`[data-gdh-fomo-key="${window.anchorKey}"]`).getBoundingClientRect().top)-fomoAnchor)<1);
-  // A retained refund comment/image can grow without a new provider signature.
-  // Thesis bodies are intentionally absent; retain this late-growth scroll test. The
-  // observer must remeasure real fractional geometry and preserve the reader.
+  // A retained thesis/translation can grow without a new provider signature.
+  // The observer must remeasure real fractional geometry and preserve the reader.
   const thesisResize=await page.evaluate(async()=>{
     const anchor=document.querySelector(`[data-gdh-fomo-key="${window.anchorKey}"]`),before=anchor.getBoundingClientRect().top;
     const thesis=document.querySelector('.gdh-fomofeed__thesis');

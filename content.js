@@ -4299,8 +4299,11 @@
     act.className = 'gdh-fomofeed__tag';
     act.textContent = tag.label;
     if (symText.textContent) sym.appendChild(symText);
-    sym.appendChild(act);
-    appendFomoFollowedMarkers(sym, ev);
+    const action = document.createElement('span');
+    action.className = 'gdh-fomofeed__action';
+    action.appendChild(act);
+    appendFomoFollowedMarkers(action, ev);
+    sym.appendChild(action);
 
     const amt = document.createElement('span');
     amt.className = 'gdh-fomofeed__tcell gdh-fomofeed__tamt';
@@ -4314,7 +4317,7 @@
     row.append(time, who, sym, amt, mc);
     card.appendChild(row);
 
-    if (['refund', 'callout', 'reply'].includes(ev.type) && ev.comment) {
+    if (['thesis', 'refund', 'callout', 'reply'].includes(ev.type) && ev.comment) {
       const text = document.createElement('div');
       text.className = 'gdh-fomofeed__thesis';
       text.textContent = ev.comment;
@@ -4387,8 +4390,11 @@
     time.dataset.gdhFomoTs = String(ev.ts);
     time.textContent = fomoFeedRelTime(ev.ts);
 
-    r1.append(av, name, tagEl);
-    appendFomoFollowedMarkers(r1, ev);
+    const action = document.createElement('span');
+    action.className = 'gdh-fomofeed__action';
+    action.appendChild(tagEl);
+    appendFomoFollowedMarkers(action, ev);
+    r1.append(av, name, action);
     r1.append(src, time);
     card.appendChild(r1);
 
@@ -4431,7 +4437,7 @@
     }
     card.appendChild(r2);
 
-    if (['refund', 'callout', 'reply'].includes(ev.type) && ev.comment) {
+    if (['thesis', 'refund', 'callout', 'reply'].includes(ev.type) && ev.comment) {
       const text = document.createElement('div');
       text.className = 'gdh-fomofeed__thesis';
       text.textContent = ev.comment;

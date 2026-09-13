@@ -172,7 +172,7 @@ try {
     for(const row of snapshot) { assert.equal(row.avatar,avatar);assert.equal(row.symbol,'SYNTH'); }
     assert.match(snapshot[0].mc,/\$48\.0K$/);assert.match(snapshot[0].title,/provider fdv/);
     assert.match(snapshot[1].mc,/\$12\.5K$/);assert.match(snapshot[1].title,/provider marketCap/);
-    assert.equal(snapshot[2].thesis,undefined,'tracker thesis body is absent, not merely hidden');assert.equal(snapshot[2].html,false);
+    assert.equal(snapshot[2].thesis,normalized[2].comment,'actual thesis post is rendered as text');assert.equal(snapshot[2].html,false);
     // Verify actual images load through the offline route, not just src strings.
     await page.waitForFunction(()=>[...document.querySelectorAll('.gdh-fomofeed__av img')].every(img=>img.complete&&img.naturalWidth===24));
     const enriched=normalized.map(e=>({...e,avatar:'https://fixture.invalid/recovered.svg',mcSource:e.mc?'current-token':e.mcSource,comment:e.type==='thesis'?`${e.comment} Updated.`:e.comment}));
@@ -206,19 +206,23 @@ try {
   for (const table of [false,true]) {
     await layout('fixed','head');
     if (table) await page.evaluate(()=>{const h=document.createElement('div');h.dataset.testid='follow-tracking-table-header';document.querySelector('#native-fixture').prepend(h);});
-    const event={...(await eventsFor('thesis-presentation','head'))[0],type:'thesis',position:'THESIS',name:'baton',handle:'baton',symbol:'THESIS',addr:'',chain:'',usd:0,comment:'Narrative body must not survive <b>as HTML</b>'};
+    const nativeHeight=await page.locator('[data-sentry-component="TrackerListItem"]').first().evaluate(n=>n.parentElement.getBoundingClientRect().height);
+    const event={...(await eventsFor('thesis-presentation','head'))[0],type:'thesis',position:'THESIS',name:'baton',handle:'baton',symbol:'THESIS',addr:'',chain:'',usd:0,comment:'good & healthy redistro\n\na lot of weak hands in the chart that needed to get shaken out\n\nnow it is time to build the foundation. <b>Literal markup, not HTML</b>'};
     await deliver([event],1);
     const card=page.locator('.gdh-fomofeed.is-followed');
-    const assertThesis=async()=>{
+    const assertThesis=async(expected)=>{
       assert.equal(await card.locator('.gdh-fomofeed__tag').textContent(),'Thesis');
       assert.equal(await card.locator('.gdh-fomofeed__position').count(),0,'no redundant purple THESIS position badge');
       assert.equal(await card.locator('.gdh-fomofeed__name').textContent(),'baton');
-      assert.equal(await card.locator('.gdh-fomofeed__thesis,.gdh-fomo__translated').count(),0,'no source/translation narrative node');
-      assert.ok(!(await card.textContent()).includes('Narrative'));
+      assert.equal(await card.locator('.gdh-fomofeed__thesis').textContent(),expected);
+      assert.equal(await card.locator('.gdh-fomofeed__thesis b').count(),0,'markup remains literal text');
+      const geometry=await card.evaluate(n=>{const b=n.querySelector('.gdh-fomofeed__thesis'),r=b.getBoundingClientRect(),c=n.getBoundingClientRect();return {height:c.height,contained:r.top>=c.top&&r.bottom<=c.bottom,unclipped:b.scrollHeight<=b.clientHeight+1,width:b.scrollWidth<=b.clientWidth+1};});
+      assert.ok(geometry.contained&&geometry.unclipped&&geometry.width,JSON.stringify(geometry));
+      assert.ok(geometry.height>(table?45:64.5),'owned FOMO slot grows to fit readable post');
       assert.equal(await card.evaluate(n=>n.classList.contains('is-table')),table);
-      assert.ok(Math.abs((await card.boundingBox()).height-(table?45:64.5))<.01,'native fixed slot geometry retained');
+      assert.equal(await page.locator('[data-sentry-component="TrackerListItem"]').first().evaluate(n=>n.parentElement.getBoundingClientRect().height),nativeHeight,'native recycler slot remains unchanged');
     };
-    await assertThesis();
+    await assertThesis(event.comment);
     assert.equal(await card.locator('.gdh-fomofeed__sym,.gdh-fomofeed__symtext').count(),0,'no placeholder badge node');
     assert.equal(await card.locator('.gdh-native-buy-host').count(),0,'no tokenless financial action');
     const profile=await card.locator('.gdh-fomofeed__name').evaluate(n=>{
@@ -227,10 +231,13 @@ try {
     });
     assert.deepEqual(profile,[['https://fomo.family/profile/baton','_blank','noopener,noreferrer']]);
     await card.screenshot({path:`test-results/fomo-thesis-${table?'table':'card'}-placeholder.png`});
-    const token={...event,addr:'0x3333333333333333333333333333333333333333',chain:'eth',img:'https://fixture.invalid/token.svg',comment:'Updated narrative is still omitted'};
+    const identity=await card.getAttribute('data-gdh-fomo-key');
+    const token={...event,addr:'0x3333333333333333333333333333333333333333',chain:'eth',img:'https://fixture.invalid/token.svg',comment:`${event.comment}\n\nUpdated conviction after token metadata recovery.`};
     await deliver([token],1);
     await page.waitForFunction(()=>document.querySelector('.gdh-fomofeed__sym,.gdh-fomofeed__symtext')?.textContent==='THESIS');
-    await assertThesis();
+    await assertThesis(token.comment);
+    assert.equal(await card.getAttribute('data-gdh-fomo-key'),identity);
+    assert.equal(await card.evaluate(n=>n.classList.contains('is-new')),false);
     assert.equal(await card.locator('.gdh-native-buy-host').getAttribute('data-address'),token.addr);
     assert.equal(await card.locator('.gdh-native-buy-host').getAttribute('data-chain'),'eth');
     assert.match(await card.getAttribute('title'),/THESIS · Open GMGN token page/);
@@ -239,6 +246,14 @@ try {
     // sink; the native bridge itself is covered separately. Never click Buy.
     assert.equal(await page.evaluate(e=>window.__direct.tokenIntent(e),token),`/eth/token/${token.addr}`);
     await card.screenshot({path:`test-results/fomo-thesis-${table?'table':'card'}-token.png`});
+    await page.evaluate(()=>{window.Translator={availability:async()=> 'available',create:async()=>({translate:async()=> 'Translated thesis <b>literal markup</b>\nSecond readable line.'})};window.__direct.settings({fomoTranslate:true});});
+    const translated={...token,comment:'\u3053\u308c\u306f\u9577\u671f\u7684\u306a\u78ba\u4fe1\u306b\u3064\u3044\u3066\u306e\u6295\u7a3f\u3067\u3059\u3002'};
+    await deliver([translated],1);
+    await page.waitForFunction(()=>document.querySelector('.gdh-fomo__zh')?.textContent.includes('Translated thesis'));
+    assert.equal(await card.locator('.gdh-fomofeed__thesis').textContent(),translated.comment);
+    assert.equal(await card.locator('.gdh-fomo__zh b').count(),0);
+    assert.ok(await card.evaluate(n=>{const b=n.querySelector('.gdh-fomo__zh');return b.getBoundingClientRect().bottom<=n.getBoundingClientRect().bottom&&b.scrollHeight<=b.clientHeight+1;}));
+    await page.evaluate(()=>{delete window.Translator;});
     for (const type of ['buy','sell','refund','callout','reply']) {
       const preserved=await page.evaluate(e=>{
         const n=window.__direct.build(e);return {symbol:n.querySelector('.gdh-fomofeed__sym,.gdh-fomofeed__symtext')?.textContent,comment:n.querySelector('.gdh-fomofeed__thesis')?.textContent,html:!!n.querySelector('.gdh-fomofeed__thesis b'),buy:n.querySelector('.gdh-native-buy-host')?.dataset.address};
@@ -248,7 +263,7 @@ try {
       assert.equal(preserved.comment,['refund','callout','reply'].includes(type)?token.comment:undefined);
       assert.equal(preserved.html,false);
     }
-    reports.push({scenario:`tracker thesis ${table?'table':'card'}: placeholder removal, no body after enrichment, real THESIS ticker/profile/token actions and fixed geometry`,passed:true});
+    reports.push({scenario:`tracker thesis ${table?'table':'card'}: readable post after enrichment, placeholder/badge removal, real THESIS ticker/profile/token actions and unchanged native geometry`,passed:true});
   }
   assert.equal(await page.evaluate(()=>window.__fixture.debug.length),0,'render diagnostics off by default');
   await page.evaluate(()=>window.__direct.settings({debugLogging:true}));
@@ -411,6 +426,62 @@ try {
     await page.locator('#metadata-preview').screenshot({path:`${root}/test-results/fomo-metadata-${width}.png`});
   }
   reports.push({scenario:'real sparse/enriched card and table rendering at 1280/570/390px',passed:true});
+  // Geometry reference reconstructed from the loaded GMGN TableItem/aq source,
+  // not a live table-mode observation. Keep native minimum-width behavior separate.
+  await context.route('https://fixture.invalid/geist.ttf', r=>r.fulfill({body:fs.readFileSync(`${root}/scripts/fixtures/geist/Geist-Variable.ttf`),contentType:'font/ttf'}));
+  await page.addStyleTag({content:'@font-face{font-family:Geist;src:url(https://fixture.invalid/geist.ttf)} #alignment-preview{font-family:Geist,sans-serif}'});
+  await page.evaluate(()=>document.fonts.load('600 13px Geist'));
+  for(const width of [1000,570,428,390]) {
+    await page.setViewportSize({width,height:900});
+    await page.evaluate(({width,sparse})=>{
+      document.querySelector('#metadata-preview')?.remove();document.querySelector('#alignment-preview')?.remove();
+      const host=document.createElement('div');host.id='alignment-preview';host.style.cssText='width:100%;background:#111416;color:#eee;--color-bg-100:20 22 27';document.body.append(host);
+      const title=document.createElement('h3');title.textContent='Offline source renderer / native geometry reference';title.style.cssText='font:13px Geist;margin:0;padding:12px';host.append(title);
+      if(width>=428){
+        const surplus=Math.max(0,Math.floor((width-428)/3));
+        const n=document.createElement('div');n.id='native-table-reference';n.style.cssText='display:flex;align-items:center;gap:12px;padding:8px 12px;height:45px;box-sizing:border-box;border-bottom:1px solid #333;font:13px/28px Geist';
+        for(const [cls,w,text,margin] of [['ttime',32,'1m',-12],['twho',120+surplus,'Native trader',-12],['tsym',120+surplus,'Native token',0],['tamt',60+surplus,'0.118',-12],['tmc',60,'$14.0K',0]]){const c=document.createElement('div');c.dataset.cell=cls;c.textContent=text;c.style.cssText=`width:${w}px;flex:none;margin-right:${margin}px;${cls==='tmc'?'text-align:right;':''}${cls==='ttime'?'font:12px/18px Geist;':''}`;n.append(c);}host.append(n);
+      }
+      for(const [type,position,symbol,name] of [['buy','MORE','ZFBRAIN','bigwarzeth'],['sell','PARTIAL','Tulip','MomoOnChain'],['thesis','THESIS','ENGINE','Ed_x0101']]){
+        const e={...sparse,key:`preview-${type}`,type,position,symbol,name,handle:name,usd:499,mc:14000,img:'https://fixture.invalid/token.svg',comment:type==='thesis'?'good & healthy redistro\n\na lot of weak hands in the chart that needed to get shaken out\n\nnow it is time to build the foundation. <b>Literal text</b>':''};
+        const c=window.__direct.build(e,true).cloneNode(true);c.dataset.preview=type;host.append(c);
+      }
+      const n=document.createElement('div');n.id='native-card-reference';n.style.cssText='height:64.5px;padding:0 12px;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;gap:4px;border-bottom:1px solid #333;font:13px/18px Geist';n.innerHTML='<div style="display:flex;justify-content:space-between"><span>Native trader</span><span data-cell="time">1m</span></div><div style="display:flex;justify-content:space-between"><span>0.118 Native token</span><span data-cell="mc">MC:$14.0K</span></div>';host.append(n);
+      host.append(window.__direct.build({...sparse,key:'preview-card',type:'buy',position:'MORE',symbol:'ZFBRAIN',name:'bigwarzeth',handle:'bigwarzeth',usd:499,mc:14000},false).cloneNode(true));
+    },{width,sparse});
+    await page.mouse.move(0,899);
+    const geometry=await page.locator('#alignment-preview').evaluate(host=>{
+      const rect=n=>n.getBoundingClientRect(),native=host.querySelector('#native-table-reference');
+      return {overflow:host.scrollWidth>host.clientWidth,rows:[...host.querySelectorAll('.gdh-fomofeed')].map(n=>{
+        const r=rect(n),table=n.classList.contains('is-table'),action=n.querySelector('.gdh-fomofeed__action'),a=rect(action),cell=rect(action.parentElement),pos=n.querySelector('.gdh-fomofeed__position'),p=pos&&rect(pos),name=n.querySelector('.gdh-fomofeed__name');
+        const ref=table?native:host.querySelector('#native-card-reference');
+        const edges=ref?(table?['ttime','twho','tsym','tamt','tmc']:['time','mc']).map(key=>{const f=n.querySelector(`.gdh-fomofeed__${key}`),nat=ref.querySelector(`[data-cell=${key}]`),fr=rect(f),nr=rect(nat);return {key,delta:table?fr.left-nr.left:fr.right-nr.right,font:getComputedStyle(f).fontSize,nativeFont:getComputedStyle(nat).fontSize};}):[];
+        const b=n.querySelector('.gdh-fomofeed__thesis'),br=b&&rect(b);
+        return {table,type:n.dataset.preview,height:r.height,actionVisible:a.left>=cell.left&&a.right<=cell.right,oneLine:!p||Math.abs((p.top+p.height/2)-(a.top+a.height/2))<1,edges,fullName:name.textContent===name.getAttribute('aria-label'),body:!b||(b.scrollHeight<=b.clientHeight+1&&br.bottom<=r.bottom&&br.left>=r.left&&br.right<=r.right)};
+      })};
+    });
+    assert.equal(geometry.overflow,false,JSON.stringify(geometry));
+    for(const row of geometry.rows){
+      assert.ok(row.actionVisible&&row.oneLine&&row.fullName&&row.body,`${width}: ${JSON.stringify(row)}`);
+      if(row.type!=='thesis')assert.ok(Math.abs(row.height-(row.table?45:64.5))<.01);
+      for(const edge of row.edges){if(width>480||!row.table||['ttime','twho','tmc'].includes(edge.key))assert.ok(Math.abs(edge.delta)<2.1,`${width} ${JSON.stringify(edge)}`);if(['ttime','time','tmc','mc'].includes(edge.key))assert.equal(edge.font,edge.nativeFont);}
+    }
+    await page.locator('#alignment-preview').screenshot({path:`${root}/test-results/fomo-native-alignment-${width}.png`});
+    // Synthetic unavailable state only; never mount or click a real trade control.
+    const hovered=page.locator('[data-preview=buy]');
+    await hovered.locator('.gdh-native-buy-host').evaluate(n=>{n.dataset.state='unavailable';n.textContent='Buy unavailable';});
+    await hovered.hover();
+    assert.equal(await hovered.locator('.gdh-fomofeed__tamt').evaluate(n=>getComputedStyle(n).visibility),'hidden');
+    assert.notEqual(await hovered.locator('.gdh-native-buy-host').evaluate(n=>getComputedStyle(n).backgroundColor),'rgba(0, 0, 0, 0)');
+    assert.equal(await hovered.locator('.gdh-fomofeed__position').textContent(),'MORE');
+    await hovered.screenshot({path:`${root}/test-results/fomo-native-hover-${width}.png`});
+    const hoverCard=page.locator('#alignment-preview .gdh-fomofeed:not(.is-table)');
+    await hoverCard.locator('.gdh-native-buy-host').evaluate(n=>{n.dataset.state='unavailable';n.textContent='Buy unavailable';});
+    await hoverCard.hover();
+    assert.ok(await hoverCard.evaluate(n=>{const a=n.querySelector('.gdh-fomofeed__action').getBoundingClientRect(),b=n.querySelector('.gdh-native-buy-host').getBoundingClientRect();return a.right<=b.left&&Math.abs(n.getBoundingClientRect().height-64.5)<.01;}),'card action group does not overlap hover control');
+    await hoverCard.screenshot({path:`${root}/test-results/fomo-native-card-hover-${width}.png`});
+  }
+  reports.push({scenario:'native default table/card geometry, timestamp/MC sizes, single-line action groups and readable thesis at 1000/570/428/390; source-reconstructed native table, no live mutation',passed:true});
   assert.deepEqual(errors,[]);
   const latencies=reports.flatMap(r=>r.latencies||[]).sort((a,b)=>a-b);
   const result={synthetic:true,externalNetwork:'blocked',scenarios:reports.length,domInsertionMs:{n:latencies.length,p50:latencies[Math.floor(latencies.length*.5)],p95:latencies[Math.floor(latencies.length*.95)],max:latencies.at(-1)},reports};
