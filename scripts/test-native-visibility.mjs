@@ -9,6 +9,8 @@ import assert from 'node:assert/strict';
 const root=fileURLToPath(new URL('..',import.meta.url));process.chdir(root);
 const profile=fs.mkdtempSync(path.join(os.tmpdir(),'gdh-native-visibility-'));
 const proc=spawn(chromium.executablePath(),['--headless=new',...(process.platform==='linux'?['--no-sandbox']:[]),'--remote-debugging-port=0','--remote-debugging-address=127.0.0.1',`--user-data-dir=${profile}`,`--load-extension=${root}`,`--disable-extensions-except=${root}`,'--host-resolver-rules=MAP * ~NOTFOUND','--no-first-run','--no-default-browser-check','about:blank'],{stdio:'ignore'});
+// Register before any asynchronous work: a signalled exit leaves exitCode null.
+const procExited=new Promise(resolve=>proc.once('exit',resolve));
 let browser;
 try{
  const portFile=path.join(profile,'DevToolsActivePort'),deadline=Date.now()+15000;
@@ -38,4 +40,14 @@ try{
  const result={realMV3:true,actualNativeVisibility:true,syntheticHost:true,liveAccount:false,visibilityPropertyOverrides:false,hiddenCleanup:true,selectionRestored:true,additionalReadsOnRestore:0};
  fs.writeFileSync('test-results/native-visibility-verification.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result));
  await worker.evaluate(id=>chrome.tabs.remove(id),temp);
-}finally{if(browser)await browser.close().catch(()=>{});proc.kill();await new Promise(r=>proc.exitCode!==null?r():proc.once('exit',r));fs.rmSync(profile,{recursive:true,force:true});}
+}finally{
+ if(browser)await browser.close().catch(()=>{});
+ proc.kill();
+ const forceKill=setTimeout(()=>proc.kill('SIGKILL'),5000);forceKill.unref();
+ try{await procExited;}finally{clearTimeout(forceKill);}
+ // Chromium descendants can finish profile writes after the parent exits.
+ // Retry transient ENOTEMPTY/EBUSY with a bound; never swallow cleanup failure.
+ await fs.promises.rm(profile,{recursive:true,force:true,maxRetries:10,retryDelay:100});
+ assert.equal(fs.existsSync(profile),false,'Disposable profile removed after shutdown');
+ console.log('PASS owned Chromium exit and profile removal');
+}
