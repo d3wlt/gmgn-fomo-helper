@@ -39,6 +39,12 @@ try {
     poll: pollFomoFollowedFeed,
     build: buildFomoFeedCard,
     table: buildFomoFeedTableRow,
+    tokenIntent: ev => {
+      const original = gdhSpaNavigate; let target;
+      gdhSpaNavigate = url => { target = url; };
+      try { buildFomoFeedCard(ev).click(); return target; }
+      finally { gdhSpaNavigate = original; }
+    },
     epoch: () => fomoFollowedEpoch,
     identity: trackingFeedEventIdentity,
     eligible: () => visibleTrackingFeedEvents(nativeTrackingFeedRows(trackerCards())).map(e => e.key),
@@ -166,7 +172,7 @@ try {
     for(const row of snapshot) { assert.equal(row.avatar,avatar);assert.equal(row.symbol,'SYNTH'); }
     assert.match(snapshot[0].mc,/\$48\.0K$/);assert.match(snapshot[0].title,/provider fdv/);
     assert.match(snapshot[1].mc,/\$12\.5K$/);assert.match(snapshot[1].title,/provider marketCap/);
-    assert.equal(snapshot[2].thesis,items[2].comment.comment);assert.equal(snapshot[2].html,false);
+    assert.equal(snapshot[2].thesis,undefined,'tracker thesis body is absent, not merely hidden');assert.equal(snapshot[2].html,false);
     // Verify actual images load through the offline route, not just src strings.
     await page.waitForFunction(()=>[...document.querySelectorAll('.gdh-fomofeed__av img')].every(img=>img.complete&&img.naturalWidth===24));
     const enriched=normalized.map(e=>({...e,avatar:'https://fixture.invalid/recovered.svg',mcSource:e.mc?'current-token':e.mcSource,comment:e.type==='thesis'?`${e.comment} Updated.`:e.comment}));
@@ -194,6 +200,54 @@ try {
     assert.equal(await page.locator('.gdh-fomofeed.is-new').count(),0,'verified cross-source alias must not replay animation');
     assert.equal(await page.locator('.gdh-fomofeed__usd').textContent(),'$556');
     reports.push({scenario:`synthetic native Alerts contract ${mode}: USD/MC provenance/identity/avatar/thesis/stable metadata`,passed:true});
+  }
+  // Tracker-only thesis presentation: tokenless placeholder then real metadata
+  // on the same event identity, through the actual callback/cache in both layouts.
+  for (const table of [false,true]) {
+    await layout('fixed','head');
+    if (table) await page.evaluate(()=>{const h=document.createElement('div');h.dataset.testid='follow-tracking-table-header';document.querySelector('#native-fixture').prepend(h);});
+    const event={...(await eventsFor('thesis-presentation','head'))[0],type:'thesis',name:'baton',handle:'baton',symbol:'THESIS',addr:'',chain:'',usd:0,comment:'Narrative body must not survive <b>as HTML</b>'};
+    await deliver([event],1);
+    const card=page.locator('.gdh-fomofeed.is-followed');
+    const assertThesis=async()=>{
+      assert.equal(await card.locator('.gdh-fomofeed__tag').textContent(),'Thesis');
+      assert.equal(await card.locator('.gdh-fomofeed__name').textContent(),'baton');
+      assert.equal(await card.locator('.gdh-fomofeed__thesis,.gdh-fomo__translated').count(),0,'no source/translation narrative node');
+      assert.ok(!(await card.textContent()).includes('Narrative'));
+      assert.equal(await card.evaluate(n=>n.classList.contains('is-table')),table);
+      assert.ok(Math.abs((await card.boundingBox()).height-(table?45:64.5))<.01,'native fixed slot geometry retained');
+    };
+    await assertThesis();
+    assert.equal(await card.locator('.gdh-fomofeed__sym,.gdh-fomofeed__symtext').count(),0,'no placeholder badge node');
+    assert.equal(await card.locator('.gdh-native-buy-host').count(),0,'no tokenless financial action');
+    const profile=await card.locator('.gdh-fomofeed__name').evaluate(n=>{
+      const original=window.open,calls=[];window.open=(...args)=>calls.push(args);
+      try {n.click();return calls;} finally {window.open=original;}
+    });
+    assert.deepEqual(profile,[['https://fomo.family/profile/baton','_blank','noopener,noreferrer']]);
+    await card.screenshot({path:`test-results/fomo-thesis-${table?'table':'card'}-placeholder.png`});
+    const token={...event,addr:'0x3333333333333333333333333333333333333333',chain:'eth',img:'https://fixture.invalid/token.svg',comment:'Updated narrative is still omitted'};
+    await deliver([token],1);
+    await page.waitForFunction(()=>document.querySelector('.gdh-fomofeed__sym,.gdh-fomofeed__symtext')?.textContent==='THESIS');
+    await assertThesis();
+    assert.equal(await card.locator('.gdh-native-buy-host').getAttribute('data-address'),token.addr);
+    assert.equal(await card.locator('.gdh-native-buy-host').getAttribute('data-chain'),'eth');
+    assert.match(await card.getAttribute('title'),/THESIS · Open GMGN token page/);
+    assert.equal(await card.locator('.gdh-fomofeed__logo img').getAttribute('src'),token.img);
+    // Exercise the production card click handler with a test-only navigation
+    // sink; the native bridge itself is covered separately. Never click Buy.
+    assert.equal(await page.evaluate(e=>window.__direct.tokenIntent(e),token),`/eth/token/${token.addr}`);
+    await card.screenshot({path:`test-results/fomo-thesis-${table?'table':'card'}-token.png`});
+    for (const type of ['buy','sell','refund','callout','reply']) {
+      const preserved=await page.evaluate(e=>{
+        const n=window.__direct.build(e);return {symbol:n.querySelector('.gdh-fomofeed__sym,.gdh-fomofeed__symtext')?.textContent,comment:n.querySelector('.gdh-fomofeed__thesis')?.textContent,html:!!n.querySelector('.gdh-fomofeed__thesis b'),buy:n.querySelector('.gdh-native-buy-host')?.dataset.address};
+      },{...token,type});
+      assert.equal(preserved.symbol,'THESIS',`${type} genuine ticker unchanged`);
+      assert.equal(preserved.buy,token.addr);
+      assert.equal(preserved.comment,['refund','callout','reply'].includes(type)?token.comment:undefined);
+      assert.equal(preserved.html,false);
+    }
+    reports.push({scenario:`tracker thesis ${table?'table':'card'}: placeholder removal, no body after enrichment, real THESIS ticker/profile/token actions and fixed geometry`,passed:true});
   }
   assert.equal(await page.evaluate(()=>window.__fixture.debug.length),0,'render diagnostics off by default');
   await page.evaluate(()=>window.__direct.settings({debugLogging:true}));

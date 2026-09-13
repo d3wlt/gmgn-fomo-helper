@@ -3815,7 +3815,7 @@
   const FOMO_FEED_TAGS = {
     buy: { label: 'Buy', cls: 'is-buy' },
     sell: { label: 'Sell', cls: 'is-sell' },
-    thesis: { label: 'Narrative', cls: 'is-thesis' },
+    thesis: { label: 'Thesis', cls: 'is-thesis' },
     callout: { label: 'Callout', cls: 'is-callout' },
     reply: { label: 'Reply', cls: 'is-reply' },
   };
@@ -4109,6 +4109,9 @@
 
   function fomoFeedTokenLabel(ev) {
     const symbol = String(ev.symbol || '').trim();
+    // A tokenless thesis can carry the provider's event-kind placeholder.
+    // Keep real tickers (even THESIS) whenever a token address is available.
+    if (ev.type === 'thesis' && !ev.addr && (!symbol || symbol.toUpperCase() === 'THESIS')) return '';
     if (symbol) return symbol;
     const address = String(ev.addr || '');
     return address ? `${address.slice(0, 6)}…${address.slice(-4)}` : 'Token unavailable';
@@ -4295,7 +4298,8 @@
     const act = document.createElement('span');
     act.className = 'gdh-fomofeed__tag';
     act.textContent = tag.label;
-    sym.append(symText, act);
+    if (symText.textContent) sym.appendChild(symText);
+    sym.appendChild(act);
     appendFomoFollowedMarkers(sym, ev);
 
     const amt = document.createElement('span');
@@ -4310,7 +4314,7 @@
     row.append(time, who, sym, amt, mc);
     card.appendChild(row);
 
-    if (['thesis', 'refund', 'callout', 'reply'].includes(ev.type) && ev.comment) {
+    if (['refund', 'callout', 'reply'].includes(ev.type) && ev.comment) {
       const text = document.createElement('div');
       text.className = 'gdh-fomofeed__thesis';
       text.textContent = ev.comment;
@@ -4410,7 +4414,7 @@
       r2.appendChild(logo);
     }
 
-    {
+    if (fomoFeedTokenLabel(ev)) {
       const sym = document.createElement('span');
       sym.className = 'gdh-fomofeed__sym';
       sym.textContent = fomoFeedTokenLabel(ev);
@@ -4427,7 +4431,7 @@
     }
     card.appendChild(r2);
 
-    if (['thesis', 'refund', 'callout', 'reply'].includes(ev.type) && ev.comment) {
+    if (['refund', 'callout', 'reply'].includes(ev.type) && ev.comment) {
       const text = document.createElement('div');
       text.className = 'gdh-fomofeed__thesis';
       text.textContent = ev.comment;
