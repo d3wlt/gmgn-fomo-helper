@@ -1,8 +1,6 @@
 # GMGN FOMO Helper
 
-A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.21** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
-
-**J7Tracker and DeBot integrations have been removed.** No J7Tracker account, tab or companion service is required; the extension no longer integrates with DeBot. The native GMGN tracker and passive FOMO Following feed remain separate from that retired integration.
+A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.22** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
 
 This project is not affiliated with GMGN, FOMO or the original upstream author.
 
@@ -23,7 +21,7 @@ For an update, replace the files in your existing unpacked extension folder, sel
 - Interleaves passive FOMO Following activity with original native GMGN cards in one chronological panel and one scrollbar.
 - Handles fractional native row heights and asynchronous row recycling without rebuilding the panel during normal scrolling.
 - Preserves your reading position when new activity arrives below the top. Unsupported geometry or persistently stale index data fails closed instead of guessing native row positions.
-- Keeps original native GMGN row actions and followed-user highlighting. Extension token blocking has been removed; callout-account blocklists remain.
+- Keeps original native GMGN row actions, followed-user highlighting and callout-account blocklists.
 - FOMO trader names use the full available handle and wrap within existing card/table slots instead of a 72px ellipsis column. Compact rows allocate more room to names without overlapping amount/market-cap columns. The two-line name budget preserves 45px compact and 64.5px card geometry. Only exceptionally long names are visually clamped by CSS to two lines with an ellipsis and a viewport-bounded full-name hover/keyboard-focus tooltip. The complete source name stays in the DOM; no JavaScript prefix fitting can turn normal names into dots. CSS responds directly to layout and font changes. Normal names remain fully readable. Native GMGN names/actions/row heights are not rewritten.
 - FOMO cards can expose GMGN's **native QuickBuy** on hover, including Robinhood. It uses GMGN's Following wallet/amount settings and validates the current account, chain and token.
 
@@ -60,9 +58,7 @@ The token panel and holder count may make their own scoped requests using your b
 - Notification history opens from the bell at the end of GMGN's main navigation; the FOMO and notification launchers no longer float over page content. Unsupported or hidden native mount points do not get floating fallback buttons.
 - Hide the third-party Lightning Trade button.
 
-Special-wallet watch is removed entirely: no stars, colored wallet highlights, management bar, add-wallet watch checkbox or pinned watch activity. Existing saved watch settings are inert; watched developer tracking, holder rankings and the independent cross-chain native wallet-follow shortcut remain. Reload the extension and refresh GMGN to remove UI from the old running version.
-
-Open the native GMGN **Holding** panel to initialize the selected wallets. Surge monitoring needs a visible GMGN page and recent captured native request scopes. Expired scopes and ambiguous chain/account data fail closed. Manifesto pop-ups/list tabs, Flap tax badges, custom BSC RPC settings, J7Tracker/Pump activity and DeBot support are not included.
+Open the native GMGN **Holding** panel to initialize the selected wallets. Surge monitoring needs a visible GMGN page and recent captured native request scopes. Expired scopes and ambiguous chain/account data fail closed.
 
 ## Diagnostics
 
@@ -82,7 +78,7 @@ Requirements: Node.js 22+, Python 3 for the portable builder, or PowerShell for 
 npm ci
 npx playwright install chromium
 npm run verify
-python3 scripts/build-release.py --tag v0.53.21
+python3 scripts/build-release.py --tag v0.53.22
 ```
 
 On PowerShell:
@@ -93,4 +89,4 @@ On PowerShell:
 
 Builders use the canonical runtime-file allowlist and produce `dist/gmgn-fomo-helper-vX.Y.Z.zip` plus its SHA-256 checksum. Tests, screenshots, local diagnostics and dependencies stay outside the package. Release notes must match the manifest version and include the required installation, usage, updating and privacy sections.
 
-The tag-triggered GitHub workflow runs the verification suite before building and publishing release assets. Fixture tests cover production code with synthetic data and isolated Chromium, including account/route races, passive delivery, native-control guards, merged scrolling, retirement of removed integrations and MV3 lifecycle. They do not replace a signed-in smoke test when third-party interfaces change.
+The tag-triggered GitHub workflow runs the verification suite before building and publishing release assets. Fixture tests cover production code with synthetic data and isolated Chromium, including account/route races, passive delivery, native-control guards, merged scrolling and MV3 lifecycle. They do not replace a signed-in smoke test when third-party interfaces change.

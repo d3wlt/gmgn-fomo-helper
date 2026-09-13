@@ -2,6 +2,11 @@
 
 Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
 
+## 0.53.22 - 2026-09-13
+
+- Remove the redundant purple THESIS position-action badge from thesis tracker rows in both layouts; retain the plain Thesis label and unrelated trade position badges.
+- Refocus README on current functionality rather than retired integrations/features.
+
 ## 0.53.21 - 2026-09-13
 
 - Label tracker thesis events “Thesis” instead of “Narrative”; omit the redundant tokenless THESIS placeholder and inline thesis body in both card and table layouts. Keep real token tickers/actions, trader profiles, other event comments and token-panel narratives unchanged.
