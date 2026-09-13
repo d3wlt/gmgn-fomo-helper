@@ -642,11 +642,14 @@
 
 .gdh-fomo__close:hover { background: rgba(139, 147, 161, 0.2); color: #fff; }
 
-.gdh-fomo__list {
+.gdh-fomo__body {
   flex: 1 1 auto;
-  overflow-y: auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
   overscroll-behavior: contain;
 }
+.gdh-fomo__list { min-width: 0; overflow-wrap: anywhere; }
 
 .gdh-fomo__empty {
   padding: 26px 12px;
@@ -833,8 +836,24 @@
 
 .gdh-fomo__hwho {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+}
+.gdh-fomo__identity {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex: 0 0 100%;
+  min-width: 0;
+}
+.gdh-fomo__identity .gdh-fomo__name {
+  min-width: 0;
+  max-width: none;
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .gdh-fomo__hhold {
@@ -873,30 +892,6 @@
   color: #fde68a;
   background: rgba(245, 158, 11, 0.2);
   box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.4);
-}
-
-
-.gdh-fomo__tr {
-  border: 0;
-  background: none;
-  color: #6b7280;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  padding: 0 4px;
-}
-
-.gdh-fomo__tr.is-on {
-  color: #60a5fa;
-}
-
-.gdh-fomo__tr.is-off {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.gdh-fomo__tr.is-wait {
-  color: #fbbf24;
 }
 
 
@@ -959,6 +954,7 @@
 
 .gdh-fomo__hnums {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 10px;
   margin-top: 3px;
@@ -1657,8 +1653,20 @@
 }
 .gdh-fomofeed__av img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .gdh-fomofeed__name {
-  font-weight: 600; color: inherit; max-width: 110px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none;
+  font-weight: 600; color: inherit;
+  min-width: 0; flex: 1 1 auto;
+  white-space: normal; overflow-wrap: anywhere;
+  line-height: 14px; max-height: 28px; overflow: hidden;
+  /* JS fits only overflowing names to these unchanged two-line slots. */
+}
+.gdh-fomofeed__name:focus-visible { outline: 1px solid currentColor; outline-offset: -1px; }
+.gdh-fomofeed-name-tooltip {
+  position: fixed; z-index: 2147483647; box-sizing: border-box;
+  width: max-content; max-width: min(360px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px); overflow: auto;
+  padding: 8px 10px; border: 1px solid #333; border-radius: 8px;
+  background: #1b1b1b; color: #ddd; box-shadow: 0 2px 8px #0005;
+  font: 400 13px/18px system-ui; white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .gdh-fomofeed__name:hover { text-decoration: underline; }
 .gdh-fomofeed__tag { font-size: 12px; font-weight: 500; flex: none; }
@@ -1775,10 +1783,13 @@
   justify-content: center;
 }
 .gdh-fomofeed__trow {
-  display: flex;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1.6fr) minmax(0, 1.25fr) minmax(0, .7fr) minmax(0, .7fr);
   align-items: center;
-  padding: 8px 0;
-  line-height: 28px;
+  height: 44px;
+  box-sizing: border-box;
+  padding: 6px 0;
+  line-height: 14px;
   font-size: 13px;
   min-width: 0;
 }
@@ -1790,12 +1801,11 @@
   overflow: hidden;
   white-space: nowrap;
 }
-.gdh-fomofeed__ttime { width: 42px; color: #8a93a6; font-size: 12px; }
-.gdh-fomofeed__twho { width: 120px; }
-.gdh-fomofeed__twho .gdh-fomofeed__name { max-width: 72px; }
-.gdh-fomofeed__tsym { width: 180px; }
+.gdh-fomofeed__ttime { min-width: 0; color: #8a93a6; font-size: 12px; }
+.gdh-fomofeed__twho { min-width: 0; padding-right: 8px; }
+.gdh-fomofeed__tsym { min-width: 0; flex-wrap: wrap; gap: 2px 4px; max-height: 32px; }
 .gdh-fomofeed__symtext { overflow: hidden; text-overflow: ellipsis; max-width: 82px; color: inherit; }
-.gdh-fomofeed__tamt { width: 84px; font-weight: 600; justify-content: flex-end; }
+.gdh-fomofeed__tamt { min-width: 0; font-weight: 600; justify-content: flex-end; }
 .gdh-fomofeed.is-buy .gdh-fomofeed__tamt { color: #22c55e; }
 .gdh-fomofeed.is-sell .gdh-fomofeed__tamt { color: #f87171; }
 .gdh-fomofeed.is-transfer .gdh-fomofeed__tamt { color: #94a3b8; }
@@ -1830,6 +1840,7 @@
 }
 .gdh-fomo__fold:hover { color: #f5b83d; background: rgba(245, 184, 61, 0.12); }
 .gdh-fomo-panel.is-folded { height: auto !important; min-height: 0 !important; resize: none; }
+.gdh-fomo-panel.is-folded:not(.has-error) .gdh-fomo__body,
 .gdh-fomo-panel.is-folded .gdh-fomo__list,
 .gdh-fomo-panel.is-folded .gdh-fomo__tabs { display: none !important; }
 .gdh-fomo-panel.is-folded .gdh-fomo__stats { margin-bottom: 0; }
@@ -1861,11 +1872,9 @@
 .gdh-addw-cross__go:hover { background: rgba(245, 184, 61, 0.2); }
 
 
-/* Trust/recovery UI is outside scrollable rows and virtual tracker layout. */
+/* Status and rows share one panel scroll surface, separate from the tracker. */
 .gdh-fomo-ui {
-  flex: 0 1 auto;
-  min-height: 0;
-  overflow: auto;
+  min-width: 0;
   padding: 10px 12px;
   border-bottom: 1px solid var(--fomo-ui-border);
   color: var(--fomo-ui-text);
@@ -1925,6 +1934,10 @@
   --fomo-ui-border: rgba(139, 147, 161, .32);
 }
 .gdh-fomo__bar { flex: none; flex-wrap: wrap; gap: 4px; }
+@media (max-width: 380px) {
+  .gdh-fomo__bar .gdh-fomo__title { margin-right: auto; }
+  .gdh-fomo__bar .gdh-fomo__tabs { order: 1; flex-basis: 100%; }
+}
 .gdh-fomo__bar .gdh-fomo__tab { padding: 2px 5px; }
 .gdh-fomo__tabs { flex-wrap: wrap; min-width: 0; }
 .gdh-fomo__bar button, .gdh-fomo__bar a { min-height: 28px; }

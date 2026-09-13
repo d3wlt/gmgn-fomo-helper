@@ -2118,34 +2118,18 @@
     return / Edg\//.test(navigator.userAgent) ? 'edge' : 'chrome';
   }
 
+  // Translation remains English-only; panel gestures can prime local packs.
   function syncFomoTrButton() {
-    const btn = fomoPanelEl && fomoPanelEl.querySelector('.gdh-fomo__tr');
-    if (!btn) return;
-    const supported = !!fomoTrApi();
-    const edge = browserKind() === 'edge';
-    const downloading = fomoTrProgress > 0 && fomoTrProgress < 100;
-    btn.classList.toggle('is-on', supported && settings.fomoTranslate && !fomoTrNeedsGesture && !fomoTrStuck);
-    btn.classList.toggle('is-off', !supported || fomoTrStuck);
-    btn.classList.toggle('is-wait', supported && settings.fomoTranslate && (fomoTrNeedsGesture || downloading));
-    btn.textContent = downloading ? `${fomoTrProgress}%` : 'EN';
+    if (fomoPanelEl) fomoPanelEl.lang = 'en';
+  }
 
-    if (!supported) {
-      btn.title = edge
-        ? 'This Edge version does not provide the local Translation API'
-        : 'This browser does not support local translation (Chrome 138+ required)';
-    } else if (fomoTrStuck) {
-      btn.title = edge
-        ? 'Edge reported translation support, but the language pack did not become ready. Check Edge translation settings, then select this button to retry.'
-        : 'The language pack did not finish downloading. Select this button to retry.';
-    } else if (downloading) {
-      btn.title = `Downloading an English translation pack: ${fomoTrProgress}%`;
-    } else if (fomoTrNeedsGesture && settings.fomoTranslate) {
-      btn.title = 'Select to download the English translation pack';
-    } else if (settings.fomoTranslate) {
-      btn.title = 'Turn off translation and remove translated lines';
-    } else {
-      btn.title = 'Add local English translations below the original text';
-    }
+  function primeFomoEnglish() {
+    if (!fomoTrApi() || (fomoTrGesture && !fomoTrNeedsGesture && !fomoTrStuck)) return;
+    if (fomoTrStuck) { fomoTrStuck = false; fomoTranslators.clear(); }
+    fomoTrGesture = true;
+    fomoTrNeedsGesture = false;
+    primeVisibleFomoTranslators();
+    refreshFomoTranslations();
   }
 
   const fomoTrApi = () => { try { return globalThis.Translator || null; } catch { return null; } };
@@ -2393,7 +2377,8 @@
   }
 
   function applyFomoTranslationSetting(value) {
-    const enabled = value !== false;
+    // Ignore legacy translation-off preferences: the target is always English.
+    const enabled = true;
     if (settings.fomoTranslate !== enabled) {
       fomoTrGeneration += 1;
       fomoTrQueue = [];
@@ -2500,6 +2485,9 @@
 
       const who = document.createElement('div');
       who.className = 'gdh-fomo__hwho';
+      const identity = document.createElement('div');
+      identity.className = 'gdh-fomo__identity';
+      who.appendChild(identity);
       const avatarUrl = holderAvatar(item);
       if (avatarUrl) {
         const img = document.createElement('img');
@@ -2507,12 +2495,12 @@
         img.src = avatarUrl;
         img.alt = '';
         img.referrerPolicy = 'no-referrer';
-        who.appendChild(img);
+        identity.appendChild(img);
       }
       const name = document.createElement('strong');
       name.className = 'gdh-fomo__name';
       name.textContent = holderName(item);
-      who.appendChild(name);
+      identity.appendChild(name);
       attachFomoBoard(who, fomoUser(item)?.userHandle);
 
       if (item?.followed === true) {
@@ -3067,39 +3055,6 @@
     open.rel = 'noreferrer';
     open.textContent = '↗';
     open.title = 'Open on fomo.family';
-    const tr = document.createElement('button');
-    tr.type = 'button';
-    tr.className = 'gdh-fomo__tr';
-    tr.textContent = 'EN';
-    tr.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (settings.fomoTranslate && fomoTrStuck) {
-        fomoTrStuck = false;
-        fomoTrGesture = true;
-        fomoTranslators.clear();
-        primeVisibleFomoTranslators();
-        syncFomoTrButton();
-        refreshFomoTranslations();
-        return;
-      }
-      if (settings.fomoTranslate && fomoTrNeedsGesture) {
-        fomoTrGesture = true;
-        fomoTrNeedsGesture = false;
-        primeVisibleFomoTranslators();
-        syncFomoTrButton();
-        refreshFomoTranslations();
-        return;
-      }
-      const enabled = !settings.fomoTranslate;
-      applyFomoTranslationSetting(enabled);
-      if (enabled) {
-        fomoTrGesture = true;
-        primeVisibleFomoTranslators();
-      }
-      chrome.storage.local.set({ fomoTranslate: enabled });
-    });
-
     const fold = document.createElement('button');
     fold.type = 'button';
     fold.className = 'gdh-fomo__fold';
@@ -3122,7 +3077,9 @@
       setFomoOpen(false);
       scheduleScan();
     });
-    head.append(title, tabs, tr, open, fold, close);
+    head.append(title, tabs, open, fold, close);
+    panel.lang = 'en';
+    panel.addEventListener('click', primeFomoEnglish, true);
 
     const stats = document.createElement('div');
     stats.className = 'gdh-fomo__stats';
@@ -3131,7 +3088,12 @@
     list.className = 'gdh-fomo__list';
     list.setAttribute('data-fomo-list', '');
     panel.setAttribute('aria-label', 'FOMO token panel');
-    panel.append(head, stats, buildFomoUi(), list);
+    const body = document.createElement('div');
+    body.className = 'gdh-fomo__body';
+    body.tabIndex = 0;
+    body.setAttribute('aria-label', 'FOMO panel content');
+    body.append(buildFomoUi(), list);
+    panel.append(head, stats, body);
     makeFomoDraggable(panel, head);
     applyFomoFold(panel);
     return panel;
@@ -4136,8 +4098,11 @@
 
   function fomoFeedUserLabel(ev) {
     const name = String(ev.name || '').trim();
+    const handle = String(ev.handle || '').trim();
+    // Recover a shortened alias from the available handle, never guess a suffix.
+    // Keep distinct provider display names (including later metadata enrichment).
+    if (handle && (!name || name === 'Followed user' || handle.startsWith(name))) return handle;
     if (name && name !== 'Followed user') return name;
-    if (ev.handle) return String(ev.handle);
     const id = String(ev.userId || '');
     return id ? `FOMO user ${id.slice(0, 6)}…${id.slice(-4)}` : 'Unknown FOMO user';
   }
@@ -4180,6 +4145,113 @@
     }[ev.mcSource] || 'Provider market cap';
   }
 
+  // Native lite GMGN uses a 9-unit threshold and an inclusive 0..9
+  // code-point prefix (10 + "..."). Keep our approved full two-line names;
+  // only names that exceed the fixed slot need an ellipsis.
+  const fomoNameNodes = new Map();
+  let fomoNameObserver, fomoNameCleanup, fomoNameTip, fomoNameTipTarget;
+  let fomoNameTipSerial = 0, fomoNamePointerDismissed = false;
+  function hideFomoNameTip() {
+    fomoNameTipTarget?.removeAttribute('aria-describedby');
+    fomoNameTip?.remove();
+    fomoNameTip = fomoNameTipTarget = null;
+  }
+  function positionFomoNameTip() {
+    if (!fomoNameTip || !fomoNameTipTarget?.isConnected) return hideFomoNameTip();
+    const r = fomoNameTipTarget.getBoundingClientRect();
+    const t = fomoNameTip.getBoundingClientRect();
+    fomoNameTip.style.left = `${Math.max(8, Math.min(r.left + r.width / 2 - t.width / 2, innerWidth - t.width - 8))}px`;
+    fomoNameTip.style.top = `${Math.max(8, Math.min(r.top >= t.height + 14 ? r.top - t.height - 6 : r.bottom + 6, innerHeight - t.height - 8))}px`;
+  }
+  function setupFomoFeedName(name, fullName, profile) {
+    name.textContent = fullName;
+    name.title = profile.title;
+    name.tabIndex = 0;
+    name.setAttribute('role', 'link');
+    name.setAttribute('aria-label', fullName);
+    // Chromium supports grapheme segmentation: never bisect emoji/combining marks.
+    const parts = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(fullName), p => p.segment);
+    let fittedWidth = 0;
+    const fit = () => {
+      if (!name.isConnected || !name.clientWidth || name.clientWidth === fittedWidth) return;
+      fittedWidth = name.clientWidth;
+      if (name.textContent !== fullName) name.textContent = fullName;
+      const fits = () => name.scrollHeight <= name.clientHeight + 1 && name.scrollWidth <= name.clientWidth + 1;
+      if (!fits()) {
+        let lo = 0, hi = parts.length;
+        while (lo < hi) {
+          const mid = Math.ceil((lo + hi) / 2);
+          name.textContent = parts.slice(0, mid).join('') + '...';
+          if (fits()) lo = mid; else hi = mid - 1;
+        }
+        name.textContent = parts.slice(0, lo).join('') + '...';
+      }
+      name.dataset.truncated = String(name.textContent !== fullName);
+      name.title = name.dataset.truncated === 'true' ? '' : profile.title;
+      if (fomoNameTipTarget === name) {
+        if (name.dataset.truncated !== 'true') hideFomoNameTip();
+        else positionFomoNameTip();
+      }
+    };
+    if (!fomoNameObserver) {
+      fomoNameObserver = new ResizeObserver(entries => {
+        for (const { target } of entries) fomoNameNodes.get(target)?.();
+      });
+      // Recycled/removed rows must not be retained by the shared observer.
+      fomoNameCleanup = new MutationObserver(() => {
+        for (const node of fomoNameNodes.keys()) if (!node.isConnected) {
+          fomoNameObserver.unobserve(node); fomoNameNodes.delete(node);
+        }
+        if (fomoNameTipTarget && !fomoNameTipTarget.isConnected) hideFomoNameTip();
+      });
+      fomoNameCleanup.observe(document.body, { childList: true, subtree: true });
+      window.addEventListener('resize', positionFomoNameTip);
+      window.addEventListener('mousemove', () => { fomoNamePointerDismissed = false; });
+      window.addEventListener('scroll', event => {
+        if (!fomoNameTip?.contains(event.target)) hideFomoNameTip();
+      }, true);
+    }
+    fomoNameNodes.set(name, fit);
+    fomoNameObserver.observe(name);
+    let leaveTimer, dismissed = false;
+    const deferHide = () => {
+      clearTimeout(leaveTimer);
+      leaveTimer = setTimeout(() => {
+        if (fomoNameTipTarget === name && document.activeElement !== name) hideFomoNameTip();
+      }, 150);
+    };
+    const show = () => {
+      clearTimeout(leaveTimer);
+      if (dismissed) return;
+      fit();
+      if (name.dataset.truncated !== 'true') return;
+      hideFomoNameTip();
+      fomoNameTipTarget = name;
+      fomoNameTip = document.createElement('div');
+      fomoNameTip.className = 'gdh-fomofeed-name-tooltip';
+      fomoNameTip.id = `gdh-fomo-name-tip-${++fomoNameTipSerial}`;
+      fomoNameTip.setAttribute('role', 'tooltip');
+      fomoNameTip.textContent = fullName;
+      fomoNameTip.addEventListener('mouseenter', () => clearTimeout(leaveTimer));
+      fomoNameTip.addEventListener('mouseleave', deferHide);
+      name.setAttribute('aria-describedby', fomoNameTip.id);
+      document.body.append(fomoNameTip);
+      positionFomoNameTip();
+    };
+    name.addEventListener('mouseenter', () => { if (!fomoNamePointerDismissed) show(); });
+    name.addEventListener('mousemove', () => {
+      fomoNamePointerDismissed = false;
+      if (name.dataset.truncated === 'true' && fomoNameTipTarget !== name) show();
+    });
+    name.addEventListener('focus', show);
+    name.addEventListener('mouseleave', () => { if (document.activeElement !== name) dismissed = false; deferHide(); });
+    name.addEventListener('blur', () => { dismissed = false; hideFomoNameTip(); });
+    name.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { fomoNamePointerDismissed = dismissed = true; event.stopPropagation(); hideFomoNameTip(); }
+      if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); name.click(); }
+    });
+  }
+
   function buildFomoFeedTableRow(ev, card, tag) {
     const profile = trackingFeedProfileMeta(ev);
     const row = document.createElement('div');
@@ -4204,8 +4276,7 @@
     }
     const name = document.createElement('span');
     name.className = 'gdh-fomofeed__name';
-    name.textContent = fomoFeedUserLabel(ev);
-    name.title = profile.title;
+    setupFomoFeedName(name, fomoFeedUserLabel(ev), profile);
     const openProfile = (event) => {
       event.preventDefault(); event.stopPropagation();
       if (profile.url) window.open(profile.url, '_blank', 'noopener,noreferrer');
@@ -4298,8 +4369,7 @@
 
     const name = document.createElement('span');
     name.className = 'gdh-fomofeed__name';
-    name.textContent = fomoFeedUserLabel(ev);
-    name.title = profile.title;
+    setupFomoFeedName(name, fomoFeedUserLabel(ev), profile);
     const openProfile = (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -5157,7 +5227,7 @@
   });
 
   chrome.storage.local.get(DEFAULTS, (stored) => {
-    settings = { ...DEFAULTS, ...stored };
+    settings = { ...DEFAULTS, ...stored, fomoTranslate: true };
     rebuildWatchedMap();
     rebuildBlockedCallerIndex();
     rebuildHoldingWatch();
@@ -5260,7 +5330,6 @@
       }
       if (key === 'fomoTranslate') {
         applyFomoTranslationSetting(change.newValue);
-        teardownFomoFeed();
         continue;
       }
       settings[key] = change.newValue;
