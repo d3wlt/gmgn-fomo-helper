@@ -1258,7 +1258,12 @@ await test('Maintained sources are English-only and the release surface is ZIP-o
   const auditFiles = files.filter((file) => file !== fileURLToPath(import.meta.url));
   const maintained = auditFiles.map((file) => fs.readFileSync(file, 'utf8')).join('\n');
   assert.doesNotMatch(maintained, /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af\u0400-\u04ff]/u);
-  assert.deepEqual(manifest.permissions, ['storage', 'alarms']);
+  assert.deepEqual(manifest.permissions, ['storage', 'alarms', 'webNavigation']);
+  for (const file of ['fomo-trending-session.js','fomo-trending-demand.js']) {
+    const source = fs.readFileSync(path.join(root,file),'utf8');
+    assert.ok(source.includes('webNavigation.getFrame'));
+    assert.doesNotMatch(source, /webNavigation\.on\w+/); // current-document checks, not history collection
+  }
   assert.ok(!manifest.permissions.includes('native' + 'Messaging'));
   assert.ok(!maintained.includes('send' + 'NativeMessage'));
   assert.ok(!maintained.toLowerCase().includes(['native', 'updater'].join('-')));

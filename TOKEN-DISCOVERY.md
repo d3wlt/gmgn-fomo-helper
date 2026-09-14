@@ -1,43 +1,39 @@
 # Token discovery implementation notes
 
-## Current source and live evidence
+## Current architecture
 
-The v0.53.26 local fix replaces v0.53.25's incorrect REST-source assumption. Native FOMO Discovery Trending selects `Gc → In("trending_tokens", ...)` in `authenticated-v2-BVad9-j9.js`; its selected branch disables the adjacent REST reader. The stream reducer in `token-v2-d2DTmrP3.js` applies server-index snapshots/deltas. Native rows use total supply × selected price, and `change24` ×100.
+The maintained Trending path is an extension-owned authenticated `trending_tokens` subscription, distinct from passive Following. Native source `Gc → In("trending_tokens", ...)` and the `Wp` reducer establish snapshot/delta ordering and supply × price MC; the separate REST ranking endpoint is not a fallback.
 
-The helper now observes that existing native stream through the receive-only MAIN → isolated → worker bridge. No ranking REST request, account lookup, helper socket, subscription or Following polling is created. Opening the helper tab or clicking Refresh reads already-observed worker memory only.
+- `fomo-trending-session.js`: serializes validated top-level FOMO document observations; verifies the mirrored JWT with `GET https://prod-api.fomo.family/v2/users/current` when necessary; requires an unrestricted account and matches an observed native identity. Native account IDs and JWT subjects are different namespaces. Same-sub expiry ordering cannot choose across accounts.
+- `fomo-trending-live.js`: owns `wss://prod-api.fomo.family/ws`, replies to the verified challenge protocol, and subscribes only after acceptance to topic `56,143,4663,8453,1399811149`. Ethereum is not added by guessing its native feature gate. The result provenance is `owned-stream`.
+- `fomo-trending-demand.js`: one shared producer for current-document-validated GMGN consumers, with bounded ports and leases. A selected visible panel sends local runtime-port demand; there is no per-tab provider socket.
+- `background.js`: imports all three modules, routes private mirror ingestion, binds native account/logout observations and credential rotation, and pushes ranking DTOs through ports. Tokens never appear in the UI DTO or runtime responses.
+- `content.js`: preserves source selection through token navigation and compatible remounts, renders batched updates automatically, and releases demand when hidden/closed. Hover, keyboard focus and scrolling hold rows. Auth loss bypasses interaction holds to clear data immediately.
 
-The authorized debugging Chrome was reloaded and read back as v0.53.26, ENABLED, with the matching worker manifest. Its actual GMGN bottom-toolbar Trending mount rendered the new FOMO view. A live comparison verified the first eight exact chain/address identities in the same order as native FOMO, not merely matching symbols. A real active-tab round trip retained FOMO selection and the same displayed snapshot; monitoring observed zero ranking/account requests and zero new worker sockets during that check. The debugging browser continued reporting the inactive page as visible, so this live round trip does not prove the hidden-document branch. Production browser fixtures separately exercise hidden/visible cleanup and immediate restoration without requests.
+Native document/panel changes are not account changes. Repeated unchanged mirror observations persist sequence ownership without rewriting credentials; same-account credential rotation does not deselect Trending. Following collectors, native trading controls and settings are outside this feature.
 
-Live verification placed no trades and did not reset settings. Commit, push and publication follow the separately authorized release workflow. Publishing a release does not update an unpacked extension automatically.
+## Lifecycle and limits
 
-## Deliberate differences from the borrowed reference
+- Start only with validated visible-panel demand. Stop and clear worker ranking memory when the last consumer leaves. Refresh is an explicit reconnect fallback.
+- Require authenticated full snapshots before applying deltas, including after reconnect. Preserve server order; new/update fully replaces a row at the clamped native index, and a valid absent remove is a no-op.
+- Exact identity is chain plus contract; Solana case is preserved. Bound retained rows to 1,000 and emitted rows to 100; coalesce at 250 ms. Missing/invalid metrics remain unknown. MC is stream supply × stream price, and 24-hour ratios become percentages.
+- Auth/snapshot deadlines, generation checks, finite exponential retries and five-minute retained transport snapshots prevent unbounded or falsely fresh recovery. There is no invented WebSocket heartbeat or ranking REST fallback.
+- The broker rejects ambiguous candidates and restricted/mismatched/expired sessions, checks through delayed response-body completion, and persists logout revocation in extension-only session storage. Recovery needs a new validated account observation and fresh mirror epoch/document. `webNavigation` is required for current-document validation, not history collection.
+- The ranking path never creates a keeper, activates/reloads FOMO, manually exchanges refresh tokens, or bypasses sign-in/verification gates. It follows legitimate credential rotation already supplied by the native session. Indefinite operation without a native session-renewal owner is not guaranteed.
+- Owned rankings do not apply FOMO's local hidden-token filters, frozen native membership or mounted chart-price overrides. The separate receive-only native observer remains for passive data; its v0.53.26 parity evidence is not proof of parity for the independently advancing owned stream.
 
-- No permanent similarity card, per-token market lookup, token blocking or unrelated providers. Indicators stay in the gutter without changing names, row heights, financial actions or recycler transforms. Compare exists only after a click and closes on dismissal, route/account/visibility changes or expiry.
-- Exact identity is chain plus address; Solana case is preserved. Conservative similar-name indicators are not asset identity, fraud or safety claims. Short/generic tickers and unknown metadata do not manufacture matches.
-- Comparison uses bounded observations already available from native/passive/token-panel sources. Stale recycler stamps and unbound page titles cannot supply a token name.
-- Trending state is separate from Following-roster eligibility and bound to native tab/document/account/epoch/sequence. Gaps, malformed frames, logout/account changes and socket errors invalidate it. The source needs a native snapshot before deltas and after invalid recovery; no REST fallback repairs missing observations.
-- Source invalidation clears displayed ranking data while preserving the user's chosen FOMO view. Account invalidation resets comparison and selection too. Late loads cannot reopen a closed view.
-- Server order and rank provenance are preserved without MC/percentage/symbol sorting. Links retain each row's own chain. Missing or invalid metrics remain unknown, and no remote logo requests are added.
-- Native body nodes and handlers are restored on switch, close, hide or remount. Returning from document hiding or a compatible remount remembers FOMO selection without another read. Explicit close/native-tab selection, disable and account changes clear that choice. Unknown native mounts remain untouched.
+## Comparison and existing UI
 
-## Bounds and limitations
+Compare remains opt-in and observation-only: at most 500 identities retained for 30 minutes, stale after five minutes, with up to 50 similar identities displayed. Conservative name similarity is not identity, safety or scam evidence. Unknown metadata never manufactures a match.
 
-- Comparison observations: 500 identities, 30-minute retention, stale after five minutes; Compare displays the current token and at most 50 similar identities. This is not exhaustive token search.
-- Passive ranking reducer: at most 1,000 native rows, first 100 emitted as ordered full snapshots, coalesced at 250 ms. Worker snapshots expire within five minutes and are memory-only. Browser/worker restart can require a fresh native snapshot, such as reopening native Tokens → Trending or refreshing the FOMO page; helper Refresh does not ask the provider for one.
-- A bounded committed-view adapter observes the native full list after hidden-token filtering and hover freezing, including removed-token snapshot fallbacks. Only mounted row display prices/chart overrides are copied; overlays are replaced on each capture. Stale/unresolved/conflicting views fall back explicitly to stream mode. Offscreen chart-price parity and immediate detection of silent offscreen commits remain unproven.
-- Separate optional token-panel features retain their existing authenticated API reads and shared bounded admission/deadline/cooldown controls. The passive ranking path does not use them.
-- Existing full usernames, two-line exceptional-name tooltips, Thesis presentation, Buy/More grouping and native QuickBuy guards are unchanged. Financial controls were not activated on the live profile.
+Native row geometry, names, Thesis presentation, Buy/More grouping, QuickBuy guards and existing token-panel API features remain unchanged. Trending uses the established inherited font, 40px density, gold MC and signed red/green changes; it does not invent logos, badges, counts or ages.
 
-## Verification
+## Verification and delivery boundary
 
-- Native-style rendering uses measured GMGN 40px row height, inherited Geist font, gold MC and native red/green change colors. Browser assertions cover 320/390/570/1280 CSS widths. Current full-gate output/hash evidence is generated at `test-results/native-view-full-verify.log` and `test-results/native-view-verify-status.json`; consult that result rather than the older stream-only gate.
+- `npm run test:owned`: production-source session, transport and demand regressions, including no-op credential mirroring, logout races, account separation, ordering, bounds, expiry, retry deadlines and stop cleanup.
+- `npm run test:discovery`: existing passive/committed-view regressions plus full production content/CSS browser checks at 320/390/570/1280 CSS widths.
+- `scripts/test-fomo-passive-e2e.mjs`: actual MV3 passive bridge with trusted local TLS frames and genuine visibility transitions; does not prove the owned connection by itself.
+- `npm run verify`: whole-project gate. Older v0.53.27 release gates do not cover this implementation.
+- Local live diagnostics under `test-results/` distinguish current worker snapshots, rendered panel changes and native subscription state. The attached debugging Chrome has pre-existing focus emulation, so an inactive FOMO tab reporting `visible` is not genuine hidden-document proof. A native Trending unsubscribe with continued owned updates proves independence from that subscription, not page-free indefinite auth renewal.
 
-- `scripts/test-native-visibility.mjs` passed with genuine native hidden/visible transitions in a disposable actual MV3 browser, no document-property overrides, correct body cleanup/selection restoration and zero extra reads on return. Shared debugging Chrome is affected by the Fomo bot's persistent Playwright focus emulation; that bot was not changed.
-
-- `npm run test:discovery`: production worker, passive MAIN/isolated/worker VM pipeline, and full production content/CSS in isolated Chromium.
-- `scripts/test-fomo-passive-e2e.mjs`: actual MV3 worker and trusted browser frames from an isolated local TLS WebSocket fixture; native ordering/deltas, supply-based MC, logout, and zero helper requests/socket sends.
-- The committed-view/styling `npm run verify` gate passed with exit 0 and stable hashes across 104 source files. Release preparation changes only documentation and a Linux-only sandbox launch flag for the disposable DNS-blocked test browser; shipping runtime is unchanged. Live evidence in `test-results/live-native-view-parity.json` matched all 72 observed native identities in order during hover and exercised a real chart-price override; no hidden-token settings were changed.
-- `test-results/live-trending-verification-v26.json`: sanitized live identity/order, installed-version and tab-selection evidence, with the visibility limitation recorded explicitly.
-- `test-results/live-{helper-native-trending,fomo-native-trending,trending-restored}-v26.png`: live captures. `test-results/token-discovery-{trending,compare}-{320,390,570,1280}.png`: synthetic responsive fixtures, not live provider screenshots.
-
-The canonical build allowlist now includes the new `fomo-native-view.js` runtime module. Tests, screenshots and local diagnostics stay outside the extension package. Unrelated untracked `docs/` is not part of this change.
+Current integration and long-running live/lifecycle acceptance must be verified before publication. No trades or settings resets are part of these checks. The package includes the three owned runtime modules; tests and evidence are not shipped. Unrelated untracked `docs/` remains outside this change. Commit/push/release require separate authorization; unpacked installations do not auto-update from GitHub publication.

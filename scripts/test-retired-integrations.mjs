@@ -34,7 +34,7 @@ for (const cleanupFails of [false,true]) {
     WebSocket:class{constructor(...args){calls.push(['socket',...args]);}},
     io:(...args)=>calls.push(['io',...args]),
     setInterval:fn=>{timers.push(fn);return 1;},clearInterval(){},setTimeout:fn=>{timers.push(fn);return 1;},clearTimeout(){},
-    importScripts(name){assert.equal(name,'debug-log.js');},
+    importScripts(...names){for(const name of names){assert.ok(['debug-log.js','fomo-trending-session.js','fomo-trending-live.js','fomo-trending-demand.js'].includes(name));if(name!=='debug-log.js')vm.runInContext(read(name),ctx,{filename:name});}},
     chrome:{runtime:{onInstalled:event('installed'),onStartup:event('startup'),onMessage:event('message')},
       alarms:{clear:async name=>alarms.delete(name),get:async name=>alarms.get(name),create:(...args)=>calls.push(['alarm-create',...args]),onAlarm:event('alarm')},
       tabs:{query:async()=>[],sendMessage:async(...args)=>calls.push(['push',...args]),onRemoved:event('removed'),onUpdated:event('updated')},

@@ -4,6 +4,12 @@ Entries describe behavior at that version, not current support. Recent published
 
 ## Unreleased
 
+## 0.53.28 - 2026-09-14
+
+- Add a demand-scoped, shared authenticated Trending stream with automatic panel updates, server ordering, bounded reconnects and honest freshness; keep Following passive and unchanged.
+- Preserve FOMO selection across token navigation and same-account credential rotation. Hold rows during interaction, release hidden/closed-panel demand, and clear account-invalid data immediately.
+- Validate current documents with `webNavigation`; serialize session mirroring, avoid unchanged credential writes, verify account restrictions, and retain logout revocation across worker restart. Do not add automatic keeper creation, FOMO activation/reloads or credential refresh exchanges.
+
 ## 0.53.27 - 2026-09-14
 
 - Preserve the last validated Trending snapshot during native background unsubscribe and suspended socket close, without extending its five-minute lifetime. Require a fresh snapshot on resumed/replacement streams; logout, account changes and navigation still invalidate it. Cover three genuine Chromium hidden/visible cycles with trusted local WebSocket frames and zero helper sends/requests.

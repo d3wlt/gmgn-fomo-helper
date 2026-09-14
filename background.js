@@ -1,6 +1,13 @@
 'use strict';
 
 importScripts('debug-log.js');
+importScripts('fomo-trending-session.js', 'fomo-trending-live.js', 'fomo-trending-demand.js');
+let ownedTrendingAuth = null, ownedTrendingLive = null, ownedTrendingDemand = null, ownedTrendingAccount = "";
+if (typeof gdhCreateTrendingSession === 'function' && typeof gdhCreateTrendingLive === 'function' && typeof gdhCreateTrendingDemand === 'function' && chrome.runtime.onConnect) {
+  ownedTrendingAuth = gdhCreateTrendingSession({chrome, fetch:(...args)=>fetch(...args), onInvalidate:()=>{ownedTrendingLive?.stop();ownedTrendingDemand?.publish();}});
+  ownedTrendingLive = gdhCreateTrendingLive({getSession:()=>ownedTrendingAuth.getSession(),onUpdate:()=>ownedTrendingDemand?.publish()});
+  ownedTrendingDemand = gdhCreateTrendingDemand({chrome,start:()=>ownedTrendingLive.start(),stop:()=>ownedTrendingLive.stop(),refresh:()=>{ownedTrendingLive.refresh();ownedTrendingLive.start();},snapshot:()=>ownedTrendingLive.getSnapshot()});
+}
 
 // Upgrade cleanup only: retired provider data cannot start collectors.
 chrome.alarms.clear?.('985gmgn-j7tracker-sync')?.catch(() => {});
@@ -648,13 +655,14 @@ async function ingestPassiveFomo(data, sender) {
     if (fomoPassive.owner !== key || fomoPassive.accountId !== accountId || record.epoch !== data.epoch) {
       if (fomoPassive.owner === key && record.epoch === data.epoch && fomoPassive.accountId !== accountId) return {ok:false,reason:'account-epoch-required'};
       invalidateFomoTrending();
-      if (fomoPassive.accountId !== accountId) {
+      if (fomoTrendingObservedAccount !== accountId) {
         fomoTrendingObservedAccount = accountId;
         invalidateFomoTrending(true);
       }
       for (const [other, r] of fomoPassiveDocuments) if (other !== key) r.retired = true;
       fomoPassive = { owner:key, tabId:sender.tab.id, accountId, ids:null, events:[], pending:[], at:Date.now(), connected:false, revision:fomoPassive.revision+1 };
     }
+    if (ownedTrendingAuth) { const changed = ownedTrendingAccount !== accountId; ownedTrendingAccount = accountId; await ownedTrendingAuth.observeAccount(accountId); if (changed && ownedTrendingDemand?.hasDemand()) ownedTrendingLive.start(); }
     record.retired = false;
   } else if (fomoPassive.owner !== key || (data.kind === 'logout' ? data.epoch < record.epoch : record.epoch !== data.epoch) || (data.kind !== 'logout' && accountId !== fomoPassive.accountId)) {
     return {ok:false,reason:'account-not-bound'};
@@ -662,7 +670,7 @@ async function ingestPassiveFomo(data, sender) {
   if (data.seq !== record.seq + 1) { invalidateFomoTrending(); record.trendingGap = true; }
   record.seq = data.seq; record.epoch = data.epoch;
   const p = fomoPassive;
-  if (data.kind === 'logout') { fomoTrendingObservedAccount = ''; invalidateFomoTrending(true); clearFomoPassive(true); }
+  if (data.kind === 'logout') { ownedTrendingAccount = ''; if (ownedTrendingAuth) await ownedTrendingAuth.revoke(); fomoTrendingObservedAccount = ''; invalidateFomoTrending(true); clearFomoPassive(true); }
   else {
     p.at = Date.now(); p.revision++;
     if (data.kind === 'trending') {
@@ -1987,6 +1995,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
   if (changes.debugLogging) void globalThis.gdhDebug?.setEnabled(changes.debugLogging.newValue === true);
   if (changes.fomoToken) {
+    if (!changes.fomoToken.newValue?.token) { ownedTrendingLive?.stop(); if (changes.fomoToken.oldValue?.token) void ownedTrendingAuth?.revoke(); }
+    else if (changes.fomoToken.oldValue?.token !== changes.fomoToken.newValue.token && ownedTrendingDemand?.hasDemand()) { ownedTrendingLive.refresh(); ownedTrendingLive.start(); }
     const previousAccount = fomoAccountIdentity(changes.fomoToken.oldValue);
     const nextAccount = fomoAccountIdentity(changes.fomoToken.newValue);
     if (previousAccount !== nextAccount || (!nextAccount && changes.fomoToken.oldValue?.token !== changes.fomoToken.newValue?.token)) {
@@ -1999,6 +2009,11 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === 'fomo-auth-mirror-v1') {
+    if (!ownedTrendingAuth) { sendResponse({ok:false}); return false; }
+    ownedTrendingAuth.handleMirror(message,sender).then(sendResponse).catch(()=>sendResponse({ok:false}));
+    return true;
+  }
   if (message?.type === 'fomo-trending') {
     let allowed = false;
     try { allowed = new URL(sender?.url || '').origin === 'https://gmgn.ai'; } catch { /* fail closed */ }

@@ -1,0 +1,17 @@
+import fs from 'node:fs';import vm from 'node:vm';import assert from 'node:assert/strict';
+const event=()=>({listeners:new Set(),addListener(fn){this.listeners.add(fn);},removeListener(fn){this.listeners.delete(fn);},emit(...args){for(const fn of [...this.listeners])fn(...args);}});
+const onConnect=event(),onChanged=event(),timers=new Map();let timerId=0,starts=0,stops=0,refreshes=0;
+const chrome={runtime:{onConnect},storage:{local:{get:async()=>({enableFomoPanel:true})},onChanged},tabs:{get:async id=>({url:'https://gmgn.ai/bsc/token/x'})},webNavigation:{getFrame:async({tabId})=>({url:'https://gmgn.ai/bsc/token/x',documentId:'doc'+tabId})}};
+const ctx=vm.createContext({URL,chrome,setTimeout,clearTimeout});vm.runInContext(fs.readFileSync(new URL('../fomo-trending-demand.js',import.meta.url),'utf8'),ctx);
+const api=ctx.gdhCreateTrendingDemand({chrome,start:()=>starts++,stop:()=>stops++,refresh:()=>refreshes++,snapshot:()=>({ok:true,provenance:'owned-stream',items:[]}),setTimeout:fn=>{timers.set(++timerId,fn);return timerId;},clearTimeout:id=>timers.delete(id)});
+const port=(id,overrides={})=>{const p={name:'gdh-trending-live-v1',sender:{frameId:0,documentId:'doc'+id,url:'https://gmgn.ai/',tab:{id},...overrides},onMessage:event(),onDisconnect:event(),sent:[],closed:false,postMessage(m){this.sent.push(m);},disconnect(){if(this.closed)return;this.closed=true;this.onDisconnect.emit();}};onConnect.emit(p);return p;};
+const settle=()=>new Promise(r=>setImmediate(r));
+const a=port(1);a.onMessage.emit({type:'active',active:true});assert.equal(starts,0,'validate sender before starting');await settle();assert.equal(starts,1);assert.equal(api.hasDemand(),true);assert.equal(a.sent.length,1);
+const b=port(2);b.onMessage.emit({type:'active',active:true});await settle();assert.equal(starts,1,'all GMGN tabs share one producer');api.publish();assert.equal(b.sent.length,2);
+a.onMessage.emit({type:'refresh'});assert.equal(refreshes,1);a.disconnect();assert.equal(stops,0);b.onMessage.emit({type:'active',active:false});assert.equal(stops,1);
+const foreign=port(3,{url:'https://evil.invalid/'});assert.equal(foreign.closed,true);const frame=port(4,{frameId:1});assert.equal(frame.closed,true);
+const stale=port(5,{documentId:'previous'});stale.onMessage.emit({type:'active',active:true});await settle();assert.equal(stale.closed,true);assert.equal(starts,1);
+const pending=port(6);pending.onMessage.emit({type:'active',active:true});pending.disconnect();await settle();assert.equal(starts,1,'late validation cannot resurrect disconnected demand');
+b.onMessage.emit({type:'active',active:true});assert.equal(starts,2);onChanged.emit({enableFomoPanel:{newValue:false}},'local');assert.equal(stops,2);assert.equal(b.closed,true);
+const lease=port(7);lease.onMessage.emit({type:'active',active:true});await settle();assert.equal(starts,3);for(const fn of [...timers.values()])fn();assert.equal(lease.closed,true);assert.equal(stops,3,'unrenewed demand expires');
+api.shutdown();assert.equal(onConnect.listeners.size,0);assert.equal(onChanged.listeners.size,0);console.log('PASS owned Trending demand: validated top-frame/document, shared producer, late-disconnect rejection, disable, lease expiry, cleanup');

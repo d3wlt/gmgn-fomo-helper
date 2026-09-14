@@ -5,69 +5,71 @@
   window.__gdhContentStarted = true;
 
   if (location.hostname === 'fomo.family' || location.hostname.endsWith('.fomo.family')) {
-    const unwrap = (raw) => {
+    if (window.top !== window || location.protocol !== 'https:') return;
+    const unwrap = raw => {
       if (!raw) return '';
-      let value = raw;
-      try {
-        const parsed = JSON.parse(raw);
-        if (typeof parsed === 'string') value = parsed;
-      } catch {
-      }
-      value = String(value || '').trim();
-      return value.length > 20 ? value : '';
-    };
-    const jwtExpMs = (token) => {
-      try {
-        const payload = JSON.parse(atob(String(token).split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
-        return Number(payload.exp) > 0 ? Number(payload.exp) * 1000 : 0;
-      } catch {
-        return 0;
-      }
+      try { const value = JSON.parse(raw); if (typeof value === 'string') raw = value; } catch {}
+      return typeof raw === 'string' && raw.length <= 20000 ? raw.trim() : '';
     };
     const readPrivy = () => {
       const pairs = [];
       try {
-        for (const tokenKey of Object.keys(window.localStorage).filter((key) => /^privy:(.+:)?token$/.test(key))) {
-          const prefix = tokenKey.slice(0, -'token'.length);
-          const token = unwrap(window.localStorage.getItem(tokenKey));
+        const keys = Object.keys(window.localStorage).filter(key => /^privy:(.+:)?token$/.test(key));
+        if (keys.length > 32) return {status:'ambiguous'};
+        for (const key of keys) {
+          const token = unwrap(window.localStorage.getItem(key));
           if (!token) continue;
-          pairs.push({
-            token,
-            refresh: unwrap(window.localStorage.getItem(`${prefix}refresh_token`)),
-            exp: jwtExpMs(token),
-          });
+          if (!/^[\w-]+\.[\w-]+\.[\w-]+$/.test(token)) return {status:'invalid'};
+          const part = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+          const p = JSON.parse(atob(part + '='.repeat((4 - part.length % 4) % 4)));
+          if (typeof p.sub !== 'string' || !/^[a-zA-Z0-9:_-]{1,200}$/.test(p.sub) || typeof p.exp !== 'number' || !Number.isFinite(p.exp * 1000)) return {status:'invalid'};
+          // An expired different-account candidate is still ambiguous, not a cue
+          // to choose the longest-lived account silently.
+          pairs.push({token, sub:p.sub, exp:p.exp * 1000, refresh:unwrap(window.localStorage.getItem(`${key.slice(0, -5)}refresh_token`))});
         }
-      } catch {
-      }
-      pairs.sort((a, b) => (b.exp || 0) - (a.exp || 0));
-      return pairs[0] || { token: '', refresh: '', exp: 0 };
+      } catch { return {status:'invalid'}; }
+      if (new Set(pairs.map(p => p.sub)).size > 1) return {status:'ambiguous'};
+      pairs.sort((a,b) => b.exp - a.exp);
+      const p = pairs[0];
+      return p && p.exp > Date.now() ? {status:'token', token:p.token, refresh:p.refresh, sub:p.sub} : {status:'absent'};
     };
-    let lastSent = '';
+    let seq = 0, epoch = 0, identity = '', revision = 0, pending = false, dirty = false, stopped = false, barrier = null;
     const syncFomoToken = () => {
-      const { token, refresh } = readPrivy();
-      if (!token) return;
-      const stamp = `${token}|${refresh}`;
-      if (stamp === lastSent) return;
-      const pageExp = jwtExpMs(token);
-      try {
-        chrome.storage.local.get('fomoToken', (stored) => {
-          const cur = stored?.fomoToken;
-          if (cur?.token === token && (cur.refresh || '') === (refresh || '')) {
-            lastSent = stamp;
-            return;
-          }
-          if (cur?.token && cur.token !== token && cur.exp && pageExp && cur.exp >= pageExp) return;
-          lastSent = stamp;
-          try {
-            chrome.storage.local.set({ fomoToken: { token, refresh, at: Date.now(), exp: pageExp } });
-          } catch {
-          }
-        });
-      } catch {
-      }
+      if (stopped) return;
+      const sample = readPrivy();
+      const next = sample.status === 'token' ? sample.sub : sample.status;
+      if (identity !== next) { identity = next; epoch++; }
+      // Retain logout/ambiguity even if login happens before an in-flight ack.
+      if (sample.status !== 'token') barrier = {value:sample, epoch};
+      revision++;
+      dirty = true;
+      if (pending) return;
+      const send = () => {
+        if (stopped || !dirty) return;
+        dirty = false; pending = true;
+        const currentRevision = revision;
+        const boundary = barrier; barrier = null;
+        const value = boundary ? boundary.value : readPrivy();
+        const currentIdentity = value.status === 'token' ? value.sub : value.status;
+        if (!boundary && identity !== currentIdentity) { identity = currentIdentity; epoch++; }
+        if (boundary) dirty = true;
+        const message = {type:'fomo-auth-mirror-v1', seq:++seq, epoch:boundary ? boundary.epoch : epoch, status:value.status};
+        if (value.status === 'token') { message.token = value.token; message.refresh = value.refresh; }
+        try {
+          chrome.runtime.sendMessage(message, () => {
+            const error = chrome.runtime.lastError;
+            if (error && /Extension context invalidated/i.test(error.message || '')) stopped = true;
+            pending = false;
+            if (revision !== currentRevision) dirty = true;
+            if (dirty && !stopped) send();
+          });
+        } catch { pending = false; stopped = true; }
+      };
+      send();
     };
     syncFomoToken();
     window.setInterval(syncFomoToken, 5000);
+    window.addEventListener('storage', syncFomoToken);
     window.addEventListener('focus', syncFomoToken);
     window.addEventListener('visibilitychange', syncFomoToken);
 
@@ -1868,6 +1870,62 @@
   let discoveryTrendingData = null;
   let discoveryTrendingDead = false;
   let discoveryTrendingSelected = false;
+  let discoveryTrendingPort = null, discoveryTrendingHeartbeat = null, discoveryTrendingReconnect = null;
+  let discoveryTrendingReconnects = 0, discoveryTrendingPending = null, discoveryTrendingFlush = null;
+  function disconnectDiscoveryLive() {
+    clearInterval(discoveryTrendingHeartbeat); discoveryTrendingHeartbeat = null;
+    clearTimeout(discoveryTrendingReconnect); discoveryTrendingReconnect = null;
+    clearTimeout(discoveryTrendingFlush); discoveryTrendingFlush = null; discoveryTrendingPending = null;
+    const port = discoveryTrendingPort; discoveryTrendingPort = null;
+    try { port?.disconnect(); } catch {}
+  }
+  function flushDiscoveryLive() {
+    clearTimeout(discoveryTrendingFlush); discoveryTrendingFlush = null;
+    const state = discoveryTrending;
+    if (!state?.active || !discoveryTrendingPending) return;
+    if (state.hovered || state.focused || Date.now() < (state.scrollingUntil || 0)) {
+      if (!state.hovered && !state.focused) discoveryTrendingFlush = setTimeout(flushDiscoveryLive, 800);
+      return;
+    }
+    discoveryTrendingData = discoveryTrendingPending; discoveryTrendingPending = null;
+    state.loading = false; renderDiscoveryTrending();
+  }
+  function syncDiscoveryLive() {
+    const wanted = discoveryTrendingSelected && discoveryTrending?.active && discoveryVisible(discoveryTrending.main) && !discoveryTrending.panel.hidden && settings.enableFomoPanel !== false && !discoveryTrendingDead && document.visibilityState !== 'hidden';
+    if (!wanted) { disconnectDiscoveryLive(); discoveryTrendingReconnects = 0; return; }
+    if (discoveryTrendingPort || discoveryTrendingReconnect || discoveryTrendingReconnects >= 8 || !chrome.runtime.connect) return;
+    try {
+      const port = chrome.runtime.connect({name:'gdh-trending-live-v1'}); discoveryTrendingPort = port;
+      port.onMessage.addListener(message => {
+        if (port !== discoveryTrendingPort || message?.type !== 'fomo-trending-live-update') return;
+        const data = message.data;
+        if (!data || data.provenance !== 'owned-stream' || data.source !== 'fomo-trending' || typeof data.ok !== 'boolean' || !Array.isArray(data.items) || data.items.length > 100) return;
+        discoveryTrendingReconnects = 0; discoveryTrendingGeneration++;
+        const state = discoveryTrending;
+        if (data.ok && state?.active && (state.hovered || state.focused || Date.now() < (state.scrollingUntil || 0))) {
+          discoveryTrendingPending = data; flushDiscoveryLive(); return;
+        }
+        discoveryTrendingPending = null; discoveryTrendingData = data;
+        if (state) state.loading = false;
+        renderDiscoveryTrending();
+      });
+      port.onDisconnect.addListener(() => {
+        void chrome.runtime.lastError;
+        if (port !== discoveryTrendingPort) return;
+        disconnectDiscoveryLive();
+        if (discoveryTrendingData?.provenance === 'owned-stream') { discoveryTrendingData = {...discoveryTrendingData,ok:false,status:'reconnecting'}; renderDiscoveryTrending(); }
+        if (discoveryTrendingSelected && document.visibilityState !== 'hidden' && ++discoveryTrendingReconnects <= 8) {
+          discoveryTrendingReconnect = setTimeout(() => { discoveryTrendingReconnect = null; syncDiscoveryLive(); }, Math.min(15000, 1000 * 2 ** (discoveryTrendingReconnects - 1)));
+        }
+      });
+      port.postMessage({type:'active',active:true});
+      discoveryTrendingHeartbeat = setInterval(() => {
+        if (port !== discoveryTrendingPort) return;
+        if (document.visibilityState === 'hidden' || !discoveryTrendingSelected) { syncDiscoveryLive(); return; }
+        try { port.postMessage({type:'heartbeat'}); } catch { disconnectDiscoveryLive(); syncDiscoveryLive(); }
+      }, 20000);
+    } catch { disconnectDiscoveryLive(); }
+  }
   function resetDiscoveryAccount() {
     deactivateDiscoveryTrending();
     discoveryTrendingData = null;
@@ -1886,7 +1944,8 @@
     return header && body ? { nativeTab, tabs, main, header, body } : null;
   }
   function deactivateDiscoveryTrending(remove = false, preserveSelection = false) {
-    if (!preserveSelection) discoveryTrendingSelected = false;
+    if (remove) disconnectDiscoveryLive();
+    if (!preserveSelection) { discoveryTrendingSelected = false; syncDiscoveryLive(); }
     const state = discoveryTrending;
     discoveryTrendingGeneration++;
     if (!state) return;
@@ -1907,14 +1966,17 @@
     const key = JSON.stringify([state.loading, data, Math.floor(age / 60000), age > 300000, data?.retryAt > Date.now()]);
     if (state.renderKey === key) return;
     state.renderKey = key;
-    const panel = state.panel; panel.replaceChildren();
+    const panel = state.panel, oldScroll = panel.scrollTop;
+    const anchor = oldScroll > 0 ? [...panel.querySelectorAll('.gdh-discovery-trending-row')].find(row => row.getBoundingClientRect().bottom > panel.getBoundingClientRect().top) : null;
+    const anchorHref = anchor?.getAttribute('href'), anchorTop = anchor?.getBoundingClientRect().top;
+    panel.replaceChildren();
     const bar = document.createElement('div'); bar.className = 'gdh-discovery-bar';
     const status = document.createElement('span'); status.setAttribute('role', 'status');
-    status.textContent = state.loading ? 'Loading FOMO Trending…' : data?.reason === 'not-connected' ? 'Sign in on FOMO, then refresh.'
+    status.textContent = state.loading ? 'Loading FOMO Trending…' : data?.provenance === 'owned-stream' ? (data.status === 'live' ? 'Live · updating automatically' : data.status === 'connecting' ? 'Connecting to FOMO…' : data.status === 'reconnecting' ? 'Reconnecting · retained snapshot' : data.status === 'not-connected' ? 'FOMO session unavailable · sign in on FOMO' : 'Live connection unavailable · try Refresh') : data?.reason === 'not-connected' ? 'Sign in on FOMO, then refresh.'
       : data?.reason === 'waiting-native-trending' ? 'Open FOMO → Tokens → Trending, then Refresh.'
       : data && !data.ok ? (stale ? 'Stale · refresh unavailable' : 'Trending unavailable · try Refresh')
       : stale ? `Stale · ${Math.floor(age / 60000)}m ago` : data?.fetchedAt ? `${data.viewMode === 'native-view' ? 'Native view snapshot' : 'Stream snapshot'} · ${age < 60000 ? '<1m' : Math.floor(age / 60000) + 'm'} ago` : 'Select Refresh to read native data';
-    status.title = data?.viewMode === 'native-view'
+    status.title = data?.provenance === 'owned-stream' ? 'Authenticated live Trending stream owned by the extension. Server order; native-page hidden filters and chart-price overrides are not applied. Updates pause during hover or scrolling. Refresh reconnects this stream.' : data?.viewMode === 'native-view'
       ? `Observed native list, including its hidden-token filtering and hover-frozen order. Displayed prices captured for ${data.nativePriceRows || 0} mounted rows (${data.nativeChartOverrides || 0} chart overrides); other prices use stream/frozen snapshots. Offscreen-only commits may not be observed immediately. Refresh reads memory only.`
       : 'Observed native stream order. Native view could not be validated: local hidden-token filters, hover freezing and chart-price overrides are not applied. Refresh reads memory only.';
     if (data?.retryAt > Date.now()) status.textContent += ' · cooling down';
@@ -1931,7 +1993,7 @@
       const ref = discoveryRef(item.chain, item.address);
       if (!ref || FOMO_NETWORK_ID[ref.chain] !== item.networkId || item.source !== 'fomo-trending') continue;
       const row = document.createElement('a'); row.className = 'gdh-discovery-trending-row'; row.href = `/${ref.chain}/token/${ref.address}`;
-      row.addEventListener('click', event => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); deactivateDiscoveryTrending(); gdhSpaNavigate(row.getAttribute('href')); });
+      row.addEventListener('click', event => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); gdhSpaNavigate(row.getAttribute('href')); });
       const rank = document.createElement('span'); rank.className = 'gdh-discovery-rank'; rank.textContent = Number.isInteger(item.rank) && item.rank > 0 ? String(item.rank) : '—';
       const identity = document.createElement('span'); identity.className = 'gdh-discovery-token';
       const name = document.createElement('strong'); name.textContent = discoveryText(item.symbol) || discoveryText(item.name) || `${ref.address.slice(0, 6)}…${ref.address.slice(-4)}`;
@@ -1946,9 +2008,13 @@
     }
     if (!list.children.length && !state.loading && data?.ok && !stale) { const empty = document.createElement('p'); empty.textContent = 'No trending tokens returned by FOMO.'; list.append(empty); }
     panel.append(list);
+    panel.scrollTop = oldScroll;
+    const retained = anchorHref && [...list.querySelectorAll('a')].find(row => row.getAttribute('href') === anchorHref);
+    if (retained) panel.scrollTop += retained.getBoundingClientRect().top - anchorTop;
   }
   async function loadDiscoveryTrending() {
     const state = discoveryTrending;
+    if (state?.active && discoveryTrendingPort) { discoveryTrendingPort.postMessage({type:'refresh'}); return; }
     if (!state?.active || state.loading || discoveryTrendingDead || document.visibilityState === 'hidden' || !discoveryVisible(state.main)) return;
     // A user gesture reads the newest passive worker snapshot, never an API.
     const generation = ++discoveryTrendingGeneration, auth = fomoUiAuthGeneration;
@@ -1966,19 +2032,25 @@
     }
   }
   function scanDiscoveryTrending() {
+    syncDiscoveryLive();
     if (settings.enableFomoPanel === false) { deactivateDiscoveryTrending(true); return; }
     if (document.visibilityState === 'hidden') { deactivateDiscoveryTrending(true, true); return; }
     const mount = discoveryTrendingMount();
     if (!mount) { deactivateDiscoveryTrending(true, true); return; }
     if (discoveryTrending && (mount.main !== discoveryTrending.main || mount.body !== discoveryTrending.body || mount.tabs !== discoveryTrending.tabs || !discoveryTrending.tab.isConnected)) deactivateDiscoveryTrending(true, true);
     if (!discoveryTrending) {
-      const tab = document.createElement('button'); tab.type = 'button'; tab.className = 'gdh-discovery-trending-tab'; tab.textContent = 'FOMO'; tab.title = 'Native FOMO Trending · reads observed data on open or Refresh'; tab.setAttribute('aria-pressed', 'false');
+      const tab = document.createElement('button'); tab.type = 'button'; tab.className = 'gdh-discovery-trending-tab'; tab.textContent = 'FOMO'; tab.title = 'FOMO Trending · authenticated live updates while selected'; tab.setAttribute('aria-pressed', 'false');
       const panel = document.createElement('section'); panel.className = 'gdh-discovery-trending'; panel.hidden = true; panel.setAttribute('aria-label', 'FOMO Trending');
       const state = { ...mount, tab, panel, active: false, loading: false, renderKey: '' };
       state.onNativeClick = event => { if (!tab.contains(event.target)) deactivateDiscoveryTrending(); };
       mount.header.addEventListener('click', state.onNativeClick, true);
-      const activate = () => { discoveryTrendingSelected = true; state.active = true; state.renderKey = ''; tab.setAttribute('aria-pressed', 'true'); state.tabs.classList.add('gdh-discovery-tabs-active'); state.body.classList.add('gdh-discovery-native-hidden'); panel.hidden = false; renderDiscoveryTrending(); };
-      tab.addEventListener('click', event => { event.stopPropagation(); if (state.active) { deactivateDiscoveryTrending(); return; } activate(); void loadDiscoveryTrending(); });
+      const activate = () => { discoveryTrendingSelected = true; state.active = true; state.renderKey = ''; tab.setAttribute('aria-pressed', 'true'); state.tabs.classList.add('gdh-discovery-tabs-active'); state.body.classList.add('gdh-discovery-native-hidden'); panel.hidden = false; syncDiscoveryLive(); renderDiscoveryTrending(); };
+      tab.addEventListener('click', event => { event.stopPropagation(); if (state.active) { deactivateDiscoveryTrending(); return; } activate(); if (!discoveryTrendingPort) void loadDiscoveryTrending(); });
+      panel.addEventListener('pointerenter', () => { state.hovered = true; });
+      panel.addEventListener('pointerleave', () => { state.hovered = false; flushDiscoveryLive(); });
+      panel.addEventListener('focusin', () => { state.focused = true; });
+      panel.addEventListener('focusout', event => { if (!panel.contains(event.relatedTarget)) { state.focused = false; flushDiscoveryLive(); } });
+      panel.addEventListener('scroll', () => { state.scrollingUntil = Date.now() + 750; clearTimeout(discoveryTrendingFlush); discoveryTrendingFlush = setTimeout(flushDiscoveryLive, 800); }, true);
       mount.tabs.append(tab); mount.main.append(panel); discoveryTrending = state;
       // Restore the user's view from memory, not by starting another request.
       if (discoveryTrendingSelected) activate();
@@ -5550,7 +5622,7 @@
         const newIdentity = fomoStoredAccountIdentity(change.newValue);
         const sameAccount = oldIdentity && newIdentity && oldIdentity === newIdentity;
         fomoUiAuthGeneration += 1;
-        resetDiscoveryAccount();
+        if (!sameAccount) resetDiscoveryAccount();
         fomoFollowedRevision += 1;
         fomoFollowedUpdatedAt = 0;
         void updateFomoFollowedEpoch(change.newValue);
@@ -5620,6 +5692,7 @@
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg?.type === 'fomo-discovery-reset') { resetDiscoveryAccount(); return; }
       if (msg?.type === 'fomo-trending-invalidated') {
+        if (discoveryTrendingPort) return; // Owned collection has its own invalidation channel.
         discoveryTrendingGeneration++;
         discoveryTrendingData = {ok:false,reason:'waiting-native-trending',items:[]};
         if (discoveryTrending) { discoveryTrending.loading = false; discoveryTrending.renderKey = ''; }

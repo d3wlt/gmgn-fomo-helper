@@ -29,13 +29,17 @@ try{
  const original=await worker.evaluate(async()=>{const[t]=await chrome.tabs.query({url:'https://gmgn.ai/*'});await chrome.tabs.update(t.id,{active:true});return t.id;});
  await page.locator('.gdh-discovery-trending-tab').waitFor({timeout:10000});await page.locator('.gdh-discovery-trending-tab').click();
  assert.equal(await page.locator('.gdh-discovery-trending-tab').getAttribute('aria-pressed'),'true');
- const reads=await worker.evaluate(()=>__visibilityReads);assert.equal(reads,1);
+ const reads=await worker.evaluate(()=>__visibilityReads);assert.equal(reads,0,'owned demand does not invoke passive snapshot reads');
+ const demand=async expected=>{const until=Date.now()+5000;while(Date.now()<until){if(await worker.evaluate(()=>ownedTrendingDemand.hasDemand())===expected)return;await new Promise(r=>setTimeout(r,50));}throw Error('Live demand did not become '+expected);};
+ await demand(true);
  const temp=await worker.evaluate(async id=>{const t=await chrome.tabs.get(id);return(await chrome.tabs.create({windowId:t.windowId,url:'about:blank#away',active:true})).id;},original);
  const away=await page.evaluate(()=>({visibility:document.visibilityState,hidden:document.hidden}));assert.equal(away.visibility,'hidden');
  await page.waitForFunction(()=>document.visibilityState==='hidden',null,{polling:100,timeout:5000});
+ await demand(false);
  assert.equal(await page.locator('.gdh-discovery-trending-tab').count(),0);assert.equal(await page.locator('#body').isVisible(),true);
  await worker.evaluate(id=>chrome.tabs.update(id,{active:true}),original);
  await page.waitForFunction(()=>document.visibilityState==='visible'&&document.querySelector('.gdh-discovery-trending-tab')?.getAttribute('aria-pressed')==='true',null,{polling:100,timeout:5000});
+ await demand(true);
  assert.equal(await page.locator('#body').isVisible(),false);assert.deepEqual(errors,[]);assert.equal(await worker.evaluate(()=>__visibilityReads),reads,'Visibility restoration does not read again');
  const result={realMV3:true,actualNativeVisibility:true,syntheticHost:true,liveAccount:false,visibilityPropertyOverrides:false,hiddenCleanup:true,selectionRestored:true,additionalReadsOnRestore:0};
  fs.writeFileSync('test-results/native-visibility-verification.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result));

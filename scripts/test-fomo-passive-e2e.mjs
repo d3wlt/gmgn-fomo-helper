@@ -27,7 +27,9 @@ try {
   await worker.evaluate(()=>{globalThis.__passiveOutbound=[];globalThis.fetch=async(...args)=>{__passiveOutbound.push(String(args[0]));throw new Error('Independent worker request forbidden in passive test');};});
   const popup=await context.newPage();
   await popup.goto(`chrome-extension://${new URL(worker.url()).host}/popup.html`);
-  await popup.evaluate(()=>chrome.storage.local.set({fomoToken:{token:'synthetic.passive.session',exp:Date.now()+3600000},debugLogging:true}));
+  const token='fixture.'+Buffer.from(JSON.stringify({sub:'account-a',exp:Math.floor(Date.now()/1000)+3600})).toString('base64url')+'.signature';
+  await context.addInitScript(value=>{if(location.origin==='https://fomo.family')localStorage.setItem('privy:token',value);},token);
+  await popup.evaluate(token=>chrome.storage.local.set({fomoToken:{token,exp:Date.now()+3600000},debugLogging:true}),token);
   let unauthorized=false;
   const nativeRequests=[];
   // Real local TLS transport gives trusted browser MessageEvents; Playwright
@@ -68,7 +70,7 @@ try {
   assert.equal(snapshot.events.find(e=>e.type==='thesis').comment,'Native passive thesis');
   await worker.evaluate(async()=>{
     const changed=new Promise(resolve=>{const done=changes=>{if(changes.fomoToken){chrome.storage.onChanged.removeListener(done);resolve();}};chrome.storage.onChanged.addListener(done);});
-    await chrome.storage.local.set({fomoToken:{token:'fixture.'+btoa(JSON.stringify({sub:'account-a'}))+'.signature',exp:Date.now()+3600000}});
+    await chrome.storage.local.set({fomoToken:{token:'fixture.'+btoa(JSON.stringify({sub:'account-a',exp:Math.floor(Date.now()/1000)+7200}))+'.signature',exp:Date.now()+3600000}});
     await changed;
   });
   snapshot=await waitSnapshot(s=>s.events?.length===2&&s.passiveStatus==='connected');

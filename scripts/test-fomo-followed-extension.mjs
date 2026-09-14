@@ -19,7 +19,8 @@ try {
   const workerUrl = worker.url();
   const page = await context.newPage();
   await page.goto(`chrome-extension://${new URL(workerUrl).host}/popup.html`);
-  const token = `fixture.${Buffer.from(JSON.stringify({sub:'mv3-fomo-account'})).toString('base64url')}.signature`;
+  const token = `fixture.${Buffer.from(JSON.stringify({sub:'mv3-fomo-account',exp:Math.floor(Date.now()/1000)+3600})).toString('base64url')}.signature`;
+  await context.addInitScript(value=>{if(location.origin==='https://fomo.family')localStorage.setItem('privy:token',value);},token);
   await page.evaluate(token => chrome.storage.local.set({fomoToken:{token,exp:Date.now()+3600000}}), token);
   await worker.evaluate(async()=>{
     await gdhDebug.ready; await gdhDebug.setEnabled(true);
