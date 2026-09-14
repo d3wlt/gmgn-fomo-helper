@@ -36,4 +36,10 @@ Native row geometry, names, Thesis presentation, Buy/More grouping, QuickBuy gua
 - `npm run verify`: whole-project gate. Older v0.53.27 release gates do not cover this implementation.
 - Local live diagnostics under `test-results/` distinguish current worker snapshots, rendered panel changes and native subscription state. The attached debugging Chrome has pre-existing focus emulation, so an inactive FOMO tab reporting `visible` is not genuine hidden-document proof. A native Trending unsubscribe with continued owned updates proves independence from that subscription, not page-free indefinite auth renewal.
 
-Current integration and long-running live/lifecycle acceptance must be verified before publication. No trades or settings resets are part of these checks. The package includes the three owned runtime modules; tests and evidence are not shipped. Unrelated untracked `docs/` remains outside this change. Commit/push/release require separate authorization; unpacked installations do not auto-update from GitHub publication.
+## Verified release
+
+[v0.53.28](https://github.com/d3wlt/gmgn-fomo-helper/releases/tag/v0.53.28) is published from commit `bce95546e2bc41a16d812d8e75bd8cafa36346c9`. The full local gate passed with unchanged hashes across 112 source files before release metadata preparation; the tagged commit also passed [release CI](https://github.com/d3wlt/gmgn-fomo-helper/actions/runs/34832317295).
+
+The source-stable live run lasted 901.539 seconds and recorded 61 distinct stream and rendered-list samples after native Trending unsubscribed, with no further native Trending data. This proves subscription independence; the shared browser's visibility limitation described above still applies. Separate actual-MV3 fixtures verified genuine hidden-page updates, one shared socket across two visible GMGN windows, last-demand teardown, transport-loss recovery, worker restart and durable logout without manual Refresh or Following subscriptions.
+
+The published ZIP's checksum and all 21 allowlisted files were verified against the committed source, allowing only Windows line-ending normalization. The package includes the three owned runtime modules; tests, screenshots and local diagnostics are not shipped. No trades or settings resets were performed. Unpacked installations do not auto-update from GitHub publication.

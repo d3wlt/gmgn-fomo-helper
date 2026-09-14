@@ -4,6 +4,12 @@ Entries describe behavior at that version, not current support. Recent published
 
 ## Unreleased
 
+## 0.53.29 - 2026-09-14
+
+- Replace the coin icon with the selected green frog-eyes artwork, preserving white eyes on a transparent exterior and generating the existing toolbar/popup icon sizes.
+
+- Credit the original better gmgn creator and contributors in the README, and update discovery verification notes to reflect the published v0.53.28 release.
+
 ## 0.53.28 - 2026-09-14
 
 - Add a demand-scoped, shared authenticated Trending stream with automatic panel updates, server ordering, bounded reconnects and honest freshness; keep Following passive and unchanged.

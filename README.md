@@ -1,8 +1,14 @@
 # GMGN FOMO Helper
 
-A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.28** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
+A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.29** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
 
 This project is not affiliated with GMGN, FOMO or the original upstream author.
+
+## Credits and appreciation
+
+A big thank-you to [0xuezhang985](https://github.com/0xuezhang985) and the contributors to [better gmgn (985gmgn-helper)](https://github.com/0xuezhang985/985gmgn-helper) for creating the original extension and sharing their work. Their GMGN interface enhancements and FOMO integration provided the foundation for this project.
+
+This fork started from upstream **v0.46.27**. Credit for the original extension belongs to its creators; the changes, maintenance and releases in this repository are independent and should not be taken as upstream endorsement. Our feature set, installation method and privacy boundaries differ, so use this repository's instructions for this fork.
 
 ## Install and update
 
@@ -88,7 +94,7 @@ Requirements: Node.js 22+, Python 3 for the portable builder, or PowerShell for 
 npm ci
 npx playwright install chromium
 npm run verify
-python3 scripts/build-release.py --tag v0.53.28
+python3 scripts/build-release.py --tag v0.53.29
 ```
 
 On PowerShell:
