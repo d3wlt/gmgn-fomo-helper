@@ -12,8 +12,8 @@ This fork started from upstream **v0.46.27**. Credit for the original extension 
 
 ## Install and update
 
-1. Download the versioned extension ZIP and matching `.sha256` file from [Releases](https://github.com/d3wlt/gmgn-fomo-helper/releases). Repository access is required.
-2. Verify the ZIP checksum, then extract it to a permanent folder.
+1. Download the extension ZIP from [Releases](https://github.com/d3wlt/gmgn-fomo-helper/releases).
+2. Extract it to a permanent folder.
 3. Open `chrome://extensions` or `edge://extensions` and enable **Developer mode**.
 4. Select **Load unpacked** and choose the extracted folder.
 5. Refresh GMGN and your existing signed-in FOMO tab so the page observers initialize.
