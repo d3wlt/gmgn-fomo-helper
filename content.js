@@ -1913,7 +1913,7 @@
     status.textContent = state.loading ? 'Loading FOMO Trending…' : data?.reason === 'not-connected' ? 'Sign in on FOMO, then refresh.'
       : data?.reason === 'waiting-native-trending' ? 'Open FOMO → Tokens → Trending, then Refresh.'
       : data && !data.ok ? (stale ? 'Stale · refresh unavailable' : 'Trending unavailable · try Refresh')
-      : stale ? `Stale · ${Math.floor(age / 60000)}m ago` : data?.fetchedAt ? `${data.viewMode === 'native-view' ? 'Native view' : 'Stream snapshot'} · <1m ago` : 'Select Refresh to read native data';
+      : stale ? `Stale · ${Math.floor(age / 60000)}m ago` : data?.fetchedAt ? `${data.viewMode === 'native-view' ? 'Native view snapshot' : 'Stream snapshot'} · ${age < 60000 ? '<1m' : Math.floor(age / 60000) + 'm'} ago` : 'Select Refresh to read native data';
     status.title = data?.viewMode === 'native-view'
       ? `Observed native list, including its hidden-token filtering and hover-frozen order. Displayed prices captured for ${data.nativePriceRows || 0} mounted rows (${data.nativeChartOverrides || 0} chart overrides); other prices use stream/frozen snapshots. Offscreen-only commits may not be observed immediately. Refresh reads memory only.`
       : 'Observed native stream order. Native view could not be validated: local hidden-token filters, hover freezing and chart-price overrides are not applied. Refresh reads memory only.';

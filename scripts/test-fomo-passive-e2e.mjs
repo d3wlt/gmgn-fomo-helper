@@ -5,11 +5,11 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium} from 'playwright';
 import https from 'node:https';
-import {execFileSync} from 'node:child_process';
+import {execFileSync,spawn} from 'node:child_process';
 import {WebSocketServer} from 'ws';
 const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const profile=fs.mkdtempSync(path.join(os.tmpdir(),'gdh-passive-e2e-'));
-let context,server,wss;
+let context,server,wss,browser,proc,procExited;
 try {
   execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',path.join(profile,'key.pem'),'-out',path.join(profile,'cert.pem'),'-days','1','-subj','/CN=prod-api.fomo.family'],{stdio:'ignore'});
   server=https.createServer({key:fs.readFileSync(path.join(profile,'key.pem')),cert:fs.readFileSync(path.join(profile,'cert.pem'))});
@@ -17,8 +17,13 @@ try {
   let nativeSocket,clientSends=0;wss.on('connection',socket=>{nativeSocket=socket;socket.on('message',()=>clientSends++);});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const socketPort=server.address().port;
-  context=await chromium.launchPersistentContext(profile,{channel:'chromium',headless:true,ignoreHTTPSErrors:true,args:[`--disable-extensions-except=${root}`,`--load-extension=${root}`,`--host-resolver-rules=MAP prod-api.fomo.family 127.0.0.1:${socketPort},MAP * ~NOTFOUND`,'--ignore-certificate-errors','--no-proxy-server','--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets']});
-  const worker=context.serviceWorkers()[0]||await context.waitForEvent('serviceworker');
+  // Launch directly so Playwright never installs focus emulation on fixture tabs.
+  proc=spawn(chromium.executablePath(),['--headless=new',...(process.platform==='linux'?['--no-sandbox']:[]),'--remote-debugging-port=0','--remote-debugging-address=127.0.0.1',`--user-data-dir=${profile}`,`--disable-extensions-except=${root}`,`--load-extension=${root}`,`--host-resolver-rules=MAP prod-api.fomo.family 127.0.0.1:${socketPort},MAP * ~NOTFOUND`,'--ignore-certificate-errors','--no-proxy-server','--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets','--no-first-run','about:blank'],{stdio:'ignore'});
+  procExited=new Promise(resolve=>proc.once('exit',resolve));
+  const portFile=path.join(profile,'DevToolsActivePort'),deadline=Date.now()+15000;
+  let port='';while(!port){if(proc.exitCode!==null||proc.signalCode!==null||Date.now()>deadline)throw Error('Disposable Chromium not ready');const text=fs.existsSync(portFile)?fs.readFileSync(portFile,'utf8'):'';if(/^[0-9]+\n\/devtools\/browser\//.test(text))port=text.split('\n')[0];else await new Promise(r=>setTimeout(r,100));}
+  browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`,{noDefaults:true});context=browser.contexts()[0];
+  const worker=context.serviceWorkers().find(w=>w.url().includes('bdhjiabmohplopjledcagfaejbgdeonf'))||await context.waitForEvent('serviceworker',{predicate:w=>w.url().includes('bdhjiabmohplopjledcagfaejbgdeonf'),timeout:10000});
   await worker.evaluate(()=>{globalThis.__passiveOutbound=[];globalThis.fetch=async(...args)=>{__passiveOutbound.push(String(args[0]));throw new Error('Independent worker request forbidden in passive test');};});
   const popup=await context.newPage();
   await popup.goto(`chrome-extension://${new URL(worker.url()).host}/popup.html`);
@@ -89,6 +94,26 @@ try {
   frame({kind:'remove',tokenKey:ca+':56'});
   rankings=await waitTrending(s=>s.ok&&s.items.length===2);assert.deepEqual(rankings.items.map(r=>r.chain),['sol','robinhood']);
   assert.deepEqual(await worker.evaluate(()=>__passiveOutbound),[],'Trending never requests REST/account data');
+  // Real native visibility plus trusted unsubscribe frames reproduces FOMO's 3s suspension.
+
+  for(let cycle=0;cycle<3;cycle++){
+    const before=await worker.evaluate(()=>fetchFomoTrending());
+    await popup.evaluate(async()=>{const t=await chrome.tabs.getCurrent();await chrome.tabs.update(t.id,{active:true});});
+    await native.waitForFunction(()=>document.visibilityState==='hidden',null,{polling:100,timeout:5000});
+    await new Promise(resolve=>setTimeout(resolve,3000));
+    nativeSocket.send(JSON.stringify({type:'unsubscribed',topicType:'trending_tokens',topicId:'56,4663,1399811149'}));
+    await new Promise(resolve=>setTimeout(resolve,1200));
+    const retained=await worker.evaluate(()=>fetchFomoTrending());
+    assert.equal(retained.ok,true,'hidden unsubscribe preserves the last valid ranking');
+    assert.equal(retained.fetchedAt,before.fetchedAt,'no fabricated freshness on suspension');
+    assert.deepEqual(retained.items,before.items);
+    await popup.evaluate(async()=>{const [t]=await chrome.tabs.query({url:'https://fomo.family/*'});await chrome.tabs.update(t.id,{active:true});});
+    await native.waitForFunction(()=>document.visibilityState==='visible',null,{polling:100,timeout:5000});
+    nativeSocket.send(JSON.stringify({type:'subscribed',topicType:'trending_tokens',topicId:'56,4663,1399811149'}));
+    frame({kind:'snapshot',tokens:trendRows});await waitTrending(s=>s.ok&&s.fetchedAt>before.fetchedAt);
+  }
+
+  console.log('PASS real hidden/visible suspension: 3 cycles, trusted unsubscribe, retained identity/age and fresh-snapshot recovery');
   unauthorized=true;
   await native.evaluate(()=>fetch('https://prod-api.fomo.family/v2/users/current'));
   await waitSnapshot(s=>s.events?.length===0);
@@ -103,4 +128,10 @@ try {
   assert.deepEqual(await worker.evaluate(()=>__passiveOutbound),[]);
   assert.equal(clientSends,0,'observer never sends native socket messages');
   console.log('Synthetic full MV3 passive bridge: native REST + trusted WebSocket -> MAIN -> isolated -> worker, metadata/thesis, logout/tab close, zero helper requests/sends passed.');
-} finally {await context?.close();for(const socket of wss?.clients||[])socket.terminate();await new Promise(resolve=>server?server.close(resolve):resolve());fs.rmSync(profile,{recursive:true,force:true});}
+} finally {
+  await browser?.close().catch(()=>{});
+  if(proc){proc.kill();const force=setTimeout(()=>proc.kill('SIGKILL'),5000);force.unref();try{await procExited;}finally{clearTimeout(force);}}
+  for(const socket of wss?.clients||[])socket.terminate();
+  await new Promise(resolve=>server?server.close(resolve):resolve());
+  await fs.promises.rm(profile,{recursive:true,force:true,maxRetries:10,retryDelay:100});
+}

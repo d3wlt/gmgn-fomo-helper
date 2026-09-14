@@ -4,6 +4,10 @@ Entries describe behavior at that version, not current support. Recent published
 
 ## Unreleased
 
+## 0.53.27 - 2026-09-14
+
+- Preserve the last validated Trending snapshot during native background unsubscribe and suspended socket close, without extending its five-minute lifetime. Require a fresh snapshot on resumed/replacement streams; logout, account changes and navigation still invalidate it. Cover three genuine Chromium hidden/visible cycles with trusted local WebSocket frames and zero helper sends/requests.
+
 ## 0.53.26 - 2026-09-14
 
 - Correct Trending to use passively observed native snapshots/deltas, not REST. Native-view mode mirrors validated committed hidden filtering/frozen membership and mounted-row prices; explicit stream fallback handles unsupported or stale views. No provider requests/account lookups/socket subscriptions are added.

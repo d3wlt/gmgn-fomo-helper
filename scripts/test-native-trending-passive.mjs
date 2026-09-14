@@ -54,6 +54,26 @@ data=await f.worker.load();assert.equal(data.items[0].address,sol);assert.equal(
 assert.equal(data.items[0].price,null);assert.equal(data.items[0].marketCap,null);assert.equal(data.items[0].change24Percent,null);
 socket.listeners.get('error')();await f.flush();assert.equal((await f.worker.load()).ok,false,'socket error clears');
 assert.equal(f.worker.calls.length,0);assert.deepEqual(f.counts(),{websiteFetch:1,sends:0,constructs:2});
+// Native hidden suspension acknowledges unsubscribe after 3 seconds, keeping token lists.
+const control=(s,type,topic='56')=>s.listeners.get('message')({isTrusted:true,data:JSON.stringify({type,topicType:'trending_tokens',topicId:topic})});
+f=fixture();socket=new f.w.WebSocket('wss://prod-api.fomo.family/ws');await f.account();
+for(let cycle=0;cycle<3;cycle++){
+ socket.frame({kind:'snapshot',tokens:[row(7)]});await f.flush();
+ const before=await f.worker.load();f.ctx.document.visibilityState='hidden';f.worker.tick(3000);
+ control(socket,'unsubscribed');await f.flush();data=await f.worker.load();
+ assert.equal(data.ok,true,'background unsubscribe must retain the validated snapshot');
+ assert.equal(data.fetchedAt,before.fetchedAt,'unsubscribe cannot renew freshness');
+ assert.equal(data.items[0].address,A(7));
+ f.ctx.document.visibilityState='visible';control(socket,'subscribed');await f.flush();
+ assert.equal((await f.worker.load()).fetchedAt,before.fetchedAt,'resubscription alone cannot renew freshness');
+}
+control(socket,'unsubscribed');await f.flush();socket.close();await f.flush();
+assert.equal((await f.worker.load()).ok,true,'suspended close retains bounded snapshot');
+socket=new f.w.WebSocket('wss://prod-api.fomo.family/ws');
+socket.frame({kind:'update',tokenKey:A(8)+':56',index:0,update:row(8)});await f.flush();
+assert.equal((await f.worker.load()).items[0].address,A(7),'successor socket requires snapshot');
+f.worker.tick(300000);assert.equal((await f.worker.load()).ok,false,'suspension does not defeat TTL');
+assert.equal(f.worker.calls.length,0);assert.equal(f.counts().sends,0);
 // Native data before account and isolated-listener lateness, replay only existing memory.
 f=fixture(true);socket=new f.w.WebSocket('wss://prod-api.fomo.family/ws');socket.frame({kind:'snapshot',tokens:[row(2)]});await f.account();await f.flush();f.isolated();await f.flush();assert.equal((await f.worker.load()).items[0].address,A(2));
 // Account switch is native-observed; old socket/frames cannot populate its successor.

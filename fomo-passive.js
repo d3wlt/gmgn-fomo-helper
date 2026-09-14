@@ -77,11 +77,18 @@
   function trendingFrame(message, socket, socketEpoch) {
     if (socketEpoch !== epoch && !(socketEpoch === 0 && epoch === 1)) return;
     const topic = message.topicId;
+    // Only a validated full snapshot may replace the current topic/socket owner.
+    if (trending && (trending.socket !== socket || trending.topic !== topic) &&
+        !(message.type === 'data' && message.payload?.kind === 'snapshot')) return;
     if (typeof topic !== 'string' || topic.length > 100 || !/^[0-9]+(,[0-9]+)*$/.test(topic) ||
         topic.split(',').some(n => !networks[n]) || new Set(topic.split(',')).size !== topic.split(',').length) { clearTrending(); return; }
-    if (message.type === 'unsubscribed' || message.type === 'error') { clearTrending(); return; }
+    // Native FOMO suspends Trending after 3s hidden but retains its token list.
+    // Keep the original observation time; acknowledgment is not fresh data.
+    if (message.type === 'unsubscribed') { if (trending) trending.paused = true; return; }
+    if (message.type === 'error') { clearTrending(); return; }
     if (message.type !== 'data') return;
     const p = message.payload;
+    if (trending?.paused && p?.kind !== 'snapshot') return;
     if (!object(p)) { clearTrending(); return; }
     if (p.kind === 'snapshot') {
       if (!Array.isArray(p.tokens) || p.tokens.length > 1000) { clearTrending(); return; }
@@ -274,7 +281,7 @@
         const socketEpoch = epoch;
         sockets.add(socket);
         socket.addEventListener('open', () => { lastTransportAt = Date.now(); connection('native-open'); });
-        socket.addEventListener('close', () => { sockets.delete(socket); if (trending?.socket === socket) clearTrending(); connection('native-close'); });
+        socket.addEventListener('close', () => { sockets.delete(socket); if (trending?.socket === socket) { if (trending.paused) trending.socket = null; else clearTrending(); } connection('native-close'); });
         socket.addEventListener('error', () => { if (trending?.socket === socket) clearTrending(); connection('native-error'); });
         socket.addEventListener('message', event => {
           try {
@@ -283,7 +290,6 @@
             const message = JSON.parse(event.data);
             if (!object(message)) return;
             lastTransportAt = Date.now();
-            if (message.type === 'error' && trending?.socket === socket) clearTrending();
             if (message.topicType === 'trending_tokens') trendingFrame(message, socket, socketEpoch);
             if (message.topicType === 'trading_activity' && id(message.topicId)) {
               if (message.type === 'subscribed' || message.type === 'data') subscribed.set(socket, message.topicId);
