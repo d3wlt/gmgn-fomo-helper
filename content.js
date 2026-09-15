@@ -1870,6 +1870,40 @@
   let discoveryTrendingData = null;
   let discoveryTrendingDead = false;
   let discoveryTrendingSelected = false;
+  let discoverySelectionEpoch = null, discoverySelectionRead = null;
+  let discoverySelectionRevision = 0, discoverySelectionGeneration = 0;
+  function persistDiscoverySelection() {
+    if (!discoverySelectionEpoch) { void restoreDiscoverySelection(false); return; }
+    const epoch = discoverySelectionEpoch, generation = discoverySelectionGeneration;
+    void Promise.resolve().then(() => chrome.runtime.sendMessage({type:'fomo-trending-selection',action:'set',epoch,selected:discoveryTrendingSelected})).then(reply => {
+      if (!reply?.ok && generation === discoverySelectionGeneration && epoch === discoverySelectionEpoch) discoverySelectionEpoch = null;
+    }).catch(() => { /* Preference failure must not break the current view. */ });
+  }
+  function rememberDiscoverySelection(selected) {
+    discoverySelectionRevision++;
+    const changed = discoveryTrendingSelected !== selected;
+    discoveryTrendingSelected = selected;
+    if (changed) persistDiscoverySelection();
+  }
+  function restoreDiscoverySelection(restore = true) {
+    if (discoverySelectionRead) return discoverySelectionRead;
+    const generation = discoverySelectionGeneration, revision = discoverySelectionRevision;
+    const request = Promise.resolve().then(() => chrome.runtime.sendMessage({type:'fomo-trending-selection',action:'get'})).then(reply => {
+      if (generation !== discoverySelectionGeneration || !reply?.ok || typeof reply.epoch !== 'string' || typeof reply.selected !== 'boolean') return;
+      discoverySelectionEpoch = reply.epoch;
+      // A click, disable or account reset after the read started outranks hydration.
+      if (revision !== discoverySelectionRevision || !restore) { persistDiscoverySelection(); return; }
+      if (reply.selected && settings.enableFomoPanel !== false) {
+        deactivateDiscoveryTrending(true, true);
+        discoveryTrendingSelected = true;
+        scanDiscoveryTrending();
+      }
+    }).catch(() => { /* Storage/runtime unavailable: keep native/manual operation. */ }).finally(() => {
+      if (discoverySelectionRead === request) discoverySelectionRead = null;
+    });
+    discoverySelectionRead = request;
+    return request;
+  }
   let discoveryTrendingPort = null, discoveryTrendingHeartbeat = null, discoveryTrendingReconnect = null;
   let discoveryTrendingReconnects = 0, discoveryTrendingPending = null, discoveryTrendingFlush = null;
   function disconnectDiscoveryLive() {
@@ -1928,6 +1962,8 @@
   }
   function resetDiscoveryAccount() {
     deactivateDiscoveryTrending();
+    discoverySelectionGeneration++;
+    discoverySelectionEpoch = null; discoverySelectionRead = null;
     discoveryTrendingData = null;
     discoveryTrending?.panel.replaceChildren();
     discoveryObserved.clear();
@@ -1945,7 +1981,7 @@
   }
   function deactivateDiscoveryTrending(remove = false, preserveSelection = false) {
     if (remove) disconnectDiscoveryLive();
-    if (!preserveSelection) { discoveryTrendingSelected = false; syncDiscoveryLive(); }
+    if (!preserveSelection) { rememberDiscoverySelection(false); syncDiscoveryLive(); }
     const state = discoveryTrending;
     discoveryTrendingGeneration++;
     if (!state) return;
@@ -2042,10 +2078,16 @@
       const tab = document.createElement('button'); tab.type = 'button'; tab.className = 'gdh-discovery-trending-tab'; tab.textContent = 'FOMO'; tab.title = 'FOMO Trending · authenticated live updates while selected'; tab.setAttribute('aria-pressed', 'false');
       const panel = document.createElement('section'); panel.className = 'gdh-discovery-trending'; panel.hidden = true; panel.setAttribute('aria-label', 'FOMO Trending');
       const state = { ...mount, tab, panel, active: false, loading: false, renderKey: '' };
-      state.onNativeClick = event => { if (!tab.contains(event.target)) deactivateDiscoveryTrending(); };
+      state.onNativeClick = event => {
+        const target = event.target instanceof Element ? event.target : event.target?.parentElement;
+        const nativeTab = target?.closest('[data-testid^="filter-tag-"]');
+        const close = target?.closest('[data-sentry-component="FloatHandle"] .cursor-pointer');
+        // Header padding, chain picker and collapse/drag controls are not source choices.
+        if (nativeTab && state.tabs.contains(nativeTab) || close?.querySelector('[data-icon="IconClose16pxRegular"]')) deactivateDiscoveryTrending();
+      };
       mount.header.addEventListener('click', state.onNativeClick, true);
       const activate = () => { discoveryTrendingSelected = true; state.active = true; state.renderKey = ''; tab.setAttribute('aria-pressed', 'true'); state.tabs.classList.add('gdh-discovery-tabs-active'); state.body.classList.add('gdh-discovery-native-hidden'); panel.hidden = false; syncDiscoveryLive(); renderDiscoveryTrending(); };
-      tab.addEventListener('click', event => { event.stopPropagation(); if (state.active) { deactivateDiscoveryTrending(); return; } activate(); if (!discoveryTrendingPort) void loadDiscoveryTrending(); });
+      tab.addEventListener('click', event => { event.stopPropagation(); if (state.active) { deactivateDiscoveryTrending(); return; } rememberDiscoverySelection(true); activate(); if (!discoveryTrendingPort) void loadDiscoveryTrending(); });
       panel.addEventListener('pointerenter', () => { state.hovered = true; });
       panel.addEventListener('pointerleave', () => { state.hovered = false; flushDiscoveryLive(); });
       panel.addEventListener('focusin', () => { state.focused = true; });
@@ -5680,6 +5722,7 @@
   });
 
   const initialFomoFollowedGeneration = fomoUiAuthGeneration;
+  void restoreDiscoverySelection();
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') { deactivateDiscoveryTrending(true, true); closeDiscoveryCompare(); }
     else scanDiscoveryTrending();

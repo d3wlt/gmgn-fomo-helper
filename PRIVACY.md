@@ -8,6 +8,7 @@ The extension may store:
 
 - Feature settings, watched developer wallets, marked people, blocked callout accounts, and notification history. Retired token-block and special-watch settings may remain in older local storage but are no longer used.
 - Cached token, holder, performance, FOMO, and display data.
+- The selected Trending source for up to 128 browser tabs, in extension-only session storage. It survives page reloads and worker restarts, not browser restarts. Tab closure, explicit native selection/close, feature disable and account invalidation remove the choice. This preference contains no rankings, account identifiers, URLs or credentials and does not create live demand.
 - A mirror of the FOMO access and refresh session already present in a signed-in FOMO page. These credentials are used only with FOMO's own API.
 - Diagnostic timestamps and status values needed for session renewal and synchronization.
 

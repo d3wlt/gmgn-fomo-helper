@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {chromium} from 'playwright';
 const read=f=>fs.readFileSync(new URL('../'+f,import.meta.url),'utf8');
 const A='0x1111111111111111111111111111111111111111',B='0x2222222222222222222222222222222222222222';
-const html=`<html><head><meta charset="utf-8"><style>*{box-sizing:border-box}body{margin:0;background:#101114;color:#d6d9df;font:13px/18px Arial,sans-serif}button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}#header{display:flex;align-items:center;min-height:70px;border-bottom:1px solid #292c32}#header>span{flex:1;min-width:0}#native{height:360px;max-width:570px;display:flex;flex-direction:column;background:#14171c}#native>header{display:flex;align-items:center;justify-content:space-between;padding:8px 12px}#tabs{display:flex;align-items:center;gap:6px}#body{flex:1;min-height:0;overflow:auto}#tracked{max-width:570px}.native-row{display:block;position:relative;height:64.5px;padding:8px 12px;border-bottom:1px solid #292c32;color:inherit;text-decoration:none}.native-row small{float:right}.label{display:block}</style></head><body><nav aria-label="Main navigation">GMGN · Offline fixture</nav><div id="header" data-sentry-component="BaseInfoBar"><span>Token information</span></div><div id="native" data-sentry-component="Main"><header><div id="tabs"><button data-testid="filter-tag-trending">Trending</button><button data-testid="filter-tag-follow">Following</button></div><button id="native-close">Close</button></header><div id="body"><div>Original GMGN ranking</div><button id="native-action">Native action fixture</button></div></div><div id="tracked"><a id="exact" class="native-row" data-sentry-component="TrackerListItem" href="/bsc/token/${A}" data-gdh-track-addr="${A}" data-gdh-track-chain="bsc" data-gdh-track-symbol="FRONTIER"><span class="label">full_native_username <small>More</small></span><span>FRONTIER <small>MC $944K</small></span></a><a id="similar" class="native-row" data-sentry-component="TrackerListItem" href="/bsc/token/${B}" data-gdh-track-addr="${B}" data-gdh-track-chain="bsc" data-gdh-track-symbol="Frontier"><span class="label">another_native_username <small>Buy</small></span><span>Frontier <small>MC $24K</small></span></a></div></body></html>`;
+const html=`<html><head><meta charset="utf-8"><style>*{box-sizing:border-box}body{margin:0;background:#101114;color:#d6d9df;font:13px/18px Arial,sans-serif}button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}#header{display:flex;align-items:center;min-height:70px;border-bottom:1px solid #292c32}#header>span{flex:1;min-width:0}#native{height:360px;max-width:570px;display:flex;flex-direction:column;background:#14171c}#native>header{display:flex;align-items:center;justify-content:space-between;padding:8px 12px}#tabs{display:flex;align-items:center;gap:6px}#body{flex:1;min-height:0;overflow:auto}#tracked{max-width:570px}.native-row{display:block;position:relative;height:64.5px;padding:8px 12px;border-bottom:1px solid #292c32;color:inherit;text-decoration:none}.native-row small{float:right}.label{display:block}</style></head><body><nav aria-label="Main navigation">GMGN · Offline fixture</nav><div id="header" data-sentry-component="BaseInfoBar"><span>Token information</span></div><div id="native" data-sentry-component="Main"><header><div id="tabs"><button data-testid="filter-tag-trending">Trending</button><button data-testid="filter-tag-follow">Following</button></div><span data-sentry-component="FloatHandle"><button id="native-close" class="cursor-pointer">Close<svg width="1" height="1" data-icon="IconClose16pxRegular"></svg></button></span></header><div id="body"><div>Original GMGN ranking</div><button id="native-action">Native action fixture</button></div></div><div id="tracked"><a id="exact" class="native-row" data-sentry-component="TrackerListItem" href="/bsc/token/${A}" data-gdh-track-addr="${A}" data-gdh-track-chain="bsc" data-gdh-track-symbol="FRONTIER"><span class="label">full_native_username <small>More</small></span><span>FRONTIER <small>MC $944K</small></span></a><a id="similar" class="native-row" data-sentry-component="TrackerListItem" href="/bsc/token/${B}" data-gdh-track-addr="${B}" data-gdh-track-chain="bsc" data-gdh-track-symbol="Frontier"><span class="label">another_native_username <small>Buy</small></span><span>Frontier <small>MC $24K</small></span></a></div></body></html>`;
 const browser=await chromium.launch({headless:true});
 fs.mkdirSync(new URL('../test-results/',import.meta.url),{recursive:true});
 try{
@@ -22,7 +22,7 @@ try{
   const items=[{chain:'bsc',networkId:56,address:A,symbol:'FRONTIER',name:'Frontier Token',price:.0000124,marketCap:944690,change24Percent:25.21,rank:1,source:'fomo-trending'},{chain:'robinhood',networkId:4663,address:A,symbol:'LongerTokenSymbol',name:'A longer token name showing responsive two-line metadata',price:1.25,marketCap:24000000,change24Percent:-3.5,rank:2,source:'fomo-trending'},{chain:'eth',networkId:1,address:B,symbol:'',name:'',price:null,marketCap:null,change24Percent:null,rank:4,source:'fomo-trending'}];
   window.chrome={runtime:{id:'synthetic',getManifest:()=>({version:'fixture'}),getURL:p=>p,onMessage:{addListener:fn=>runtimeListeners.push(fn)},sendMessage(m,cb){let result;if(m.type==='fomo-trending'){trendingCalls++;const data=reply||{ok:true,provenance:'native-stream',items,fetchedAt:Date.now()};result=delayed?new Promise(resolve=>pending.push(()=>resolve(data))):Promise.resolve(data);}else result=Promise.resolve({ok:false,items:[],events:[]});if(cb){result.then(cb);return;}return result;}},storage:{local,onChanged:{addListener:fn=>listeners.push(fn)}}};
  },{A,B});
- let source=read('content.js');const end=source.lastIndexOf('})();');source=source.slice(0,end)+`window.discoveryTest={scan(){scanDiscoveryComparison();scanDiscoveryTrending();},relation:discoveryRelation,ref:discoveryRef,similar:discoverySimilar,observe:observeDiscovery,count:()=>discoveryObserved.size,clear:()=>discoveryObserved.clear(),build:buildFomoFeedCard};gdhSpaNavigate=url=>navigation.push(url);\n`+source.slice(end);
+ let source=read('content.js');const end=source.lastIndexOf('})();');source=source.slice(0,end)+`window.discoveryTest={restoreSelection:restoreDiscoverySelection,resetAccount:resetDiscoveryAccount,scan(){scanDiscoveryComparison();scanDiscoveryTrending();},relation:discoveryRelation,ref:discoveryRef,similar:discoverySimilar,observe:observeDiscovery,count:()=>discoveryObserved.size,clear:()=>discoveryObserved.clear(),build:buildFomoFeedCard};gdhSpaNavigate=url=>navigation.push(url);\n`+source.slice(end);
  await page.addStyleTag({content:read('styles.css')});await page.addScriptTag({content:source});
  await page.waitForSelector('.gdh-discovery-trending-tab');await page.waitForSelector('#exact > .gdh-discovery-marker');
  assert.equal(await page.evaluate(()=>trendingCalls),0,'mount is not a request');
@@ -36,6 +36,12 @@ try{
  await page.evaluate(({B})=>{const ev={key:'fixture-following',source:'fomo-followed',type:'buy',chain:'bsc',addr:B,symbol:'FRONTIER',tokenName:'Frontier Token',ts:Date.now(),name:'full_fomo_username',handle:'full_fomo_username',usd:12,mc:24000};const card=discoveryTest.build(ev);card.id='fomo-fixture';document.querySelector('#tracked').append(card);discoveryTest.scan();},{B});
  assert.equal(await page.locator('#fomo-fixture > .gdh-discovery-marker').getAttribute('data-relation'),'similar');
  await page.locator('.gdh-discovery-trending-tab').click();await page.waitForSelector('.gdh-discovery-trending-row');assert.equal(await page.evaluate(()=>trendingCalls),1);assert.equal(await page.locator('#body').isVisible(),false);
+ await page.locator('#native header').click({position:{x:1,y:1}});
+ assert.equal(await page.locator('.gdh-discovery-trending-tab').getAttribute('aria-pressed'),'true','header padding is not a native-tab choice');
+ await page.evaluate(()=>{const b=document.createElement('button');b.id='chain-picker-fixture';b.textContent='Chains';document.querySelector('#native header').append(b);});
+ await page.locator('#chain-picker-fixture').click();
+ assert.equal(await page.locator('.gdh-discovery-trending-tab').getAttribute('aria-pressed'),'true','non-tab header controls preserve source');
+ await page.locator('#chain-picker-fixture').evaluate(n=>n.remove());
  await page.getByRole('button',{name:'Refresh',exact:true}).click();await page.waitForFunction(()=>trendingCalls===2);assert.equal(await page.evaluate(()=>trendingCalls),2,'manual refresh reads latest passive snapshot without a cache delay');
  assert.deepEqual(await page.locator('.gdh-discovery-rank').allTextContents(),['1','2','4']);assert.equal(await page.locator('.gdh-discovery-trending-row').nth(1).getAttribute('href'),'/robinhood/token/'+A);
  await page.locator('.gdh-discovery-trending-row').nth(1).click();assert.deepEqual(await page.evaluate(()=>navigation),['/robinhood/token/'+A]);await page.evaluate(({A})=>{history.pushState({},'','/robinhood/token/'+A);discoveryTest.scan();},{A});assert.equal(await page.locator('#body').isVisible(),false);assert.equal(await page.locator('.gdh-discovery-trending-tab').getAttribute('aria-pressed'),'true','token navigation preserves selected FOMO source');assert.equal(await page.evaluate(()=>trendingCalls),2,'navigation does not require reopening or another read');await page.getByRole('button',{name:'Refresh',exact:true}).click();await page.waitForFunction(()=>trendingCalls===3);
@@ -92,5 +98,37 @@ try{
  await page.locator('.gdh-discovery-trending-row').click();assert.equal(await page.locator('.gdh-discovery-trending-tab').getAttribute('aria-pressed'),'true');assert.equal(await page.evaluate(()=>liveConnects),1);
  await page.evaluate(()=>liveSend({ok:false,source:'fomo-trending',provenance:'owned-stream',status:'not-connected',items:[],fetchedAt:0}));assert.equal(await page.locator('.gdh-discovery-trending-row').count(),0,'auth loss clears even hovered/focused');
  await page.locator('[data-testid="filter-tag-trending"]').click();assert.equal(await page.evaluate(()=>liveDisconnects),1,'native selection releases live demand');
+ // Production preference hydration must not outrank newer local/account intent.
+ await page.evaluate(()=>{
+   discoveryTest.resetAccount();window.selectionReplies=[];window.selectionSaves=[];
+   const original=chrome.runtime.sendMessage;
+   chrome.runtime.sendMessage=(m,...args)=>{
+     if(m.type!=='fomo-trending-selection')return original(m,...args);
+     if(m.action==='get')return new Promise(resolve=>selectionReplies.push(resolve));
+     selectionSaves.push(m.selected);return Promise.resolve({ok:true});
+   };
+   window.selectionPromise=discoveryTest.restoreSelection();
+ });
+ await page.waitForFunction(()=>selectionReplies.length===1);
+ await page.locator('[data-testid="filter-tag-trending"]').click();
+ await page.evaluate(()=>selectionReplies.shift()({ok:true,epoch:'fixture-epoch',selected:true}));
+ await page.evaluate(()=>selectionPromise);
+ assert.equal(await page.locator('.gdh-discovery-trending-tab').getAttribute('aria-pressed'),'false','late saved FOMO cannot override a native click');
+ assert.equal(await page.evaluate(()=>selectionSaves.at(-1)),false);
+ await page.evaluate(()=>{discoveryTest.resetAccount();window.selectionPromise=discoveryTest.restoreSelection();});
+ await page.waitForFunction(()=>selectionReplies.length===1);
+ await page.locator('.gdh-discovery-trending-tab').click();
+ await page.evaluate(()=>selectionReplies.shift()({ok:true,epoch:'fixture-epoch',selected:false}));await page.evaluate(()=>selectionPromise);
+ assert.equal(await page.locator('.gdh-discovery-trending-tab').getAttribute('aria-pressed'),'true','late saved native cannot override a FOMO click');
+ assert.equal(await page.evaluate(()=>selectionSaves.at(-1)),true);
+ await page.evaluate(()=>{discoveryTest.resetAccount();window.selectionPromise=discoveryTest.restoreSelection();});
+ await page.waitForFunction(()=>selectionReplies.length===1);
+ await page.evaluate(()=>{runtimeListeners.forEach(fn=>fn({type:'fomo-discovery-reset'}));selectionReplies.shift()({ok:true,epoch:'old-account',selected:true});});
+ await page.evaluate(()=>selectionPromise);
+ assert.equal(await page.locator('.gdh-discovery-trending-tab').getAttribute('aria-pressed'),'false','account reset cancels in-flight restore');
+ await page.evaluate(()=>{window.selectionPromise=discoveryTest.restoreSelection();});await page.waitForFunction(()=>selectionReplies.length===1);
+ await page.evaluate(()=>{setSetting('enableFomoPanel',false);discoveryTest.scan();selectionReplies.shift()({ok:true,epoch:'fixture-epoch',selected:true});});await page.evaluate(()=>selectionPromise);
+ assert.equal(await page.locator('.gdh-discovery-trending-tab').count(),0,'disable beats pending restore');
+ assert.equal(await page.evaluate(()=>selectionSaves.at(-1)),false);
  assert.deepEqual(errors,[]);console.log('PASS production discovery browser: native+FOMO exact/similar identity, no geometry changes, comparison opt-in, conservative unknown metadata, bounded retention; native Trending open/manual passive reads, remembered selection without requests, rank/chain navigation, loading/empty/error/stale, native switch/close/hide/remount/auth races, responsive 320/390/570/1280 screenshots.');
 }finally{await browser.close();}

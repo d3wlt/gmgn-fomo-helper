@@ -17,7 +17,7 @@ try{
  let port='';while(!port){if(proc.exitCode!==null||Date.now()>deadline)throw Error('Disposable Chrome failed readiness');const text=fs.existsSync(portFile)?fs.readFileSync(portFile,'utf8'):'';if(/^[0-9]+\n\/devtools\/browser\//.test(text))port=text.split('\n')[0];else await new Promise(r=>setTimeout(r,100));}
  browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`,{noDefaults:true});
  const context=browser.contexts()[0];
- const worker=context.serviceWorkers().find(w=>w.url().includes('bdhjiabmohplopjledcagfaejbgdeonf'))||await context.waitForEvent('serviceworker',{predicate:w=>w.url().includes('bdhjiabmohplopjledcagfaejbgdeonf'),timeout:10000});
+ let worker=context.serviceWorkers().find(w=>w.url().includes('bdhjiabmohplopjledcagfaejbgdeonf'))||await context.waitForEvent('serviceworker',{predicate:w=>w.url().includes('bdhjiabmohplopjledcagfaejbgdeonf'),timeout:10000});
  await worker.evaluate(()=>{globalThis.__visibilityReads=0;chrome.runtime.onMessage.addListener(m=>{if(m.type==='fomo-trending')globalThis.__visibilityReads++;return false;});});
  await worker.evaluate(()=>chrome.storage.local.set({enableFomoPanel:true,enableFomoFeed:false,enableHoldingSurge:false,enableMarkedHolders:false,markedListMigratedV2:true}));
  const test=fs.readFileSync('scripts/test-token-discovery-browser.mjs','utf8'),a=test.indexOf('const html='),z=test.indexOf('const browser=',a);
@@ -41,7 +41,55 @@ try{
  await page.waitForFunction(()=>document.visibilityState==='visible'&&document.querySelector('.gdh-discovery-trending-tab')?.getAttribute('aria-pressed')==='true',null,{polling:100,timeout:5000});
  await demand(true);
  assert.equal(await page.locator('#body').isVisible(),false);assert.deepEqual(errors,[]);assert.equal(await worker.evaluate(()=>__visibilityReads),reads,'Visibility restoration does not read again');
- const result={realMV3:true,actualNativeVisibility:true,syntheticHost:true,liveAccount:false,visibilityPropertyOverrides:false,hiddenCleanup:true,selectionRestored:true,additionalReadsOnRestore:0};
+ const selection=async expected=>{
+  const until=Date.now()+5000;
+  while(Date.now()<until){const value=await worker.evaluate(async id=>(await chrome.storage.session.get('gdhTrendingSelectionV1')).gdhTrendingSelectionV1?.tabs?.includes(id)===true,original);if(value===expected)return;await new Promise(r=>setTimeout(r,50));}
+  throw Error('Persisted tab selection did not become '+expected);
+ };
+ const restored=()=>page.waitForFunction(()=>document.visibilityState==='visible'&&document.querySelector('.gdh-discovery-trending-tab')?.getAttribute('aria-pressed')==='true',null,{polling:100,timeout:5000});
+ await selection(true);
+ await page.locator('#native header').click({position:{x:1,y:1}});
+ assert.equal(await page.locator('.gdh-discovery-trending-tab').getAttribute('aria-pressed'),'true','blank header click preserves selection');
+ // Full new content context, not a simulated SPA remount.
+ await page.reload();await restored();await demand(true);
+ assert.equal(await page.locator('#body').isVisible(),false);
+ await page.screenshot({path:'test-results/trending-selection-restored.png'});
+ // Supplemental real-worker restart and native discard proof.
+ const cdp=await context.newCDPSession(page),versions=new Map(),workerURL=worker.url();
+ cdp.on('ServiceWorker.workerVersionUpdated',({versions:items})=>items.forEach(v=>versions.set(v.versionId,v)));
+ await cdp.send('ServiceWorker.enable');await worker.evaluate(()=>globalThis.__selectionSentinel=true);
+ const until=async(test,label)=>{const end=Date.now()+15000;while(Date.now()<end){if(await test())return;await new Promise(r=>setTimeout(r,100));}throw Error(label);};
+ await until(()=>[...versions.values()].some(v=>v.scriptURL===workerURL&&v.runningStatus==='running'),'missing worker version');
+ const version=[...versions.values()].find(v=>v.scriptURL===workerURL&&v.runningStatus==='running');
+ await cdp.send('ServiceWorker.stopWorker',{versionId:version.versionId});
+ await until(async()=>{for(const candidate of context.serviceWorkers().filter(w=>w.url()===workerURL)){try{if(await candidate.evaluate(()=>globalThis.__selectionSentinel===undefined)){worker=candidate;return true;}}catch{}}return false;},'worker did not restart');
+ await selection(true);await page.reload();await restored();await demand(true);
+ await worker.evaluate(id=>chrome.tabs.update(id,{active:true}),temp);
+ await page.waitForFunction(()=>document.hidden,null,{polling:100});await demand(false);
+ const discarded=await worker.evaluate(async id=>{const tab=await chrome.tabs.discard(id);return tab?.discarded;},original);
+ assert.equal(discarded,true,'actual browser tab discard');
+ await worker.evaluate(id=>chrome.tabs.update(id,{active:true}),original);
+ await restored();assert.equal(await page.evaluate(()=>document.wasDiscarded),true,'new document confirms browser discard');
+ await selection(true);await demand(true);
+ console.log('PASS actual worker restart with sentinel + reload, actual chrome.tabs.discard + document.wasDiscarded + restored FOMO selection');
+ // Native tab changes and close are explicit opt-outs, retained across reload.
+ await page.locator('[data-testid="filter-tag-trending"]').click();await selection(false);
+ await page.reload();await page.locator('.gdh-discovery-trending-tab').waitFor();
+ assert.equal(await page.locator('.gdh-discovery-trending-tab').getAttribute('aria-pressed'),'false');
+ await page.locator('.gdh-discovery-trending-tab').click();await selection(true);
+ await page.locator('#native-close').click();await selection(false);
+ await page.reload();await page.locator('.gdh-discovery-trending-tab').waitFor();
+ assert.equal(await page.locator('.gdh-discovery-trending-tab').getAttribute('aria-pressed'),'false');
+ await page.locator('.gdh-discovery-trending-tab').click();await selection(true);
+ // Invalidation occurs while GMGN is hidden, so reload cannot miss an account reset.
+ await worker.evaluate(id=>chrome.tabs.update(id,{active:true}),temp);
+ await page.waitForFunction(()=>document.hidden,null,{polling:100});await demand(false);
+ await worker.evaluate(()=>invalidateFomoTrending(true));await selection(false);
+ await worker.evaluate(id=>chrome.tabs.update(id,{active:true}),original);
+ await page.reload();await page.locator('.gdh-discovery-trending-tab').waitFor();
+ assert.equal(await page.locator('.gdh-discovery-trending-tab').getAttribute('aria-pressed'),'false','account invalidation survives reload');
+ assert.deepEqual(errors,[]);
+ const result={realMV3:true,actualNativeVisibility:true,syntheticHost:true,liveAccount:false,visibilityPropertyOverrides:false,hiddenCleanup:true,selectionRestored:true,additionalReadsOnRestore:0,headerPaddingPreserved:true,fullReloadRestores:true,workerRestartRestores:true,nativeDiscardRestores:true,nativeAndCloseOptOutDurable:true,hiddenAccountResetDurable:true};
  fs.writeFileSync('test-results/native-visibility-verification.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result));
  await worker.evaluate(id=>chrome.tabs.remove(id),temp);
 }finally{

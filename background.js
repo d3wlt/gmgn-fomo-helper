@@ -1265,6 +1265,7 @@ let fomoTrendingCache = null;
 let fomoTrendingObservedAccount = null;
 let fomoTrendingNoticeEpoch = 0, fomoTrendingResetPending = false;
 function invalidateFomoTrending(resetAccount = false) {
+  if (resetAccount) void ownedTrendingDemand?.clearSelection().catch(() => {});
   const hadCache = !!fomoTrendingCache;
   fomoTrendingCache = null;
   if (!hadCache && !resetAccount) return;
@@ -2009,6 +2010,11 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === 'fomo-trending-selection') {
+    if (!ownedTrendingDemand) { sendResponse({ok:false}); return false; }
+    ownedTrendingDemand.handleSelection(message,sender).then(sendResponse).catch(()=>sendResponse({ok:false}));
+    return true;
+  }
   if (message?.type === 'fomo-auth-mirror-v1') {
     if (!ownedTrendingAuth) { sendResponse({ok:false}); return false; }
     ownedTrendingAuth.handleMirror(message,sender).then(sendResponse).catch(()=>sendResponse({ok:false}));

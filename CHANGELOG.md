@@ -4,6 +4,10 @@ Entries describe behavior at that version, not current support. Recent published
 
 ## Unreleased
 
+- Preserve the selected FOMO Trending source across same-tab page reloads using bounded extension-only session preferences, without keeping hidden-panel connections alive or persisting ranking data.
+- Ignore blank header clicks and non-tab controls when choosing the Trending source. Explicit native-tab selection, FOMO toggle-off, close, disable and account invalidation still clear the choice.
+- Cover real Chromium hidden/visible and reload lifecycles, delayed preference/account-reset races, per-tab isolation, worker restart and storage recovery.
+
 ## 0.53.29 - 2026-09-14
 
 - Replace the coin icon with the selected green frog-eyes artwork, preserving white eyes on a transparent exterior and generating the existing toolbar/popup icon sizes.
