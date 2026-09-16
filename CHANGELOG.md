@@ -2,6 +2,10 @@
 
 Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
 
+## 0.53.33 - 2026-09-16
+
+- Add a real Newest first / Oldest first / Most liked selector to Community FOMO Thesis. Sort only loaded posts without extra requests, keep newer-first ties for likes and unknown likes last, preserve the choice during page-local navigation and apply it to incoming updates.
+
 ## 0.53.32 - 2026-09-16
 
 - Enable Arc QuickBuy through GMGN's native component with existing account, token, trusted-input and stale-context safety guards. GMGN controls wallet eligibility; native browser-plugin wallet mode is not supported on Arc. No live trades were placed during verification.

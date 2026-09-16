@@ -4,7 +4,7 @@
 .gdh-thesis-tab { flex-shrink:0; }
 .gdh-thesis-tab button { appearance:none; border:0; padding:0; background:transparent; font:inherit; color:inherit; cursor:pointer; white-space:nowrap; }
 .gdh-thesis-tab button[aria-selected="true"] { color:#a6b2ff !important; }
-.gdh-thesis-tab button:focus-visible, .gdh-thesis-refresh:focus-visible { outline:2px solid #8294ff;outline-offset:3px; }
+.gdh-thesis-tab button:focus-visible, .gdh-thesis-refresh:focus-visible, .gdh-thesis-sort:focus-visible { outline:2px solid #8294ff;outline-offset:3px; }
 [data-gdh-thesis-panel] > :first-child .pi-tabs { min-width:0; }
 [data-gdh-thesis-panel] > :first-child .pi-tabs-nav-wrap { overflow-x:auto !important; scrollbar-width:none; }
 [data-gdh-thesis-panel] > :first-child .pi-tabs-nav-list { transform:none !important; }
@@ -20,6 +20,7 @@
 .gdh-thesis-status[data-status="unavailable"] { color:#fa9090; }
 .gdh-thesis-tools { display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:0 14px 12px; color:#898989; font-size:12px; flex-shrink:0; }
 .gdh-thesis-tools > :nth-child(2) { margin-left:auto; }
+.gdh-thesis-sort { font:inherit; color:#bcbcbc; background:#111; border:1px solid #303340; border-radius:4px; padding:2px 4px; min-height:26px; max-width:100%; cursor:pointer; color-scheme:dark; }
 .gdh-thesis-refresh { appearance:none; font:inherit; color:#a6b2ff; border:1px solid #303340; border-radius:4px; background:transparent; padding:2px 6px; min-height:26px; cursor:pointer; }
 .gdh-thesis-refresh:disabled { opacity:.45;cursor:default; }
 .gdh-thesis-list { flex:1; min-height:0; overflow:auto; overflow-x:hidden; overflow-anchor:none; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:#383838 transparent; }
@@ -39,6 +40,9 @@
 .gdh-thesis-footer { padding:10px 14px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:5px; font-size:11px; line-height:17px; color:#909090; border-top:1px solid #242424; flex-shrink:0; }
 .gdh-thesis-footer > :first-child { text-decoration:underline dotted; cursor:help; }
 @container (max-width:260px) {
+  .gdh-thesis-tools > :first-child { flex-basis:100%; }
+  .gdh-thesis-tools > :nth-child(2) { margin-left:0; }
+  .gdh-thesis-refresh { margin-left:auto; }
   .gdh-thesis-author { flex-wrap:wrap; row-gap:3px; }
   .gdh-thesis-person { flex-basis:calc(100% - 40px); }
   .gdh-thesis-author time { margin-left:39px; flex-basis:calc(100% - 39px); }

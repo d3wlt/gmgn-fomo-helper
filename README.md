@@ -1,6 +1,6 @@
 # GMGN FOMO Helper
 
-A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.32** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
+A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.33** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
 
 This project is not affiliated with GMGN, FOMO or the original upstream author.
 
@@ -47,6 +47,8 @@ Keep a FOMO tab open and signed in so the native application receives activity. 
 - Names, avatars, tickers and market caps come from observed native data. Missing metadata has explicit fallbacks rather than invented values.
 
 ### Community FOMO Thesis
+
+Sort loaded posts by **Newest first**, **Oldest first**, or **Most liked** (newer posts win like-count ties; unknown likes sort last). Sorting is local and makes no extra requests. The choice stays in page memory across token switches/reopening and resets on page reload. Changing order returns to the top; incoming updates preserve the selected order and reading anchor. This sorts only loaded posts, not all-time history.
 
 Open **GMGN Community → FOMO Thesis**, immediately after X Tracker, for the current token's GMGN-supplied theses in a compact native-style list. Full post text and author names, timestamps, optional developer markers and read-only like counts are shown. New posts preserve your reading position. Callout and X Tracker remain native, including the panel's resize control.
 
@@ -105,7 +107,7 @@ Requirements: Node.js 22+, Python 3 for the portable builder, or PowerShell for 
 npm ci
 npx playwright install chromium
 npm run verify
-python3 scripts/build-release.py --tag v0.53.32
+python3 scripts/build-release.py --tag v0.53.33
 ```
 
 On PowerShell:

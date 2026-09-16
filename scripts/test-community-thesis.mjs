@@ -30,6 +30,25 @@ try{
  const offset=await page.locator('.gdh-thesis-list').evaluate((e,id)=>e.querySelector(`[data-thesis-id="${id}"]`).getBoundingClientRect().top-e.getBoundingClientRect().top,anchor.id);assert.ok(Math.abs(offset-anchor.offset)<2,'new posts preserve reading anchor');
  await page.locator('.gdh-thesis-list').evaluate(e=>e.scrollTop=e.scrollHeight);assert.equal(await page.locator('[data-thesis-id=thesis-39]').isVisible(),true);
  await page.evaluate(items=>send(items,'error'),[newest,...items]);assert.equal(await page.locator('.gdh-thesis-post').count(),41);assert.equal(await page.locator('.gdh-thesis-status').textContent(),'Limited','partial valid records remain visible without claiming a complete snapshot');
+ // Sorting is local, stable on ties, and remains applied to incoming updates.
+ const ids=()=>page.locator('.gdh-thesis-post').evaluateAll(es=>es.map(e=>e.dataset.thesisId));
+ const sort=page.getByRole('combobox',{name:'Sort loaded theses'});
+ assert.equal(await sort.inputValue(),'newest');
+ const sortItems=[{...items[0],id:'unknown',like_count:null},{...items[0],id:'zero',like_count:0},...items];
+ await page.evaluate(items=>send(items),sortItems);
+ for(const mode of ['oldest','likes','newest']){
+  await page.locator('.gdh-thesis-list').evaluate(e=>e.scrollTop=400);
+  await sort.selectOption(mode);
+  const expected=[...sortItems].sort((a,b)=>(mode==='likes'?(b.like_count??-1)-(a.like_count??-1):0)||(mode==='oldest'?a.fomo_created_at-b.fomo_created_at:b.fomo_created_at-a.fomo_created_at)||a.id.localeCompare(b.id)).map(i=>i.id);
+  assert.deepEqual(await ids(),expected);assert.equal(await page.locator('.gdh-thesis-list').evaluate(e=>e.scrollTop),0);
+ }
+ await sort.selectOption('likes');
+ const updated=[...sortItems,{...newest,id:'liked-new',like_count:99}];
+ await page.evaluate(items=>send(items,'streaming'),updated);assert.equal((await ids())[0],'liked-new');
+ assert.equal(await page.evaluate(()=>demands.length),1,'sorting never requests or reconnects');
+ assert.equal(await sort.evaluate(e=>{const r=e.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth;}),true);
+ await sort.focus();assert.equal(await sort.evaluate(e=>document.activeElement===e),true,'sort is keyboard focusable');await page.keyboard.press('Escape');
+ await sort.selectOption('likes');
  // Late prior-token packets cannot leak into the new token view.
  await page.evaluate(other=>{window.oldReq=demands.at(-1);history.pushState({},'',`/robinhood/token/${other}`);},other);await page.waitForFunction(()=>demands.length===2);
  assert.equal(await page.locator('.gdh-thesis-post').count(),0);await page.evaluate(items=>send(items,'snapshot',oldReq),items);assert.equal(await page.locator('.gdh-thesis-post').count(),0);
@@ -37,6 +56,8 @@ try{
  await page.evaluate(()=>send([],'error'));assert.equal(await page.locator('.gdh-thesis-status').textContent(),'Unavailable');
  await page.locator('#fixture-tab-x_tracker').click();assert.equal(await page.evaluate(()=>nativeClicks),1);assert.equal(await page.locator('.native-body').isVisible(),true);assert.equal(await page.evaluate(()=>document.documentElement.hasAttribute('data-gdh-thesis-demand')),false);
  await page.locator('#gdh-thesis-tab').click();await page.waitForFunction(()=>demands.length===3);await page.evaluate(items=>send(items.map(i=>({...i,token_address:location.pathname.split('/').at(-1)}))),items.slice(0,5));
+ assert.equal(await sort.inputValue(),'likes','sort choice survives token switches and reopen');
+ assert.deepEqual(await ids(),['thesis-2','thesis-1','thesis-4','thesis-0','thesis-3']);
  await page.screenshot({path:new URL(`test-results/community-thesis-${width}.png`,root).pathname});
  await page.evaluate(()=>storageListeners.forEach(fn=>fn({enableFomoPanel:{newValue:false}},'local')));await page.waitForFunction(()=>!document.querySelector('#gdh-community-thesis'));
  assert.equal(await page.locator('.native-body').isVisible(),true);assert.equal(await page.locator('#fixture-tab-community').getAttribute('aria-selected'),'true');assert.equal(await page.evaluate(()=>document.documentElement.hasAttribute('data-gdh-thesis-demand')),false);

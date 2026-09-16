@@ -5,7 +5,7 @@
   const DEMAND = 'data-gdh-thesis-demand', RESULT = 'data-gdh-thesis-result';
   const CHAINS = {sol:'Solana',eth:'Ethereum',bsc:'BSC',base:'Base',robinhood:'Robinhood',arc:'Arc',monad:'Monad'};
   let settings = null, view = null, selected = false, request = null, sequence = 0, pending = null, stopped = false;
-  let lastKey = '', refreshAfter = 0, retryAt = 0, retries = 0;
+  let lastKey = '', refreshAfter = 0, retryAt = 0, retries = 0, sortOrder = 'newest';
   const route = () => {
     const m = location.pathname.match(/^\/([a-z]+)\/token\/([^/]+)\/?$/);
     if (!m || !Object.hasOwn(CHAINS, m[1])) return null;
@@ -27,7 +27,7 @@
   }
   function clearRows() {
     if (!view) return;
-    view.rows.clear(); view.list.replaceChildren(); view.list.scrollTop = 0;
+    view.items = []; view.rows.clear(); view.list.replaceChildren(); view.list.scrollTop = 0;
     view.symbol.textContent = ''; view.count.textContent = ''; view.updated.textContent = '';
   }
   function state(status, message) {
@@ -99,7 +99,10 @@
     const context = node('div','gdh-thesis-context'), symbol = node('strong'), chain = node('span'), status = node('span','gdh-thesis-status');
     status.title = 'Snapshot means history loaded. Updates means a matching stream update was received; it does not guarantee uninterrupted delivery.';
     context.append(symbol,chain,status);
-    const tools = node('div','gdh-thesis-tools'), count = node('span'), order = node('span','','Newest first');
+    const tools = node('div','gdh-thesis-tools'), count = node('span'), order = node('select','gdh-thesis-sort');
+    order.setAttribute('aria-label','Sort loaded theses');order.title='Sort loaded posts only, not the complete token history';
+    for(const [value,label] of [['newest','Newest first'],['oldest','Oldest first'],['likes','Most liked']]){const option=node('option','',label);option.value=value;order.append(option);}
+    order.value=sortOrder;
     const refresh = node('button','gdh-thesis-refresh','Refresh');refresh.type='button';refresh.title='Reload available token theses';
     tools.append(count,order,refresh);
     const message = node('div','gdh-thesis-message');message.setAttribute('role','status');
@@ -108,7 +111,8 @@
     coverage.tabIndex=0;coverage.title='Keeps up to 200 newest received posts in page memory. GMGN provides no verified pagination or total count; this is not complete history.';
     footer.append(coverage,updated);root.append(context,tools,message,list,footer);panel.append(root);panel.dataset.gdhThesisPanel='1';
     const onNative = e => { const t=e.target.closest('[role="tab"]');if(t && t!==button && nav.contains(t)) deactivate(); };
-    view={feed,panel,nav,header,tab,button,root,symbol,chain,status,count,refresh,message,list,updated,rows:new Map(),nativeAria:new Map(),onNative};
+    view={feed,panel,nav,header,tab,button,root,symbol,chain,status,count,refresh,message,list,updated,items:[],rows:new Map(),nativeAria:new Map(),onNative};
+    order.addEventListener('change',()=>{if(!['newest','oldest','likes'].includes(order.value))return;sortOrder=order.value;renderRows(true);});
     header.addEventListener('click',onNative,true);
     button.addEventListener('click', e => { if (!e.isTrusted) return; if(!selected) activate(); });
     refresh.addEventListener('click', e => { if(e.isTrusted && Date.now() >= refreshAfter) { endDemand();startDemand(); } });
@@ -152,19 +156,26 @@
     if(!['snapshot','streaming','error'].includes(data.status) || !Array.isArray(data.items) || data.items.length>1000) return;
     const items=data.items.map(x=>normalize(x,request));
     if(items.some(x=>!x)){clearRows();state('Unavailable','GMGN returned unsupported thesis data.');return;}
-    const unique=[...new Map(items.map(x=>[x.id,x])).values()].sort((a,b)=>b.time-a.time || a.id.localeCompare(b.id));
+    const unique=[...new Map(items.map(x=>[x.id,x])).values()];
+    view.items=unique;renderRows();
+    view.symbol.textContent=unique.find(x=>x.symbol)?.symbol || `${request.address.slice(0,6)}…${request.address.slice(-4)}`;
+    view.count.textContent=`${unique.length} loaded`;
+    view.updated.textContent='Updated '+new Date().toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});
+    state(data.status==='error'?'Limited':data.status==='streaming'?'Updates':'Snapshot',data.status==='error'?'Available posts shown; history or updates are incomplete. Refresh to resync.':unique.length?'':'No theses supplied for this token.');
+  }
+  function renderRows(reset=false) {
+    if(!view)return;
+    const unique=[...view.items].sort((a,b)=>
+      (sortOrder==='likes'?(b.likes??-1)-(a.likes??-1):0) ||
+      (sortOrder==='oldest'?a.time-b.time:b.time-a.time) || a.id.localeCompare(b.id));
     const oldTop=view.list.scrollTop, box=view.list.getBoundingClientRect();
-    const anchor=oldTop>4?[...view.list.children].find(e=>e.getBoundingClientRect().bottom>box.top):null;
+    const anchor=!reset && oldTop>4?[...view.list.children].find(e=>e.getBoundingClientRect().bottom>box.top):null;
     const anchorId=anchor?.dataset.thesisId, offset=anchor?anchor.getBoundingClientRect().top-box.top:0;
     const next=new Map(),frag=document.createDocumentFragment();
     for(const item of unique){const signature=JSON.stringify(item),old=view.rows.get(item.id),entry=old?.signature===signature?old:{signature,node:row(item)};next.set(item.id,entry);frag.append(entry.node);}
     view.rows=next;view.list.replaceChildren(frag);
     if(anchorId && next.has(anchorId))view.list.scrollTop+=next.get(anchorId).node.getBoundingClientRect().top-view.list.getBoundingClientRect().top-offset;
-    else view.list.scrollTop=oldTop>4?oldTop:0;
-    view.symbol.textContent=unique.find(x=>x.symbol)?.symbol || `${request.address.slice(0,6)}…${request.address.slice(-4)}`;
-    view.count.textContent=`${unique.length} loaded`;
-    view.updated.textContent='Updated '+new Date().toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});
-    state(data.status==='error'?'Limited':data.status==='streaming'?'Updates':'Snapshot',data.status==='error'?'Available posts shown; history or updates are incomplete. Refresh to resync.':unique.length?'':'No theses supplied for this token.');
+    else view.list.scrollTop=reset?0:oldTop>4?oldTop:0;
   }
   function scan() {
     pending=null;if(stopped)return;
