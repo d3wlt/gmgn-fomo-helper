@@ -69,6 +69,13 @@ test('committed alternate is selected, stale and pending props are refused', () 
   e.host.__reactFiber$test = e.anchor;
   e.list.pendingProps = {...e.list.memoizedProps, data: []}; assert.equal(e.read(), null);
 });
+test('Arc 5042 descriptors are recognized without merging same-address chains', () => {
+  const arc={source:'live',key:key(1).replace(':4663',':5042'),topicKey:'trending_tokens:4663,5042'};
+  const e=env([arc,{...live(1),topicKey:arc.topicKey}],[]),v=e.read();
+  assert.deepEqual(v.items.map(r=>r.networkId),[5042,4663]);
+  assert.equal(v.items[0].address,v.items[1].address);assert.notEqual(v.items[0].key,v.items[1].key);
+  assert.equal(e.calls.network,0);
+});
 test('snapshot frozen fallback is allowlisted; unsafe snapshot price overlay omitted', () => {
   const raw = {priceUSD: '3', change24: '-0.4', token: {address: key(1).split(':')[0], networkId: 4663,
     symbol: 'X', name: 'Frozen', info: {totalSupply: '10'}}};

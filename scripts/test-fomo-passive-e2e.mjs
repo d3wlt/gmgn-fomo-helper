@@ -78,6 +78,9 @@ try {
   assert.ok(snapshot.events.every(e=>e.avatar===base.profilePictureLink&&e.symbol==='NATIVE'));
   assert.deepEqual(nativeRequests.sort(),['/feed/tradingActivity','/v2/users/current','/v2/users/current/followingIds'].sort());
   assert.deepEqual(await worker.evaluate(()=>__passiveOutbound),[]);
+  nativeSocket.send(JSON.stringify({type:'data',topicType:'trading_activity',topicId:'account-a',payload:{...base,id:'observed-arc-buy',networkId:5042,ticker:'ARC_FIXTURE',type:'swap_buy',usdAmount:501,fdv:17100}}));
+  snapshot=await waitSnapshot(s=>s.events?.some(e=>e.chain==='arc'));
+  const arc=snapshot.events.find(e=>e.chain==='arc');assert.equal(arc.addr,base.tokenAddress);assert.equal(arc.symbol,'ARC_FIXTURE');assert.equal(arc.usd,501);assert.equal(arc.mc,17100);
   // Native Trending crosses the real trusted socket/MAIN/isolated/MV3 chain.
   const ca='0x1111111111111111111111111111111111111111',sol='So11111111111111111111111111111111111111112';
   const trend=(address,networkId,symbol)=>({token:{address,networkId,symbol,info:{totalSupply:'1000000'}},priceUSD:'0.25',marketCap:999,change24:'0.12'});

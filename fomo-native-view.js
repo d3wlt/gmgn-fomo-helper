@@ -9,7 +9,7 @@
   if (location.origin !== 'https://fomo.family' || window.top !== window ||
       Object.getOwnPropertyDescriptor(window, '__gdhFomoNativeView')) return;
   const LIMIT = 20000, DOM_LIMIT = 12000, DEPTH = 256;
-  const networks = new Set([1, 56, 8453, 143, 4663, 1399811149]);
+  const networks = new Set([1, 56, 8453, 143, 4663, 5042, 1399811149]);
   // Read data properties only: public props must never execute page getters/selectors.
   const g = (o, k) => o && Object.getOwnPropertyDescriptor(o, k)?.value;
   const fail = () => { throw new Error('unavailable'); };

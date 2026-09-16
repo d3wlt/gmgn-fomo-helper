@@ -40,7 +40,7 @@
   // One native topic/socket, bounded full list so removals beyond top100 remain correct.
   // No native wire sequence exists: ordered trusted socket delivery plus fail-closed parsing.
   let trending = null, trendingTimer = null, trendingDirty = false, trendingSnapshot = false;
-  const networks = {1:'eth',56:'bsc',8453:'base',143:'monad',4663:'robinhood',1399811149:'sol'};
+  const networks = {1:'eth',56:'bsc',8453:'base',143:'monad',4663:'robinhood',5042:'arc',1399811149:'sol'};
   function clearTrending() {
     trending = null; trendingSnapshot = false; scheduleTrending();
   }

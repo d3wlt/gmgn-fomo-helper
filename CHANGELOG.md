@@ -4,6 +4,8 @@ Entries describe behavior at that version, not current support. Recent published
 
 ## Unreleased
 
+- Recognize Arc mainnet (FOMO network 5042) across passive activity, token views, native ranking observations and the owned Trending subscription. Arc rows use GMGN's blue/custom chain stripe and navigate to `/arc/token/<contract>`; identical addresses on other chains remain distinct. No new permissions or Arc QuickBuy support.
+
 - Preserve the selected FOMO Trending source across same-tab page reloads using bounded extension-only session preferences, without keeping hidden-panel connections alive or persisting ranking data.
 - Ignore blank header clicks and non-tab controls when choosing the Trending source. Explicit native-tab selection, FOMO toggle-off, close, disable and account invalidation still clear the choice.
 - Cover real Chromium hidden/visible and reload lifecycles, delayed preference/account-reset races, per-tab isolation, worker restart and storage recovery.

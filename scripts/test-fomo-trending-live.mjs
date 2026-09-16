@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
 const source = fs.readFileSync(new URL('../fomo-trending-live.js',import.meta.url),'utf8');
-const TOPIC = '56,143,4663,8453,1399811149';
+const TOPIC = '56,143,4663,5042,8453,1399811149';
 const A = i => '0x'+i.toString(16).padStart(40,'0');
 const row = (i,n=56) => ({token:{address:A(i),networkId:n,symbol:'T'+i,name:'Token',info:{totalSupply:'100'}},priceUSD:'2',change24:'-.2'});
 const key = (i,n=56) => `${A(i)}:${n}`;
@@ -34,6 +34,16 @@ function fixture(initialTime=1000000,jitter=0) {
   return {api,context,sockets,updates,timers,tick,open,auth,get calls(){return calls;},get time(){return time;},set session(v){session=v;},set getter(v){getter=v;}};
 }
 const tests=[]; const test=(name,fn)=>tests.push([name,fn]);
+test('Arc 5042 snapshot/delta/removal stays distinct from same-address BSC',async()=>{
+  const f=fixture(),s=await f.open();await f.auth(s);
+  s.full([row(10,5042),row(10,56)]);
+  assert.deepEqual(Array.from(f.api.getSnapshot().items,r=>r.chain),['arc','bsc']);
+  s.payload({kind:'update',tokenKey:key(10,5042),index:1,update:{...row(10,5042),priceUSD:'3'}});
+  const items=f.api.getSnapshot().items;
+  assert.deepEqual(Array.from(items,r=>r.chain),['bsc','arc']);assert.equal(items[1].marketCap,300);assert.equal(items[0].marketCap,200);
+  s.payload({kind:'remove',tokenKey:key(10,5042)});
+  assert.deepEqual(Array.from(f.api.getSnapshot().items,r=>r.chain),['bsc']);
+});
 test('immutable classic global, start deduplication, auth and snapshot gate',async()=>{
   const f=fixture(); assert.ok(Object.isFrozen(f.api)); assert.ok(Object.isFrozen(f.context.gdhCreateTrendingLive));
   assert.equal(Object.getOwnPropertyDescriptor(f.context,'gdhCreateTrendingLive').writable,false);

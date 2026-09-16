@@ -74,6 +74,16 @@ socket.frame({kind:'update',tokenKey:A(8)+':56',index:0,update:row(8)});await f.
 assert.equal((await f.worker.load()).items[0].address,A(7),'successor socket requires snapshot');
 f.worker.tick(300000);assert.equal((await f.worker.load()).ok,false,'suspension does not defeat TTL');
 assert.equal(f.worker.calls.length,0);assert.equal(f.counts().sends,0);
+// Arc travels through the actual MAIN/isolated/worker parsers with exact identity.
+f=fixture();socket=new f.w.WebSocket('wss://prod-api.fomo.family/ws');await f.account();
+const arcRow={...row(8),token:{...row(8).token,networkId:5042}};
+socket.frame({kind:'snapshot',tokens:[arcRow,row(8)]},'56,5042');await f.flush();
+assert.deepEqual(Array.from((await f.worker.load()).items,r=>r.chain),['arc','bsc']);
+socket.frame({kind:'update',tokenKey:A(8)+':5042',index:1,update:{...arcRow,priceUSD:'3'}},'56,5042');await f.flush();
+data=await f.worker.load();assert.deepEqual(Array.from(data.items,r=>r.chain),['bsc','arc']);assert.equal(data.items[1].marketCap,300);
+socket.frame({kind:'remove',tokenKey:A(8)+':5042'},'56,5042');await f.flush();
+assert.deepEqual(Array.from((await f.worker.load()).items,r=>r.chain),['bsc']);
+assert.equal(f.worker.calls.length,0);assert.equal(f.counts().sends,0);
 // Native data before account and isolated-listener lateness, replay only existing memory.
 f=fixture(true);socket=new f.w.WebSocket('wss://prod-api.fomo.family/ws');socket.frame({kind:'snapshot',tokens:[row(2)]});await f.account();await f.flush();f.isolated();await f.flush();assert.equal((await f.worker.load()).items[0].address,A(2));
 // Account switch is native-observed; old socket/frames cannot populate its successor.

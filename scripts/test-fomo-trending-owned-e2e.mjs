@@ -15,7 +15,7 @@ const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const manifest=JSON.parse(fs.readFileSync(path.join(root,'manifest.json'),'utf8'));
 const workerURL=`chrome-extension://bdhjiabmohplopjledcagfaejbgdeonf/${manifest.background.service_worker}`;
 const profile=fs.mkdtempSync(path.join(os.tmpdir(),'gdh-owned-trending-e2e-'));
-const API='https://prod-api.fomo.family', TOPIC='56,143,4663,8453,1399811149';
+const API='https://prod-api.fomo.family', TOPIC='56,143,4663,5042,8453,1399811149';
 const A='0x1111111111111111111111111111111111111111',B='0x2222222222222222222222222222222222222222';
 const jwt=[{alg:'HS256',typ:'JWT'},{sub:'account-a',exp:Math.floor(Date.now()/1000)+3600},'synthetic-only'].map(v=>Buffer.from(typeof v==='string'?v:JSON.stringify(v)).toString('base64url')).join('.');
 const counts={requests:0,nativeAuth:0,workerAuth:0,connections:0,challengeResponses:0,subscriptions:0,followingSubscriptions:0,closed:0,unexpected:0};

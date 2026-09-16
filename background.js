@@ -112,7 +112,7 @@ async function fomoKeepAlive(force) {
 }
 
 const FOMO_API = 'https://prod-api.fomo.family';
-const FOMO_CHAINS = '1,56,143,4663,8453,1399811149';
+const FOMO_CHAINS = '1,56,143,4663,5042,8453,1399811149';
 const FOMO_CACHE_MS = 20000;
 const FOMO_CACHE_MAX = 60;
 const fomoCache = new Map();
@@ -232,7 +232,7 @@ function fomoActivityPosition(raw, side = fomoActivitySide(raw)) {
 }
 
 const FOMO_NETWORK_SLUG = {
-  1: 'eth', 56: 'bsc', 143: 'monad', 4663: 'robinhood', 8453: 'base', 1399811149: 'sol',
+  1: 'eth', 56: 'bsc', 143: 'monad', 4663: 'robinhood', 5042: 'arc', 8453: 'base', 1399811149: 'sol',
 };
 
 function fomoNetworkSlug(raw) {
@@ -398,6 +398,7 @@ const FOMO_QUOTE_TOKENS = {
   56: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d',
   8453: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
   4663: '0x5fc5360d0400a0fd4f2af552add042d716f1d168',
+  5042: '0x3600000000000000000000000000000000000000',
   143: '0x754704bc059f8c67012fed69bc8a327a5aafb603',
   1: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
 };

@@ -3,8 +3,8 @@
   'use strict';
   if (Object.prototype.hasOwnProperty.call(globalThis, 'gdhCreateTrendingLive')) return;
   const URL = 'wss://prod-api.fomo.family/ws';
-  const TOPIC = '56,143,4663,8453,1399811149';
-  const NETWORKS = Object.freeze({56:'bsc',143:'monad',4663:'robinhood',8453:'base',1399811149:'sol'});
+  const TOPIC = '56,143,4663,5042,8453,1399811149';
+  const NETWORKS = Object.freeze({56:'bsc',143:'monad',4663:'robinhood',5042:'arc',8453:'base',1399811149:'sol'});
   const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
   const metric = (v, signed = false) => {
     if (!['string','number'].includes(typeof v) || String(v).trim() === '') return null;
@@ -13,7 +13,7 @@
   };
   const text = v => typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g,'').slice(0,120) : '';
   function identity(address, network) {
-    if (!['string','number'].includes(typeof network) || !/^(56|143|4663|8453|1399811149)$/.test(String(network))) return null;
+    if (!['string','number'].includes(typeof network) || !/^(56|143|4663|5042|8453|1399811149)$/.test(String(network))) return null;
     const networkId = Number(network), sol = networkId === 1399811149;
     if (typeof address !== 'string' || !(sol ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/ : /^0x[a-fA-F0-9]{40}$/).test(address)) return null;
     return {networkId, address:sol ? address : address.toLowerCase()};

@@ -1453,8 +1453,8 @@
     recordNotificationHistory(info);
   }
 
-  const FOMO_NETWORK_ID = { bsc: 56, eth: 1, base: 8453, sol: 1399811149, robinhood: 4663, monad: 143 };
-  const FOMO_CHAIN_SLUG = { bsc: 'bnb', eth: 'eth', base: 'base', sol: 'sol', robinhood: 'robinhood', monad: 'monad' };
+  const FOMO_NETWORK_ID = { bsc: 56, eth: 1, base: 8453, sol: 1399811149, robinhood: 4663, monad: 143, arc: 5042 };
+  const FOMO_CHAIN_SLUG = { bsc: 'bnb', eth: 'eth', base: 'base', sol: 'sol', robinhood: 'robinhood', monad: 'monad', arc: 'arc' };
   const FOMO_REFRESH_MS = 30000;
   let fomoPanelEl = null;
   let fomoTab = 'thesis';
