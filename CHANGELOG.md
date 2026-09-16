@@ -2,7 +2,7 @@
 
 Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
 
-## Unreleased
+## 0.53.31 - 2026-09-16
 
 - Follow native GMGN chain selections for FOMO Tracking activity and Trending. Read final committed picker values, preserving linked/independent panel choices, multi-chain selections, server rank order and chain+contract identity. Refilter retained data without reconnecting or adding provider requests.
 - Remove the obsolete extension-only current-chain checkbox and ignore its old saved value. If an observed picker becomes unavailable or malformed, hide its FOMO rows rather than widening the selection. Legacy layouts with no native picker retain their previous all-chain view. Token-panel context and position-surge alerts are unchanged.
