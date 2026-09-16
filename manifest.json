@@ -46,7 +46,8 @@
       ],
       "js": [
         "page-bridge.js",
-        "native-quickbuy.js"
+        "native-quickbuy.js",
+        "native-thesis.js"
       ],
       "run_at": "document_start",
       "world": "MAIN"
@@ -56,10 +57,12 @@
         "https://gmgn.ai/*"
       ],
       "css": [
-        "styles.css"
+        "styles.css",
+        "community-thesis.css"
       ],
       "js": [
-        "content.js"
+        "content.js",
+        "community-thesis.js"
       ],
       "run_at": "document_idle"
     },

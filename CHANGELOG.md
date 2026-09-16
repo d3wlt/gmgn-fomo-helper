@@ -2,6 +2,10 @@
 
 Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
 
+## Unreleased
+
+- Add the native-list FOMO Thesis tab after X Tracker inside GMGN Community. Use on-demand token-scoped GMGN history and native thesis updates independently of chart-bubble visibility, with plaintext posts, full names, read-only likes, narrow-panel navigation and preserved reader position. Keep native tabs and resize controls intact. History coverage remains limited; no posting, liking or trading actions are added.
+
 ## 0.53.31 - 2026-09-16
 
 - Follow native GMGN chain selections for FOMO Tracking activity and Trending. Read final committed picker values, preserving linked/independent panel choices, multi-chain selections, server rank order and chain+contract identity. Refilter retained data without reconnecting or adding provider requests.

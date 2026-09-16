@@ -34,6 +34,10 @@ This ranking path does not create keeper tabs, activate/reload FOMO, execute ref
 
 Token comparison sends no requests. It retains up to 500 chain/address identities and their observed names/source times in page memory for 30 minutes, labels observations stale after five minutes, and clears on account invalidation or page destruction. The comparison view is created only on demand. Missing metadata is not looked up or invented.
 
+## Community thesis feed
+
+The separate **GMGN Community → FOMO Thesis** tab uses the native GMGN API client for token-thesis history and the native quotation manager's scoped thesis subscription while that tab is selected and visible. It works independently of chart bubble visibility. The helper does not copy GMGN credentials or construct trading, posting or liking requests. Sanitized thesis records remain in page memory, not extension storage. Public avatar images may load from the supplied allowlisted GMGN/FOMO profile-image hosts with no referrer. Closing/hiding the panel releases its demand; token/session changes and authentication failures clear old data. Available history is bounded and has no verified total or pagination.
+
 ## What the extension does not do
 
 The extension does not include analytics, advertising, remote executable code, desktop companion software, wallet-signing logic or secret-key collection. Optional QuickBuy mounts GMGN's native control and uses its current account, amount and trading flow; the helper does not construct transactions itself. The extension does not claim affiliation with any supported service.

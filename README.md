@@ -46,6 +46,14 @@ Keep a FOMO tab open and signed in so the native application receives activity. 
 - Grouped multi-user and transfer rows are not supported. Worker/browser restarts may clear the passive event cache; subsequent native observations refill it.
 - Names, avatars, tickers and market caps come from observed native data. Missing metadata has explicit fallbacks rather than invented values.
 
+### Community FOMO Thesis
+
+Open **GMGN Community → FOMO Thesis**, immediately after X Tracker, for the current token's GMGN-supplied theses in a compact native-style list. Full post text and author names, timestamps, optional developer markers and read-only like counts are shown. New posts preserve your reading position. Callout and X Tracker remain native, including the panel's resize control.
+
+This feed makes on-demand GMGN history requests and uses GMGN's native token-thesis subscription while selected and visible, independently of the chart's Display → Fomo Thesis bubble setting. It is not the passive Following tracker. Hidden/closed panels release demand; token changes and unavailable sessions clear old rows. No liking, posting, trading or credential-copying workflow is added. Disabling the FOMO panel feature also disables this tab.
+
+**Snapshot** means history loaded; **Updates** means a matching stream update was received, not a guarantee of uninterrupted delivery. The feed retains up to 200 newest received posts in page memory; GMGN provides no verified pagination or all-time total. Partial failures retain independently valid posts with a **Limited** label. Refresh is manual and rate-limited; rapid reopen/token transitions may wait briefly for request pacing. This tab's selection and posts are page-memory-only, not persisted across reloads.
+
 ### Token context
 
 - Tracker thesis events use the **Thesis** label with the actual post text, without a redundant position badge or tokenless THESIS placeholder; real token metadata and actions remain available.
