@@ -75,7 +75,8 @@ try{
  assert.equal(await page.locator('.gdh-fomofeed__stripe').evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(17, 34, 51)','native custom chain color is retained');
  await page.locator('.gdh-fomofeed').hover();
  await page.locator('.gdh-native-buy-host').hover();
- assert.equal(await page.locator('.gdh-native-buy-host').getAttribute('data-state'),'unavailable','Arc support does not enable an unverified native trading path');
+ assert.equal(await page.locator('.gdh-native-buy-host').getAttribute('data-state'),'unavailable','Arc fails closed without native tracker account context');
+ assert.match(await page.locator('.gdh-native-buy-host').getAttribute('title'),/Native tracker account context unavailable/);
  assert.equal(requests.length,1,'only routed initial page: no API or trading requests');assert.deepEqual(errors,[]);
  console.log('PASS Arc 5042: production passive worker normalization, quote/network mapping, distinct same-CA chain identity, blue/default and custom stripes, full content-to-MAIN /arc/token navigation in table/card at 1000/390; unknown-chain fallback and zero provider/trading I/O');
 }finally{await browser.close();}

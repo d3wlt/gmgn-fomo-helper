@@ -12,7 +12,9 @@
     const card = host.closest('.gdh-fomofeed');
     if (!card || !card.isConnected || card.dataset.gdhFomoStale === '1') return null;
     const chain = host.dataset.chain || '', address = host.dataset.address || '';
-    if (!['sol', 'eth', 'bsc', 'base', 'robinhood'].includes(chain)) return null;
+    // Arc is registered by native GMGN with trade=true and USDC quote settings.
+    // Native QuickBuy retains ownership of wallet eligibility, quote and amount.
+    if (!['sol', 'eth', 'bsc', 'base', 'robinhood', 'arc'].includes(chain)) return null;
     if (!(chain === 'sol' ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/ : /^0x[a-fA-F0-9]{40}$/).test(address)) return null;
     if (!host.dataset.eventKey || host.dataset.eventKey !== card.dataset.gdhFomoKey) return null;
     return { chain, address, symbol: host.dataset.symbol || '', logo: host.dataset.logo || '', key: host.dataset.eventKey };
