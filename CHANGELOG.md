@@ -2,7 +2,7 @@
 
 Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
 
-## Unreleased
+## 0.53.30 - 2026-09-16
 
 - Recognize Arc mainnet (FOMO network 5042) across passive activity, token views, native ranking observations and the owned Trending subscription. Arc rows use GMGN's blue/custom chain stripe and navigate to `/arc/token/<contract>`; identical addresses on other chains remain distinct. No new permissions or Arc QuickBuy support.
 
