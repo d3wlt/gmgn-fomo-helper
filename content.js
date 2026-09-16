@@ -124,7 +124,6 @@
     ],
     enableMarkedHolders: true,
     enableFomoFeed: true,
-    fomoFeedChainOnly: false,
     fomoFeedTypes: { buy: true, sell: true, thesis: true },
     highlightColor: '#f5b83d',
   };
@@ -1997,9 +1996,10 @@
     const state = discoveryTrending;
     if (!state?.active) return;
     const data = discoveryTrendingData;
+    const chainFilter = nativeFomoChainFilter('trending');
     const age = data?.fetchedAt ? Math.max(0, Date.now() - data.fetchedAt) : 0;
     const stale = !!data?.fetchedAt && (data.stale || age >= 60000);
-    const key = JSON.stringify([state.loading, data, Math.floor(age / 60000), age > 300000, data?.retryAt > Date.now()]);
+    const key = JSON.stringify([state.loading, data, chainFilter.key, Math.floor(age / 60000), age > 300000, data?.retryAt > Date.now()]);
     if (state.renderKey === key) return;
     state.renderKey = key;
     const panel = state.panel, oldScroll = panel.scrollTop;
@@ -2028,6 +2028,7 @@
     for (const item of items.slice(0, 200)) {
       const ref = discoveryRef(item.chain, item.address);
       if (!ref || FOMO_NETWORK_ID[ref.chain] !== item.networkId || item.source !== 'fomo-trending') continue;
+      if (chainFilter.selected && !chainFilter.selected.has(ref.chain)) continue;
       const row = document.createElement('a'); row.className = 'gdh-discovery-trending-row'; row.href = `/${ref.chain}/token/${ref.address}`;
       row.addEventListener('click', event => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); gdhSpaNavigate(row.getAttribute('href')); });
       const rank = document.createElement('span'); rank.className = 'gdh-discovery-rank'; rank.textContent = Number.isInteger(item.rank) && item.rank > 0 ? String(item.rank) : '—';
@@ -2042,7 +2043,7 @@
       change.textContent = typeof item.change24Percent === 'number' && Number.isFinite(item.change24Percent) ? `${item.change24Percent > 0 ? '+' : ''}${new Intl.NumberFormat('en', { maximumFractionDigits: 1, notation: Math.abs(item.change24Percent) >= 1000 ? 'compact' : 'standard' }).format(item.change24Percent)}%` : '—'; change.title = `24h change${item.change24Percent == null ? '' : ': ' + item.change24Percent + '%'}`;
       row.append(rank, identity, values, change); list.append(row);
     }
-    if (!list.children.length && !state.loading && data?.ok && !stale) { const empty = document.createElement('p'); empty.textContent = 'No trending tokens returned by FOMO.'; list.append(empty); }
+    if (!list.children.length && !state.loading && data?.ok && !stale) { const empty = document.createElement('p'); empty.textContent = !chainFilter.available ? 'Waiting for GMGN chain selection…' : chainFilter.selected ? 'No FOMO trending tokens for the selected chains.' : 'No trending tokens returned by FOMO.'; list.append(empty); }
     panel.append(list);
     panel.scrollTop = oldScroll;
     const retained = anchorHref && [...list.querySelectorAll('a')].find(row => row.getAttribute('href') === anchorHref);
@@ -4300,13 +4301,32 @@
     return Math.abs(usd - row.usd) <= Math.max(1, Math.max(usd, row.usd) * 0.05);
   }
 
+  function nativeFomoChainFilter(moduleId) {
+    const unavailable = { key: 'unavailable', available: false, selected: new Set() };
+    const raw = document.documentElement.getAttribute('data-gdh-chain-filters');
+    // Legacy layouts without any native picker keep their previous all-chain view.
+    // Once a picker is present, missing/malformed observations never widen it.
+    if (!raw) return document.querySelector('[data-testid="chain-multi-select-trigger"]') ? unavailable : { key: 'legacy', available: true, selected: null };
+    if (raw.length > 2048) return unavailable;
+    try {
+      const data = JSON.parse(raw), values = data?.[moduleId];
+      if (data?.version !== 1 || !Array.isArray(values) || values.length > 32 || !values.every(v => typeof v === 'string' && /^[a-z][a-z0-9]{0,15}$/.test(v))) return unavailable;
+      const chains = [...new Set(values)].sort();
+      return { key: JSON.stringify(chains), available: true, selected: new Set(chains) };
+    } catch { return unavailable; }
+  }
+  document.addEventListener('gdh-chain-filters', () => {
+    scheduleTrackingFeedRender();
+    renderDiscoveryTrending();
+  });
+
   function visibleTrackingFeedEvents(nativeRows = []) {
-    const chain = settings.fomoFeedChainOnly === true ? currentChainSlug() : '';
+    const chainFilter = nativeFomoChainFilter('walletTracking');
     const out = [];
     if (settings.enableFomoFeed !== false) {
       for (const ev of fomoFollowedEvents) {
         if (!ev?.key || !ev.ts || !fomoFeedEventAllowed(ev)) continue;
-        if (chain && ev.chain && ev.chain !== chain) continue;
+        if (chainFilter.selected && !chainFilter.selected.has(ev.chain)) continue;
         out.push(ev);
       }
     }

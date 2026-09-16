@@ -709,7 +709,7 @@
   // One committed host/ancestry index per root per scan. DOM expandos and
   // .return can still point at the previous tree, including shared bailout hosts.
   // Use them ONLY to locate the root; never read their props as a fallback.
-  function trackerRoute(element, roots) {
+  function trackerRoute(element, roots, maxDepth = 18) {
     const key = Object.keys(element).find(k => k.startsWith('__reactFiber$'));
     let top = key && element[key];
     const ancestors = new Set();
@@ -735,10 +735,61 @@
       roots.set(root, valid ? hosts : null);
     }
     const route = [];
-    for (let node = roots.get(root)?.get(element); node && route.length < 18; node = node.parent) {
+    for (let node = roots.get(root)?.get(element); node && route.length < maxDepth; node = node.parent) {
       route.push(node.fiber);
     }
     return route.length ? route : null;
+  }
+
+  let nativeChainPickerSeen = false;
+  function publishNativeChainFilters(roots) {
+    // Read final controlled picker props from the committed tree, not storage,
+    // hooks, stale .return props, account data or a dropdown's mounted options.
+    const nodes = [...document.querySelectorAll('[data-testid="chain-multi-select-trigger"]')];
+    if (!nodes.length && !nativeChainPickerSeen) return;
+    nativeChainPickerSeen = true;
+    const own = (value, key) => value && typeof value === 'object' ? Object.getOwnPropertyDescriptor(value, key)?.value : undefined;
+    const slug = value => typeof value === 'string' && /^[a-z][a-z0-9]{0,15}$/.test(value);
+    const filters = { walletTracking: null, trending: null }, seen = new Set();
+    for (const element of nodes.length <= 32 ? nodes : []) {
+      const route = trackerRoute(element, roots, 64);
+      if (!route) continue;
+      let moduleId, selection;
+      for (const fiber of route) {
+        const props = own(fiber, 'memoizedProps');
+        const id = own(props, 'moduleId');
+        if (id === 'walletTracking' || id === 'trending') { moduleId = id; break; }
+        if (selection !== undefined) continue;
+        const value = own(props, 'value'), options = own(props, 'options');
+        if (!Array.isArray(value) || !Array.isArray(options)) continue;
+        selection = null;
+        if (value.length > 32 || options.length > 32) continue;
+        const supported = new Set();
+        let valid = true;
+        for (let i = 0; i < options.length; i++) {
+          const option = own(options, String(i)), chain = own(option, 'value');
+          if (!slug(chain)) { valid = false; break; }
+          if (!own(option, 'disabled') && !own(option, 'checkboxDisabled')) supported.add(chain);
+        }
+        const chosen = [];
+        for (let i = 0; valid && i < value.length; i++) {
+          const chain = own(value, String(i));
+          if (!slug(chain) || !supported.has(chain)) { valid = false; break; }
+          chosen.push(chain);
+        }
+        if (valid) selection = [...new Set(own(props, 'mode') === 'single' ? chosen.slice(0, 1) : chosen)].sort();
+      }
+      if (!moduleId) continue;
+      // Ambiguous duplicate mounts fail closed instead of unioning selections.
+      const result = selection ?? null;
+      if (seen.has(moduleId) && JSON.stringify(filters[moduleId]) !== JSON.stringify(result)) filters[moduleId] = null;
+      else if (!seen.has(moduleId)) filters[moduleId] = result;
+      seen.add(moduleId);
+    }
+    const value = JSON.stringify({ version: 1, ...filters });
+    if (document.documentElement.getAttribute('data-gdh-chain-filters') === value) return;
+    document.documentElement.setAttribute('data-gdh-chain-filters', value);
+    document.dispatchEvent(new Event('gdh-chain-filters'));
   }
 
   function readTrackerRecord(element, roots) {
@@ -1000,6 +1051,7 @@
       }
     });
     const trackerRoots = new Map();
+    publishNativeChainFilters(trackerRoots);
     const published = new Set();
     if (!trackerSeen.size) scanUnmarkedTrackerRows(trackerSeen, trackerData, trackerRoots);
     document.querySelectorAll('[data-gdh-track-addr], [data-gdh-track-ts]').forEach(el => trackerSeen.add(el));
@@ -1048,6 +1100,9 @@
   }
 
   document.addEventListener('scroll', () => { scrollingUntil = Date.now() + 200; }, true);
+  document.addEventListener('click', event => {
+    if (event.target instanceof Element && event.target.closest('[data-testid^="chain-multi-select-"]')) scheduleScan();
+  }, true);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'hidden') scheduleScan();
   });
@@ -1059,7 +1114,7 @@
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['href', 'data-gmgn-fee-mode-card'],
+      attributeFilter: ['href', 'data-gmgn-fee-mode-card', 'data-selected'],
     });
     scheduleScan();
     window.setInterval(scheduleScan, 1200);

@@ -16,7 +16,6 @@ const DEFAULTS = {
   mergeFomoHolders: true,
   enableMarkedHolders: true,
   enableFomoFeed: true,
-  fomoFeedChainOnly: false,
   fomoFeedTypes: { buy: true, sell: true, thesis: true },
   markedHolders: [
     { address: '0x38e47fece3ea323e864c65410f6458c820eaa897', name: 'Cow' },
@@ -81,7 +80,6 @@ const gmgnHoldingSyncStatus = document.querySelector('#gmgn-holding-sync-status'
 const mergeHoldersInput = document.querySelector('#enable-merge-fomo-holders');
 const markedEnableInput = document.querySelector('#enable-marked-holders');
 const fomoFeedEnableInput = document.querySelector('#enable-fomo-feed');
-const fomoFeedChainOnlyInput = document.querySelector('#fomo-feed-chain-only');
 const fomoFeedTypeInputs = {
   buy: document.querySelector('#fomo-feed-buy'),
   sell: document.querySelector('#fomo-feed-sell'),
@@ -179,7 +177,6 @@ chrome.storage.local.get(DEFAULTS, (stored) => {
   mergeHoldersInput.checked = stored.mergeFomoHolders !== false;
   markedEnableInput.checked = stored.enableMarkedHolders !== false;
   fomoFeedEnableInput.checked = stored.enableFomoFeed !== false;
-  fomoFeedChainOnlyInput.checked = stored.fomoFeedChainOnly === true;
   const storedFomoTypes = stored.fomoFeedTypes && typeof stored.fomoFeedTypes === 'object'
     ? stored.fomoFeedTypes : DEFAULTS.fomoFeedTypes;
   for (const [key, input] of Object.entries(fomoFeedTypeInputs)) {
@@ -221,7 +218,6 @@ saveButton.addEventListener('click', async () => {
     mergeFomoHolders: mergeHoldersInput.checked,
     enableMarkedHolders: markedEnableInput.checked,
     enableFomoFeed: fomoFeedEnableInput.checked,
-    fomoFeedChainOnly: fomoFeedChainOnlyInput.checked,
     fomoFeedTypes: Object.fromEntries(
       Object.entries(fomoFeedTypeInputs).map(([key, input]) => [key, input.checked]),
     ),

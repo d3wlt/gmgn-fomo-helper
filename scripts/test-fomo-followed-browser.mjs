@@ -322,9 +322,23 @@ try {
   reports.push({scenario:'provider identity includes user and event kind',...await deliver(shared,3)});
   await page.evaluate(()=>window.__direct.settings({fomoFeedTypes:{buy:false,sell:true,thesis:true}}));
   reports.push({scenario:'type filter remains effective',...await deliver(same,6)});
-  await page.evaluate(()=>window.__direct.settings({fomoFeedTypes:{buy:true,sell:true,thesis:true},fomoFeedChainOnly:true}));
-  reports.push({scenario:'chain filter remains effective',...await deliver(same.map(e=>({...e,chain:'sol'})),0)});
-  await page.evaluate(()=>window.__direct.settings({fomoFeedChainOnly:false}));
+  await page.evaluate(()=>{
+    window.__direct.settings({fomoFeedTypes:{buy:true,sell:true,thesis:true},fomoFeedChainOnly:true});
+    const node=document.createElement('button');node.dataset.testid='chain-multi-select-trigger';node.textContent='Synthetic native chain picker';document.body.append(node);
+    const root={},top={stateNode:root},module={memoizedProps:{moduleId:'walletTracking'},return:top};top.child=module;
+    const picker={memoizedProps:{value:['eth'],mode:'multi',options:['sol','eth','bsc','base','robinhood','arc','monad'].map(value=>({value}))},return:module};module.child=picker;
+    const host={stateNode:node,return:picker};picker.child=host;root.current=top;node.__reactFiber$chainFixture=host;
+    window.__fixtureChain=(values)=>{picker.memoizedProps.value=values;node.textContent='Synthetic chains '+values.join(',');};
+  });
+  await page.waitForFunction(()=>JSON.parse(document.documentElement.getAttribute('data-gdh-chain-filters')||'null')?.walletTracking?.join(',')==='eth');
+  reports.push({scenario:'native committed chain filter replaces legacy ON setting',...await deliver(same.map(e=>({...e,chain:'sol'})),0)});
+  await page.evaluate(()=>__fixtureChain(['sol']));
+  await page.waitForFunction(()=>document.querySelectorAll('.gdh-fomofeed.is-followed').length===10);
+  await page.evaluate(()=>__fixtureChain(['eth']));
+  await page.waitForFunction(()=>document.querySelectorAll('.gdh-fomofeed.is-followed').length===0);
+  reports.push({scenario:'native selector refilters retained managed cards without another feed callback',passed:true});
+  await page.evaluate(()=>__fixtureChain(['sol','eth','bsc','base','robinhood','arc','monad']));
+  await page.waitForFunction(()=>JSON.parse(document.documentElement.getAttribute('data-gdh-chain-filters')||'null')?.walletTracking?.length===7);
   await page.evaluate(()=>window.__direct.settings({blockedTokens:[{address:'0x3333333333333333333333333333333333333333'}]}));
   reports.push({scenario:'retired token blocklist cannot hide activity',...await deliver(same,10)});
   await page.evaluate(()=>window.__direct.settings({blockedTokens:[]}));
@@ -373,7 +387,7 @@ try {
     assert.equal(await page.evaluate(()=>document.querySelector('.gdh-merged-tracker')===window.dedupSurface),true);
   }
   reports.push({scenario:'complete native identities suppress off-screen duplicates through pool recycling without card churn',passed:true});
-  await page.evaluate(()=>{Object.defineProperty(document,'visibilityState',{configurable:true,get:()=> 'hidden'});document.dispatchEvent(new Event('visibilitychange'));window.__fixture.pending=[];window.__direct.poll();window.__fixture.pending.shift()({ok:true,events:[{key:'hidden',eventId:'hidden',type:'buy',userId:'alice',ts:Date.now(),symbol:'HIDDEN'}]});});
+  await page.evaluate(()=>{Object.defineProperty(document,'visibilityState',{configurable:true,get:()=> 'hidden'});document.dispatchEvent(new Event('visibilitychange'));window.__fixture.pending=[];window.__direct.poll();window.__fixture.pending.shift()({ok:true,events:[{key:'hidden',eventId:'hidden',type:'buy',chain:'eth',userId:'alice',ts:Date.now(),symbol:'HIDDEN'}]});});
   await page.waitForTimeout(50);
   assert.equal(await page.getByText('HIDDEN',{exact:true}).count(),0);
   await page.evaluate(()=>{Object.defineProperty(document,'visibilityState',{configurable:true,get:()=> 'visible'});document.dispatchEvent(new Event('visibilitychange'));});
