@@ -2,7 +2,9 @@
 
 Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
 
-## Unreleased
+## 0.53.32 - 2026-09-16
+
+- Enable Arc QuickBuy through GMGN's native component with existing account, token, trusted-input and stale-context safety guards. GMGN controls wallet eligibility; native browser-plugin wallet mode is not supported on Arc. No live trades were placed during verification.
 
 - Add the native-list FOMO Thesis tab after X Tracker inside GMGN Community. Use on-demand token-scoped GMGN history and native thesis updates independently of chart-bubble visibility, with plaintext posts, full names, read-only likes, narrow-panel navigation and preserved reader position. Keep native tabs and resize controls intact. History coverage remains limited; no posting, liking or trading actions are added.
 
