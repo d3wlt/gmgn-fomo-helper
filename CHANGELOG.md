@@ -2,6 +2,10 @@
 
 Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
 
+## 0.53.37 - 2026-09-17
+
+- Extend the approved black outlined FOMO eyes + Trending badge to native token-page headers. Include initial members and automatically add/remove it as the viewed token enters/exits the latest received validated Trending snapshot, including while the Trending list is held. Require route, full native header CA and chain-specific explorer identity to agree during SPA transitions; omit unknown or cramped headers without moving native controls. Reuse the visible selected Trending source, freshness/lifecycle cleanup and bundled asset; no new requests, sockets, demand or persistence. Migrated cards retain their implementation.
+
 ## 0.53.36 - 2026-09-17
 
 - Add approved design B to native Migrated cards: black 82×20 Trending badge with fine grey outline and bundled official FOMO eyes. Match chain plus full contract against the latest fresh received owned snapshot; preserve native layout and omit without room. Requires visible selected FOMO Trending; no additional collection or demand. Clear on expiry and lifecycle boundaries.

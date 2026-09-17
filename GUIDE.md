@@ -1,6 +1,6 @@
 # GMGN FOMO Helper — setup and reference
 
-A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.36** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
+A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.37** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
 
 This project is not affiliated with GMGN, FOMO or the original upstream author.
 
@@ -71,6 +71,7 @@ The token panel and holder count may make their own scoped requests using your b
 ### Token comparison and FOMO Trending
 
 - **Migrated badge:** the approved black, fine-grey-outline FOMO eyes + Trending label marks native Migrated cards by chain plus full contract (Solana case preserved), never ticker. It uses every current member of the fresh owned snapshot (the existing server top-100 display scope), including the initial baseline, not just new entries. Membership follows the latest received snapshot even while the Trending display is held. The official transparent eyes are bundled locally from https://fomo.family/images/fomo-eyes.png.
+- **Token-page badge:** the same 82×20 black outlined eyes + Trending badge appears beside the native token-header name/controls when the viewed token is a confirmed member, including the initial snapshot. It automatically appears on entry and disappears on exit, using the latest received list even while Trending is held. Route, full native header CA and an allowlisted chain-specific explorer link must agree; delayed SPA headers cannot borrow the new route's membership. Missing/unknown anchors or insufficient trailing room omit the badge, never move native controls. It shares the dependency and cleanup below with Migrated; it does not persist membership or open a background source.
 - This badge depends on the existing **visible, selected FOMO Trending panel**. It adds no requests, sockets, background collection or demand. It clears on membership exit, 60-second snapshot expiry, disconnect, hidden page/panel, account reset, disable or source deselection. Unknown layouts or insufficient free space omit the badge without shrinking names, moving native controls or changing card geometry.
 
 - **New:** the line below the Trending status counts the current displayed tokens by chain (RH, SOL, BSC, ARC, ETH, BASE, MONAD), sorted highest first, with alphabetical label ties and zero counts omitted. Hover/focus/scroll-held rows keep matching counts; this is not an all-time or market-wide total.
@@ -112,7 +113,7 @@ Requirements: Node.js 22+, Python 3 for the portable builder, or PowerShell for 
 npm ci
 npx playwright install chromium
 npm run verify
-python3 scripts/build-release.py --tag v0.53.36
+python3 scripts/build-release.py --tag v0.53.37
 ```
 
 On PowerShell:

@@ -1,5 +1,6 @@
 /* Approved Migrated design B. No native layout or control overrides. */
-[data-testid="trenchesCompleted"] div[data-testid="trench-token-card"][href] > .gdh-migrated-trending {
+[data-testid="trenchesCompleted"] div[data-testid="trench-token-card"][href] > .gdh-migrated-trending,
+.gdh-token-trending {
   position: absolute;
   box-sizing: border-box;
   display: inline-flex;
@@ -17,7 +18,8 @@
   white-space: nowrap;
   pointer-events: none;
 }
-[data-testid="trenchesCompleted"] div[data-testid="trench-token-card"][href] > .gdh-migrated-trending img {
+[data-testid="trenchesCompleted"] div[data-testid="trench-token-card"][href] > .gdh-migrated-trending img,
+.gdh-token-trending img {
   display: block;
   flex: 0 0 19px;
   width: 19px;
