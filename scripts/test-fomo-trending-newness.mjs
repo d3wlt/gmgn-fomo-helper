@@ -28,21 +28,45 @@ try {
  await activate();await page.evaluate(()=>openStream());
  await page.waitForFunction(()=>document.querySelectorAll('.gdh-discovery-trending-row').length===2);
  const badges=()=>page.locator('.gdh-discovery-new').count();assert.equal(await badges(),0,'initial baseline');
+ const rowSelector='.gdh-discovery-trending .gdh-discovery-trending-row';
+ const violet={background:'rgba(167, 139, 250, 0.08)',shadow:'rgba(167, 139, 250, 0.7) 0px 0px 0px 1px inset'};
+ const visuals=locator=>locator.evaluateAll(rows=>rows.map(row=>{const s=getComputedStyle(row);return {background:s.backgroundColor,shadow:s.boxShadow,animation:s.animationName,transition:s.transitionDuration,rect:row.getBoundingClientRect().toJSON(),hovered:row.matches(':hover')};}));
+ const assertPlain=async(label)=>{for(const v of await visuals(page.locator(rowSelector))){assert.equal(v.shadow,'none',label);assert.equal(v.background,v.hovered?'rgb(31, 31, 31)':'rgba(0, 0, 0, 0)',label);}};
+ const assertViolet=async(locator)=>{for(const v of await visuals(locator)){assert.equal(v.background,violet.background);assert.equal(v.shadow,violet.shadow);assert.equal(v.animation,'none');assert.equal(v.transition,'0s');}};
+ await assertPlain('initial baseline has neither tint nor outline');
+ // Deliberately reuse the badge outside the owned row/panel to catch scope leaks.
+ const isolation=await page.evaluate(()=>{
+  const host=document.createElement('div');host.id='isolation-probes';host.style.display='none';
+  host.innerHTML='<div class="gdh-discovery-trending"><div class="native-row"><span class="gdh-discovery-new">🆕</span></div></div><div class="gdh-fomo-panel"><a class="gdh-discovery-trending-row"><span class="gdh-discovery-new">🆕</span></a></div>';
+  document.body.append(host);const result=[...host.querySelectorAll('.native-row, a')].map(n=>({background:getComputedStyle(n).backgroundColor,shadow:getComputedStyle(n).boxShadow}));host.remove();return result;
+ });
+ assert.deepEqual(isolation,[{background:'rgba(0, 0, 0, 0)',shadow:'none'},{background:'rgba(0, 0, 0, 0)',shadow:'none'}]);
  await page.evaluate(()=>add(1,5042));await page.waitForSelector('.gdh-discovery-new');
  assert.equal(await page.locator('.gdh-discovery-new').evaluate(n=>n.closest('a').getAttribute('href')), '/arc/token/0x0000000000000000000000000000000000000001');
  const until=await page.locator('.gdh-discovery-new').getAttribute('data-until');
  for(const width of [220,320,390,570]){
   await page.setViewportSize({width,height:600});
   const geometry=await page.evaluate(()=>({viewport:innerWidth,scroll:document.documentElement.scrollWidth,badge:document.querySelector('.gdh-discovery-new').getBoundingClientRect().toJSON(),row:document.querySelector('.gdh-discovery-new').closest('a').getBoundingClientRect().toJSON(),nameWidth:document.querySelector('.gdh-discovery-new').previousElementSibling.getBoundingClientRect().width}));
+  await assertViolet(page.locator(rowSelector+':has(.gdh-discovery-new)'));
+  const parity=await page.locator('.gdh-discovery-new').evaluate(badge=>{const row=badge.closest('a'),before=row.getBoundingClientRect().toJSON();badge.classList.remove('gdh-discovery-new');const without=row.getBoundingClientRect().toJSON();badge.classList.add('gdh-discovery-new');return {before,without};});
+  assert.deepEqual(parity.before,parity.without,'highlight leaves exact row rect unchanged');
   assert.ok(geometry.nameWidth>=40,'badge leaves readable ticker width');
   assert.equal(geometry.viewport,width);assert.ok(geometry.scroll<=width);assert.ok(geometry.badge.right<=geometry.row.right&&geometry.badge.left>=geometry.row.left);
   fs.mkdirSync(new URL('test-results/',root),{recursive:true});await page.screenshot({path:new URL(`test-results/trending-newness-${width}.png`,root).pathname});
  }
  await page.locator('.gdh-discovery-trending-row').first().hover();
+ const heldVisuals=await visuals(page.locator(rowSelector));
+ assert.equal(heldVisuals[0].hovered,true);
+ await assertViolet(page.locator(rowSelector).first());
+ await page.screenshot({path:new URL('test-results/trending-newness-design-b-hover.png',root).pathname});
  await page.evaluate(()=>{window.heldRows=[...document.querySelectorAll('.gdh-discovery-trending-row')];window.removalTime=null;new MutationObserver(()=>{if(!document.querySelector('.gdh-discovery-new'))removalTime??=Date.now();}).observe(document.querySelector('.gdh-discovery-trending'),{subtree:true,childList:true});add(1,5042);add(3);});
  assert.equal(await page.locator('.gdh-discovery-new').getAttribute('data-until'),until,'updates never renew');
  await page.waitForFunction(()=>!document.querySelector('.gdh-discovery-new'),{},{timeout:12000});
  assert.equal(await page.evaluate(()=>heldRows.every((r,i)=>r===document.querySelectorAll('.gdh-discovery-trending-row')[i])),true,'expiry preserves hovered rows and order');
+ await assertPlain('expired tint and outline clear even while hovered');
+ const expiredVisuals=await visuals(page.locator(rowSelector));
+ assert.equal(expiredVisuals[0].hovered,true,'pointer remains over expired row');
+ assert.deepEqual(expiredVisuals.map(v=>v.rect),heldVisuals.map(v=>v.rect),'expiry preserves all held row rects');
  const timing=await page.evaluate(until=>({expiryDelta:removalTime-Number(until),held:document.querySelectorAll('.gdh-discovery-trending-row').length}),until);
  assert.ok(timing.expiryDelta>=0&&timing.expiryDelta<1000);assert.equal(timing.held,3);
  await page.mouse.move(560,550);await page.waitForFunction(()=>document.querySelectorAll('.gdh-discovery-trending-row').length===4);
@@ -52,9 +76,9 @@ try {
  await page.evaluate(()=>ports.at(-1).ended());await page.waitForFunction(()=>ports.length===2);
  await page.evaluate(()=>add(4));await page.waitForFunction(()=>document.querySelectorAll('.gdh-discovery-trending-row').length===5);assert.equal(await badges(),0);
  await page.evaluate(()=>add(5));await page.waitForSelector('.gdh-discovery-new');
- await page.locator('.gdh-discovery-bar button').click();assert.equal(await badges(),0,'Refresh clears badges immediately');
+ await page.locator('.gdh-discovery-bar button').click();assert.equal(await badges(),0,'Refresh clears badges immediately');await assertPlain('Refresh clears highlight');
  await page.mouse.move(560,550);await page.evaluate(async()=>{document.activeElement?.blur();await openStream();});
- await page.waitForFunction(()=>document.querySelectorAll('.gdh-discovery-trending-row').length===2);assert.equal(await badges(),0);
+ await page.waitForFunction(()=>document.querySelectorAll('.gdh-discovery-trending-row').length===2);assert.equal(await badges(),0);await assertPlain('reset baseline has no highlight');
  // Synthetic visibility here exercises production lifecycle, not native tab visibility.
  await page.evaluate(()=>{Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});newTest.scan();});
  assert.equal(await page.locator('.gdh-discovery-trending').count(),0);
@@ -71,12 +95,12 @@ try {
  await page.waitForFunction(()=>document.querySelectorAll('.gdh-discovery-trending-row').length===5);
  for(const action of ['reset','disable']){
   await page.evaluate(()=>add(7));await page.waitForSelector('.gdh-discovery-new');
-  await page.evaluate(action=>newTest[action](),action);assert.equal(await badges(),0);
+  await page.evaluate(action=>newTest[action](),action);assert.equal(await badges(),0);await assertPlain(action+' clears highlight');
   await page.evaluate(()=>newTest.enable());await activate();await page.evaluate(()=>{transport.stop();return openStream();});
-  await page.waitForFunction(()=>document.querySelectorAll('.gdh-discovery-trending-row').length===2);assert.equal(await badges(),0);
+  await page.waitForFunction(()=>document.querySelectorAll('.gdh-discovery-trending-row').length===2);assert.equal(await badges(),0);await assertPlain('reset baseline has no highlight');
  }
  await page.evaluate(()=>add(10));await page.waitForSelector('.gdh-discovery-new');
- await page.locator('[data-testid=filter-tag-trending]').click();assert.equal(await badges(),0);
+ await page.locator('[data-testid=filter-tag-trending]').click();assert.equal(await badges(),0);await assertPlain('close clears highlight');
  assert.equal(requests.length,1,'no provider traffic');assert.deepEqual(errors,[]);
- console.log('PASS full production Trending newness: baseline, cross-chain insert, unchanged update, held/coalesced expiry, reconnect, Refresh, hidden resume, account/disable/close resets; narrow 220/320/390/570 screenshots; real-time expiry '+JSON.stringify(timing));
+ console.log('PASS full production Trending newness: violet computed background/inset outline, no animation, hover priority, unchanged geometry, scoped isolation, baseline, cross-chain insert, unchanged update, held/coalesced expiry, reconnect, Refresh, hidden resume, account/disable/close resets; narrow 220/320/390/570 screenshots; real-time expiry '+JSON.stringify(timing));
 } finally {await browser.close();}

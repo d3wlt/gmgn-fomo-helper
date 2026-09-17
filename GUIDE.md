@@ -1,6 +1,6 @@
 # GMGN FOMO Helper — setup and reference
 
-A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.35** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
+A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.36** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
 
 This project is not affiliated with GMGN, FOMO or the original upstream author.
 
@@ -28,7 +28,7 @@ For an update, replace the files in your existing unpacked extension folder, sel
 - Handles fractional native row heights and asynchronous row recycling without rebuilding the panel during normal scrolling.
 - Preserves your reading position when new activity arrives below the top. Unsupported geometry or persistently stale index data fails closed instead of guessing native row positions.
 - Keeps original native GMGN row actions, followed-user highlighting and callout-account blocklists.
-- FOMO Wallet Tracking activity follows its native GMGN chain picker. FOMO Trending always shows all supported tokens in the server list, independently of native chain selections or Link. New chain-plus-address entries observed after the live baseline show 🆕 for 10 seconds from receipt; initial load, reconnect, Refresh and hidden-resume baselines do not. Rank/price updates do not restart badges. Hover/focus/scroll still hold list updates; badges expire without moving rows. Newness is bounded, memory-only and cleared on disconnect, close, disable or account change. Tracking selection changes refilter retained rows without additional provider requests or reconnects. The old extension-only current-page-chain checkbox is removed; its saved value has no effect. Token context and position-surge settings are unchanged.
+- FOMO Wallet Tracking activity follows its native GMGN chain picker. FOMO Trending always shows all supported tokens in the server list, independently of native chain selections or Link. New chain-plus-address entries observed after the live baseline show 🆕 for 10 seconds from receipt; initial load, reconnect, Refresh and hidden-resume baselines do not. Rank/price updates do not restart badges. Hover/focus/scroll still hold list updates; badges expire without moving rows. **New:** the same badge lifetime also controls a subtle violet row tint and inset outline, including while hovered. No flash/pulse, geometry changes or highlighting of native GMGN rows or other panels. Newness is bounded, memory-only and cleared on disconnect, close, disable or account change. Tracking selection changes refilter retained rows without additional provider requests or reconnects. The old extension-only current-page-chain checkbox is removed; its saved value has no effect. Token context and position-surge settings are unchanged.
 - Recognizes Arc mainnet (FOMO network 5042), including its blue/custom chain stripe and GMGN `/arc/token/<contract>` navigation in card and table layouts. Arc is also recognized by token views and Trending.
 - FOMO trader names use the full available handle and wrap within existing card/table slots instead of a 72px ellipsis column. Compact rows allocate more room to names without overlapping amount/market-cap columns. The two-line name budget preserves 45px compact and 64.5px card geometry. Only exceptionally long names are visually clamped by CSS to two lines with an ellipsis and a viewport-bounded full-name hover/keyboard-focus tooltip. The complete source name stays in the DOM; no JavaScript prefix fitting can turn normal names into dots. CSS responds directly to layout and font changes. Normal names remain fully readable. Native GMGN names/actions/row heights are not rewritten.
 - FOMO cards can expose GMGN's **native QuickBuy** on hover, including Robinhood and Arc. It uses GMGN's Following wallet/amount settings and validates the current account, chain and token. Arc uses native USDC quote settings; GMGN controls wallet eligibility (Arc does not support its browser-plugin wallet mode).
@@ -70,6 +70,11 @@ The token panel and holder count may make their own scoped requests using your b
 
 ### Token comparison and FOMO Trending
 
+- **Migrated badge:** the approved black, fine-grey-outline FOMO eyes + Trending label marks native Migrated cards by chain plus full contract (Solana case preserved), never ticker. It uses every current member of the fresh owned snapshot (the existing server top-100 display scope), including the initial baseline, not just new entries. Membership follows the latest received snapshot even while the Trending display is held. The official transparent eyes are bundled locally from https://fomo.family/images/fomo-eyes.png.
+- This badge depends on the existing **visible, selected FOMO Trending panel**. It adds no requests, sockets, background collection or demand. It clears on membership exit, 60-second snapshot expiry, disconnect, hidden page/panel, account reset, disable or source deselection. Unknown layouts or insufficient free space omit the badge without shrinking names, moving native controls or changing card geometry.
+
+- **New:** the line below the Trending status counts the current displayed tokens by chain (RH, SOL, BSC, ARC, ETH, BASE, MONAD), sorted highest first, with alphabetical label ties and zero counts omitted. Hover/focus/scroll-held rows keep matching counts; this is not an all-time or market-wide total.
+
 - Small gutter indicators on native and FOMO tracked rows show **=** for the exact open token and **≈** for a similar observed name with a different identity. Exact means **chain + contract address**; Solana addresses remain case-sensitive. Conservative name matching excludes short/generic tickers and never labels a token a scam or the same asset.
 - **Compare** in the token-information header opens a compact, dismissible comparison. It uses only observed native/passive/token-panel metadata: at most 500 identities retained for 30 minutes, stale after 5 minutes, with up to 50 similar identities shown. No permanent floating card, token blocking or additional market requests. Name matching needs previously observed metadata for the open identity; missing metadata stays unknown. This is not a complete token search.
 - Sign in on FOMO once, then select **FOMO** in GMGN's bottom-toolbar **Trending** panel. While that panel is visible and selected, one shared extension-owned `trending_tokens` connection receives automatic updates. You do not need to keep FOMO's Trending view open or click Refresh for each update. Refresh is a reconnect fallback, not routine operation.
@@ -107,7 +112,7 @@ Requirements: Node.js 22+, Python 3 for the portable builder, or PowerShell for 
 npm ci
 npx playwright install chromium
 npm run verify
-python3 scripts/build-release.py --tag v0.53.35
+python3 scripts/build-release.py --tag v0.53.36
 ```
 
 On PowerShell:

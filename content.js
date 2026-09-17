@@ -1931,7 +1931,18 @@
     // Badge-only mutation: never replace/reorder rows or disturb a held reader.
     if (Number.isFinite(next)) discoveryNewTimer = setTimeout(expireDiscoveryNewness, Math.max(0,next-Date.now()));
   }
+  let migratedTrending = null;
+  function updateMigratedTrending(data) {
+    if (!migratedTrending && globalThis.gdhCreateMigratedTrending) migratedTrending = globalThis.gdhCreateMigratedTrending({
+      ref: discoveryRef,
+      eligible: () => settings.enabled !== false && settings.enableFomoPanel !== false && discoveryTrendingSelected && !!discoveryTrendingPort && !!discoveryTrending?.active && discoveryVisible(discoveryTrending.main) && !discoveryTrending.panel.hidden && document.visibilityState !== 'hidden',
+      asset: chrome.runtime.getURL('assets/fomo-eyes.png')
+    });
+    // Use received membership, never the hover/focus/scroll-held display snapshot.
+    migratedTrending?.update({...data, items:data.items.filter(item => item && item.source === 'fomo-trending' && FOMO_NETWORK_ID[item.chain] === item.networkId)});
+  }
   function disconnectDiscoveryLive() {
+    migratedTrending?.clear();
     resetDiscoveryNewness();
     clearInterval(discoveryTrendingHeartbeat); discoveryTrendingHeartbeat = null;
     clearTimeout(discoveryTrendingReconnect); discoveryTrendingReconnect = null;
@@ -1951,7 +1962,7 @@
     state.loading = false; renderDiscoveryTrending();
   }
   function syncDiscoveryLive() {
-    const wanted = discoveryTrendingSelected && discoveryTrending?.active && discoveryVisible(discoveryTrending.main) && !discoveryTrending.panel.hidden && settings.enableFomoPanel !== false && !discoveryTrendingDead && document.visibilityState !== 'hidden';
+    const wanted = settings.enabled !== false && discoveryTrendingSelected && discoveryTrending?.active && discoveryVisible(discoveryTrending.main) && !discoveryTrending.panel.hidden && settings.enableFomoPanel !== false && !discoveryTrendingDead && document.visibilityState !== 'hidden';
     if (!wanted) { disconnectDiscoveryLive(); discoveryTrendingReconnects = 0; return; }
     if (discoveryTrendingPort || discoveryTrendingReconnect || discoveryTrendingReconnects >= 8 || !chrome.runtime.connect) return;
     try {
@@ -1962,6 +1973,7 @@
         if (!data || data.provenance !== 'owned-stream' || data.source !== 'fomo-trending' || typeof data.ok !== 'boolean' || !Array.isArray(data.items) || data.items.length > 100) return;
         discoveryTrendingReconnects = 0; discoveryTrendingGeneration++;
         observeDiscoveryNewness(data);
+        updateMigratedTrending(data);
         const state = discoveryTrending;
         if (data.ok && state?.active && (state.hovered || state.focused || Date.now() < (state.scrollingUntil || 0))) {
           discoveryTrendingPending = data; flushDiscoveryLive(); return;
@@ -2044,7 +2056,8 @@
       : 'Observed native stream order. Native view could not be validated: local hidden-token filters, hover freezing and chart-price overrides are not applied. Refresh reads memory only.';
     if (data?.retryAt > Date.now()) status.textContent += ' · cooling down';
     const refresh = document.createElement('button'); refresh.type = 'button'; refresh.textContent = 'Refresh'; refresh.disabled = state.loading || data?.retryAt > Date.now(); refresh.addEventListener('click', () => void loadDiscoveryTrending());
-    bar.append(status, refresh); panel.append(bar);
+    const summary = document.createElement('span'); summary.append(status);
+    bar.append(summary, refresh); panel.append(bar);
     const columns = document.createElement('div'); columns.className = 'gdh-discovery-columns'; columns.setAttribute('aria-hidden','true');
     for (const label of ['', 'Token', 'Market cap', '24h']) { const cell=document.createElement('span'); cell.textContent=label; columns.append(cell); }
     panel.append(columns);
@@ -2052,7 +2065,9 @@
     // Stale rows have a five-minute maximum lifetime, including while the tab stays open.
     const items = age <= 300000 && data?.reason !== 'not-connected' && Array.isArray(data?.items) ? data.items : [];
     const money = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? '$' + new Intl.NumberFormat('en', { maximumSignificantDigits: 4, notation: value >= 100000 ? 'compact' : 'standard' }).format(value) : '—';
+    const chainCounts = new Map();
     for (const item of items.slice(0, 200)) {
+      if (!item || typeof item !== 'object') continue;
       const ref = discoveryRef(item.chain, item.address);
       if (!ref || FOMO_NETWORK_ID[ref.chain] !== item.networkId || item.source !== 'fomo-trending') continue;
       const row = document.createElement('a'); row.className = 'gdh-discovery-trending-row'; row.href = `/${ref.chain}/token/${ref.address}`;
@@ -2072,6 +2087,14 @@
       change.dataset.direction = typeof item.change24Percent === 'number' && Number.isFinite(item.change24Percent) ? item.change24Percent > 0 ? 'gain' : item.change24Percent < 0 ? 'loss' : 'flat' : 'unknown';
       change.textContent = typeof item.change24Percent === 'number' && Number.isFinite(item.change24Percent) ? `${item.change24Percent > 0 ? '+' : ''}${new Intl.NumberFormat('en', { maximumFractionDigits: 1, notation: Math.abs(item.change24Percent) >= 1000 ? 'compact' : 'standard' }).format(item.change24Percent)}%` : '—'; change.title = `24h change${item.change24Percent == null ? '' : ': ' + item.change24Percent + '%'}`;
       row.append(rank, identity, values, change); list.append(row);
+      // Count only appended rows from this displayed snapshot, never pending data.
+      const label = ref.chain === 'robinhood' ? 'RH' : ref.chain.toUpperCase();
+      chainCounts.set(label, (chainCounts.get(label) || 0) + 1);
+    }
+    if (chainCounts.size) {
+      const counts = document.createElement('span'); counts.className = 'gdh-discovery-chain-counts';
+      counts.textContent = [...chainCounts].sort(([a, n], [b, m]) => m - n || (a < b ? -1 : a > b ? 1 : 0)).map(([label, count]) => `${label}: ${count}`).join(' | ');
+      summary.append(counts);
     }
     if (!list.children.length && !state.loading && data?.ok && !stale) { const empty = document.createElement('p'); empty.textContent = 'No trending tokens returned by FOMO.'; list.append(empty); }
     panel.append(list);
@@ -2082,7 +2105,7 @@
   }
   async function loadDiscoveryTrending() {
     const state = discoveryTrending;
-    if (state?.active && discoveryTrendingPort) { resetDiscoveryNewness(); discoveryTrendingPending = null; discoveryTrendingPort.postMessage({type:'refresh'}); return; }
+    if (state?.active && discoveryTrendingPort) { migratedTrending?.clear(); resetDiscoveryNewness(); discoveryTrendingPending = null; discoveryTrendingPort.postMessage({type:'refresh'}); return; }
     if (!state?.active || state.loading || discoveryTrendingDead || document.visibilityState === 'hidden' || !discoveryVisible(state.main)) return;
     // A user gesture reads the newest passive worker snapshot, never an API.
     const generation = ++discoveryTrendingGeneration, auth = fomoUiAuthGeneration;
@@ -2101,7 +2124,7 @@
   }
   function scanDiscoveryTrending() {
     syncDiscoveryLive();
-    if (settings.enableFomoPanel === false) { deactivateDiscoveryTrending(true); return; }
+    if (settings.enabled === false || settings.enableFomoPanel === false) { deactivateDiscoveryTrending(true); return; }
     if (document.visibilityState === 'hidden') { deactivateDiscoveryTrending(true, true); return; }
     const mount = discoveryTrendingMount();
     if (!mount) { deactivateDiscoveryTrending(true, true); return; }
@@ -5765,6 +5788,7 @@
     if (fomoTokenChanged && fomoPanelEl) {
       loadFomoData(true);
     }
+    if (settings.enabled === false || settings.enableFomoPanel === false) deactivateDiscoveryTrending(true);
     rebuildWatchedMap();
     rebuildBlockedCallerIndex();
     rebuildHoldingWatch();

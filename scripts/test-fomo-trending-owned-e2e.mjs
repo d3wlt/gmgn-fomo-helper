@@ -78,6 +78,7 @@ try{
   await context.addInitScript(token=>{if(location.origin==='https://fomo.family')localStorage.setItem('privy:token',token);},jwt);
   await context.route('**/*',route=>{
     const u=new URL(route.request().url());
+    if(u.href===new URL('../assets/fomo-eyes.png',workerURL).href)return route.continue(); // Real packaged extension asset, not provider traffic.
     if(u.origin===API)return route.continue(); // Real TLS for website AND worker; never a route-fulfilled account response.
     if(u.origin==='https://fomo.family'&&route.request().isNavigationRequest())return route.fulfill({contentType:'text/html',body:'<!doctype html><title>Synthetic native FOMO client</title><body>Offline native client fixture</body>'});
     if(u.origin==='https://gmgn.ai'&&route.request().isNavigationRequest())return route.fulfill({contentType:'text/html',body:html});
@@ -87,23 +88,39 @@ try{
   await native.evaluate(async api=>{const response=await fetch(api+'/v2/users/current',{headers:{Authorization:`Bearer ${localStorage.getItem('privy:token')}`}});if(!response.ok)throw Error('Native fixture account fetch failed');await response.json();},API);
   await until(()=>worker.evaluate(async()=>{const l=await chrome.storage.local.get('fomoToken'),s=await chrome.storage.session.get('gdhTrendingAuthV1');return !!l.fomoToken?.token&&s.gdhTrendingAuthV1?.accountId==='account-a'&&!!s.gdhTrendingAuthV1?.owner;}),'validated native account and natural runtime auth mirror');
   const gmgn=await context.newPage();await gmgn.goto(`https://gmgn.ai/bsc/token/${A}`);
+  await gmgn.evaluate(address=>{
+    const host=document.createElement('section');host.dataset.testid='trenchesCompleted';
+    host.innerHTML=`<div id="migrated-fixture" data-testid="trench-token-card" href="/bsc/token/${address}" style="position:relative;width:585px;height:124px;padding:14px;background:#111"><div style="display:flex;gap:4px;height:20px"><span data-sentry-component="TooltipCopy">SNAP</span><span data-sentry-component="TokenMarkEditButton">edit</span></div></div>`;
+    document.body.append(host);
+  },A);
+  const migrated=gmgn.locator('#migrated-fixture .gdh-migrated-trending');
+  async function badgePresent(present){await until(async()=>await migrated.count()===(present?1:0),'real MV3 Migrated badge '+present);}
   await worker.evaluate(async()=>{const[t]=await chrome.tabs.query({url:'https://gmgn.ai/*'});await chrome.tabs.update(t.id,{active:true});});
   async function select(page){await page.locator('.gdh-discovery-trending-tab').waitFor({timeout:10000});await page.locator('.gdh-discovery-trending-tab').evaluate(button=>button.click());}
   async function symbols(page,expected){try{await until(async()=>JSON.stringify(await page.locator('.gdh-discovery-token strong').allTextContents())===JSON.stringify(expected),'automatic ordered GMGN DOM '+expected.join(','));}catch(error){console.error(JSON.stringify({diagnostic:await page.evaluate(()=>({visible:document.visibilityState,selected:document.querySelector('.gdh-discovery-trending-tab')?.getAttribute('aria-pressed'),status:document.querySelector('.gdh-discovery-trending [role=status]')?.textContent,rows:document.querySelectorAll('.gdh-discovery-trending-row').length})),auth:await worker.evaluate(async()=>{const s=(await chrome.storage.session.get('gdhTrendingAuthV1')).gdhTrendingAuthV1;return {revoked:s?.revoked,requireMirror:s?.requireMirror,owner:!!s?.owner,tokenPresent:!!(await chrome.storage.local.get('fomoToken')).fomoToken};})}));throw error;}}
   const secondPromise=context.waitForEvent('page');await worker.evaluate(url=>chrome.windows.create({url,focused:true,type:'normal'}),`https://gmgn.ai/robinhood/token/${B}`);const second=await secondPromise;await second.waitForLoadState();
   await select(gmgn);await symbols(gmgn,['SNAP1','SECOND']);assert.equal(counts.connections,1);assert.ok(counts.workerAuth>=1);
+  await badgePresent(true);
+  assert.equal(await migrated.locator('img').evaluate(n=>n.complete&&n.naturalWidth>0&&n.currentSrc.startsWith('chrome-extension://')),true,'real MV3 bundled official asset');
+  assert.equal(await gmgn.evaluate(()=>typeof globalThis.gdhCreateMigratedTrending),'undefined','module API is invisible to page MAIN world');
   await native.waitForFunction(()=>document.visibilityState==='hidden');await delay(3300);assert.equal(await native.evaluate(()=>document.hidden),true);
   broadcast({kind:'update',tokenKey:B+':4663',index:0,update:row(B,4663,'HIDDEN_DELTA')});await symbols(gmgn,['HIDDEN_DELTA','SNAP1']);
-  broadcast({kind:'remove',tokenKey:A+':56'});await symbols(gmgn,['HIDDEN_DELTA']);assert.equal(await native.evaluate(()=>document.hidden),true);
+  broadcast({kind:'remove',tokenKey:A+':56'});await symbols(gmgn,['HIDDEN_DELTA']);await badgePresent(false);assert.equal(await native.evaluate(()=>document.hidden),true);
   // Two genuinely visible active tabs in separate windows, not visibility overrides.
   await select(second);
   assert.equal(await gmgn.evaluate(()=>document.visibilityState),'visible');assert.equal(await second.evaluate(()=>document.visibilityState),'visible');await symbols(second,['HIDDEN_DELTA']);assert.equal(counts.connections,1,'two production content ports share one socket');
   broadcast({kind:'update',tokenKey:B+':4663',index:0,update:row(B,4663,'SHARED')});await symbols(gmgn,['SHARED']);await symbols(second,['SHARED']);
   await second.locator('[data-testid="filter-tag-trending"]').evaluate(button=>button.click());await delay(500);assert.equal(sockets.size,1,'deselecting one consumer retains other demand');
   await gmgn.locator('[data-testid="filter-tag-trending"]').evaluate(button=>button.click());await until(()=>sockets.size===0,'last consumer deselection closes owned socket');
-  snapshotGeneration=2;await select(gmgn);await symbols(gmgn,['SNAP2','SECOND']);
+  await badgePresent(false);
+  snapshotGeneration=2;await select(gmgn);await symbols(gmgn,['SNAP2','SECOND']);await badgePresent(true);
   snapshotGeneration=3;for(const socket of sockets)socket.terminate();await symbols(gmgn,['SNAP3','SECOND']);
   assert.equal(counts.connections,3,'transport loss reconnects without manual Refresh');
+  // Real GMGN hidden/visible transition, not a document property override.
+  await worker.evaluate(async()=>{const[t]=await chrome.tabs.query({url:'https://fomo.family/*'});await chrome.tabs.update(t.id,{active:true});});
+  await gmgn.waitForFunction(()=>document.hidden,{}, {polling:100});await badgePresent(false);
+  await worker.evaluate(async()=>{const[t]=await chrome.tabs.query({url:'https://gmgn.ai/bsc/*'});await chrome.tabs.update(t.id,{active:true});});
+  await gmgn.waitForFunction(()=>!document.hidden,{}, {polling:100});await symbols(gmgn,['SNAP3','SECOND']);await badgePresent(true);
   const cdp=await context.newCDPSession(gmgn);const versions=new Map();cdp.on('ServiceWorker.workerVersionUpdated',({versions:vs})=>vs.forEach(v=>versions.set(v.versionId,v)));await cdp.send('ServiceWorker.enable');
   async function restart(){
     await worker.evaluate(()=>globalThis.__ownedE2eSentinel=true);
@@ -120,13 +137,14 @@ try{
   await native.evaluate(()=>{localStorage.removeItem('privy:token');window.dispatchEvent(new Event('focus'));});
   await until(async()=>sockets.size===0&&(await gmgn.locator('.gdh-discovery-trending-row').count())===0,'natural mirror logout closes socket and clears DOM',6500);
   await until(()=>worker.evaluate(async()=>{const s=await chrome.storage.session.get('gdhTrendingAuthV1');return s.gdhTrendingAuthV1?.revoked===true&&!(await chrome.storage.local.get('fomoToken')).fomoToken;}),'durable revocation');
+  await badgePresent(false);
   const beforeLogoutRestart=counts.connections,authBefore=counts.workerAuth;
   // Selection is the only wake/demand input; no runtime auth/session injection.
   await select(gmgn);
   await restart();await delay(5500);
   assert.equal(counts.connections,beforeLogoutRestart,'restart cannot resurrect server-valid old JWT');assert.equal(counts.workerAuth,authBefore,'revoked auth does not call current-user');assert.equal(await gmgn.locator('.gdh-discovery-trending-row').count(),0);
   assert.equal(counts.nativeAuth,1);assert.equal(counts.followingSubscriptions,0);assert.equal(counts.unexpected,0);assert.deepEqual(faults,[]);assert.equal(peakSockets,1);
-  console.log(JSON.stringify({realMV3:true,syntheticNativeClient:true,liveProviderVerified:false,fullProductionContent:true,nativeAccountAndMirror:true,hiddenFomoUpdates:true,twoVisibleWindowsShareSocket:true,lastDemandStops:true,transportLossRecovers:true,workerRestartFreshDOM:true,logoutDurableAcrossRestart:true,manualRefreshes:0,peakSockets,counts,origins}));
+  console.log(JSON.stringify({realMV3:true,migratedBadgeAndBundledAsset:true,realHiddenGmgnBadgeCleanupAndResume:true,isolatedModuleNotPageAccessible:true,syntheticNativeClient:true,liveProviderVerified:false,fullProductionContent:true,nativeAccountAndMirror:true,hiddenFomoUpdates:true,twoVisibleWindowsShareSocket:true,lastDemandStops:true,transportLossRecovers:true,workerRestartFreshDOM:true,logoutDurableAcrossRestart:true,manualRefreshes:0,peakSockets,counts,origins}));
 }finally{
   await browser?.close().catch(()=>{});
   if(proc){if(proc.exitCode===null&&proc.signalCode===null)proc.kill();const force=setTimeout(()=>proc.kill('SIGKILL'),5000);force.unref();try{await procExited;}finally{clearTimeout(force);}}

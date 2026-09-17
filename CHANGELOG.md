@@ -2,6 +2,14 @@
 
 Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
 
+## 0.53.36 - 2026-09-17
+
+- Add approved design B to native Migrated cards: black 82×20 Trending badge with fine grey outline and bundled official FOMO eyes. Match chain plus full contract against the latest fresh received owned snapshot; preserve native layout and omit without room. Requires visible selected FOMO Trending; no additional collection or demand. Clear on expiry and lifecycle boundaries.
+
+- Show per-chain counts directly below the Trending status, sorted descending with zero chains omitted. Counts follow the validated displayed list, including held snapshots, without extra requests.
+
+- Highlight new FOMO Trending rows with a subtle violet tint and 1px inset outline, retaining 🆕. Both clear together on the existing 10-second receipt timer, even while hovered; no animation, geometry, ordering or lifecycle changes. Native GMGN rows and other panels are unaffected.
+
 ## 0.53.35 - 2026-09-17
 
 - Replace the long README with a feature-first screenshot overview; preserve installation, updating, diagnostics and development instructions in GUIDE.md.
