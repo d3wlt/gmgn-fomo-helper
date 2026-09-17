@@ -1999,6 +1999,7 @@
 .gdh-discovery-trending {
   flex: 1; min-height: 0; min-width: 0; overflow: auto; color: #d6d9df;
   font-family: inherit; font-size: 12px; line-height: 1.5;
+  container: gdhTrending / inline-size;
 }
 .gdh-discovery-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; }
 .gdh-discovery-bar > span { min-width: 0; color: #808080; font-size: 11px; }
@@ -2006,6 +2007,11 @@
 .gdh-discovery-columns, .gdh-discovery-trending-row {
   grid-template-columns: 18px minmax(0, 1fr) minmax(76px, .55fr) 60px;
   column-gap: 8px; padding-inline: 8px;
+}
+@container gdhTrending (max-width: 280px) {
+  .gdh-discovery-trending .gdh-discovery-columns, .gdh-discovery-trending .gdh-discovery-trending-row {
+    grid-template-columns: 14px minmax(0, 1fr) 52px 38px; column-gap: 4px; padding-inline: 4px;
+  }
 }
 .gdh-discovery-columns { display: grid; flex: none; padding-block: 3px; border-bottom: 1px solid #262626; color: #808080; font-size: 10px; line-height: 16px; }
 .gdh-discovery-columns > :nth-child(n+3) { text-align: right; }
@@ -2017,6 +2023,9 @@
 .gdh-discovery-trending-row:hover { background: #1f1f1f; }
 .gdh-discovery-rank { color: #808080; font-size: 10px; font-variant-numeric: tabular-nums; }
 .gdh-discovery-token { min-width: 0; }
+.gdh-discovery-token-heading { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.gdh-discovery-token-heading strong { min-width: 0; }
+.gdh-discovery-new { flex: 0 0 auto; font-size: 12px; line-height: 16px; }
 .gdh-discovery-token strong, .gdh-discovery-token small {
   display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }

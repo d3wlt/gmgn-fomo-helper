@@ -11,7 +11,13 @@ export function validateDocs(load = read) {
   const changelog = load('CHANGELOG.md');
   assert.ok(changelog.includes(`\n## ${version} - `), 'CHANGELOG.md needs the current version');
   assert.ok(readme.includes(`**${version}**`), 'README version must match manifest');
-  assert.ok(readme.includes(`--tag v${version}`), 'README build example must match manifest');
+  const guide = load('GUIDE.md');
+  assert.ok(guide.includes(`--tag v${version}`), 'Guide build example must match manifest');
+  assert.ok(guide.includes(`**${version}**`), 'Guide version must match manifest');
+  assert.ok(readme.includes('GUIDE.md#install-and-update'), 'README links to installation guide');
+  for (const match of readme.matchAll(/(?:\]\(|src=")(assets\/readme\/[^)"\s]+)/g)) {
+    assert.ok(fs.existsSync(new URL(match[1], root)), `Missing README image: ${match[1]}`);
+  }
   assert.ok(!readme.includes('## Repository'), 'Do not restore the removed Repository section');
   const repo = manifest.homepage_url;
   assert.equal(repo, 'https://github.com/d3wlt/gmgn-fomo-helper');
@@ -20,7 +26,7 @@ export function validateDocs(load = read) {
   assert.equal(pkg.name, 'gmgn-fomo-helper');
   assert.equal(lock.name, pkg.name);
   assert.equal(lock.packages[''].name, pkg.name);
-  for (const file of ['README.md','PRODUCT.md','PRIVACY.md','site/index.html','popup.html']) {
+  for (const file of ['README.md','GUIDE.md','PRODUCT.md','PRIVACY.md','site/index.html','popup.html']) {
     const text = load(file);
     assert.ok(!text.includes('985gmgn-helper-private'), `${file}: stale repository link`);
     for (const match of text.matchAll(/https:\/\/github\.com\/d3wlt\/gmgn-fomo-helper#([a-z0-9-]+)/g)) {
@@ -38,6 +44,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   for (const [file, from, to] of [
     ['CHANGELOG.md', `## ${JSON.parse(read('manifest.json')).version} - `, '## missing - '],
     ['README.md', '## Features', '## Missing heading'],
+    ['GUIDE.md', `--tag v${JSON.parse(read('manifest.json')).version}`, '--tag v0.0.0'],
     ['PRIVACY.md', 'hosts declared in the manifest:', 'hosts declared in the manifest or a custom HTTPS BSC RPC:'],
   ]) {
     assert.ok(read(file).includes(from), `negative fixture target exists: ${file}`);

@@ -42,6 +42,7 @@
     const cancel = options.clearTimeout || globalThis.clearTimeout.bind(globalThis), random = options.random || Math.random;
     let active = false, generation = 0, socket = null, status = 'not-connected';
     let rows = [], fetchedAt = null, baseline = false, sessionKey = null, expiresAt = 0;
+    let membershipRevision = 0, membershipEpoch = 0;
     let authenticated = false, authSent = false, authPending = false, authRequest = 0, challenges = 0, failures = 0;
     let updateTimer = null, deadline = null, expiryTimer = null, staleTimer = null;
     const timers = new Set();
@@ -56,7 +57,8 @@
       const live = active && authenticated && baseline && status === 'live' && now() < expiresAt;
       const fresh = live || (fetchedAt !== null && age >= 0 && age < 300000);
       return Object.freeze({ok:live,source:'fomo-trending',provenance:'owned-stream',status:live ? 'live' : status === 'live' ? 'not-connected' : status,
-        items:Object.freeze((fresh ? rows.slice(0,100) : []).map((r,i) => Object.freeze({...r.dto,rank:i+1}))),fetchedAt:fresh ? fetchedAt : 0});
+        streamEpoch:membershipEpoch, membershipRevision,
+        items:Object.freeze((fresh ? rows.slice(0,100) : []).map((r,i) => Object.freeze({...r.dto,rank:i+1,addedRevision:r.addedRevision || 0,newUntil:r.newUntil || 0}))),fetchedAt:fresh ? fetchedAt : 0});
     }
     function publish(immediate = false) {
       if (immediate) {
@@ -73,6 +75,8 @@
       timers.clear(); updateTimer = deadline = expiryTimer = staleTimer = null;
       const old = socket; socket = null;
       authenticated = authSent = authPending = baseline = false;
+      membershipRevision = 0; membershipEpoch++;
+      for (const r of rows) { r.addedRevision = 0; r.newUntil = 0; }
       authRequest++; challenges = 0; expiresAt = 0;
       if (old) { try { old.close(); } catch (_) {} }
     }
@@ -131,6 +135,12 @@
         if (!Array.isArray(payload.tokens) || payload.tokens.length > 1000) return false;
         const next = payload.tokens.map(row);
         if (next.some(r => !r) || new Set(next.map(r => r.key)).size !== next.length) return false;
+        const previous = new Map(rows.map(r => [r.key,r]));
+        for (const r of next) {
+          const old = baseline && previous.get(r.key);
+          if (old) { r.addedRevision = old.addedRevision; r.newUntil = old.newUntil; }
+          else if (baseline) { r.addedRevision = ++membershipRevision; r.newUntil = now()+10000; }
+        }
         rows = next; baseline = true;
       } else {
         if (!baseline) return false;
@@ -141,7 +151,9 @@
         else if (payload.kind === 'new' || payload.kind === 'update') {
           const next = row(payload.update);
           if (!next || next.key !== k || !Number.isSafeInteger(payload.index) || (old < 0 && rows.length >= 1000)) return false;
-          if (old >= 0) rows.splice(old,1);
+          if (old >= 0) {
+            next.addedRevision = rows[old].addedRevision; next.newUntil = rows[old].newUntil; rows.splice(old,1);
+          } else { next.addedRevision = ++membershipRevision; next.newUntil = now()+10000; }
           rows.splice(Math.max(0,Math.min(rows.length,payload.index)),0,next);
         } else return false;
       }
@@ -160,6 +172,8 @@
         if (++challenges > 3) { halt('error'); return; }
         if (authenticated) {
           authenticated = authSent = baseline = false;
+          membershipEpoch++; membershipRevision = 0;
+          for (const r of rows) { r.addedRevision = 0; r.newUntil = 0; }
           status = 'connecting'; retainDeadline(); publish();
           clear(deadline); deadline = timer(() => retry(),15000,g);
         }

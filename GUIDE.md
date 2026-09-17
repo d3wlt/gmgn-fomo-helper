@@ -1,0 +1,121 @@
+# GMGN FOMO Helper — setup and reference
+
+A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.34** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
+
+This project is not affiliated with GMGN, FOMO or the original upstream author.
+
+## Credits and appreciation
+
+A big thank-you to [0xuezhang985](https://github.com/0xuezhang985) and the contributors to [better gmgn (985gmgn-helper)](https://github.com/0xuezhang985/985gmgn-helper) for creating the original extension and sharing their work. Their GMGN interface enhancements and FOMO integration provided the foundation for this project.
+
+This fork started from upstream **v0.46.27**. Credit for the original extension belongs to its creators; the changes, maintenance and releases in this repository are independent and should not be taken as upstream endorsement. Our feature set, installation method and privacy boundaries differ, so use this repository's instructions for this fork.
+
+## Install and update
+
+1. Download the extension ZIP from [Releases](https://github.com/d3wlt/gmgn-fomo-helper/releases).
+2. Extract it to a permanent folder.
+3. Open `chrome://extensions` or `edge://extensions` and enable **Developer mode**.
+4. Select **Load unpacked** and choose the extracted folder.
+5. Refresh GMGN and your existing signed-in FOMO tab so the page observers initialize.
+
+For an update, replace the files in your existing unpacked extension folder, select **Reload** on its extension card, and refresh the supported pages. Chromium does not automatically update unpacked extensions. Keep the same browser profile; the extension identity is preserved across the repository rename.
+
+## Features
+
+### One GMGN + FOMO tracker
+
+- Interleaves passive FOMO Following activity with original native GMGN cards in one chronological panel and one scrollbar.
+- Handles fractional native row heights and asynchronous row recycling without rebuilding the panel during normal scrolling.
+- Preserves your reading position when new activity arrives below the top. Unsupported geometry or persistently stale index data fails closed instead of guessing native row positions.
+- Keeps original native GMGN row actions, followed-user highlighting and callout-account blocklists.
+- FOMO Wallet Tracking activity follows its native GMGN chain picker. FOMO Trending always shows all supported tokens in the server list, independently of native chain selections or Link. New chain-plus-address entries observed after the live baseline show 🆕 for 10 seconds from receipt; initial load, reconnect, Refresh and hidden-resume baselines do not. Rank/price updates do not restart badges. Hover/focus/scroll still hold list updates; badges expire without moving rows. Newness is bounded, memory-only and cleared on disconnect, close, disable or account change. Tracking selection changes refilter retained rows without additional provider requests or reconnects. The old extension-only current-page-chain checkbox is removed; its saved value has no effect. Token context and position-surge settings are unchanged.
+- Recognizes Arc mainnet (FOMO network 5042), including its blue/custom chain stripe and GMGN `/arc/token/<contract>` navigation in card and table layouts. Arc is also recognized by token views and Trending.
+- FOMO trader names use the full available handle and wrap within existing card/table slots instead of a 72px ellipsis column. Compact rows allocate more room to names without overlapping amount/market-cap columns. The two-line name budget preserves 45px compact and 64.5px card geometry. Only exceptionally long names are visually clamped by CSS to two lines with an ellipsis and a viewport-bounded full-name hover/keyboard-focus tooltip. The complete source name stays in the DOM; no JavaScript prefix fitting can turn normal names into dots. CSS responds directly to layout and font changes. Normal names remain fully readable. Native GMGN names/actions/row heights are not rewritten.
+- FOMO cards can expose GMGN's **native QuickBuy** on hover, including Robinhood and Arc. It uses GMGN's Following wallet/amount settings and validates the current account, chain and token. Arc uses native USDC quote settings; GMGN controls wallet eligibility (Arc does not support its browser-plugin wallet mode).
+
+**Clicking native QuickBuy can execute a real trade.** The helper does not submit trades automatically or implement its own trading API. Native controls stay unavailable if their supported context cannot be verified.
+
+### Passive Following feed
+
+Keep a FOMO tab open and signed in so the native application receives activity. Open your FOMO profile if the following roster has not initialized, and select Alerts as needed to receive native activity. The helper observes supported native history responses and live frames; it does **not** independently poll the Following feed, open sockets, subscribe, reconnect or create hidden keeper tabs.
+
+- Tracker status distinguishes waiting for a tab, account, following roster or activity from connection states.
+- Closing, signing out, navigating away from or suspending the source tab can stop delivery.
+- Missed activity is recovered only when FOMO itself receives it.
+- The account-isolated buffer is bounded to 500 events; the tracker renders its eligible retained rows without a separate 40-card cap. This is not complete lifetime history.
+- Grouped multi-user and transfer rows are not supported. Worker/browser restarts may clear the passive event cache; subsequent native observations refill it.
+- Names, avatars, tickers and market caps come from observed native data. Missing metadata has explicit fallbacks rather than invented values.
+
+### Community FOMO Thesis
+
+Sort loaded posts by **Newest first**, **Oldest first**, or **Most liked** (newer posts win like-count ties; unknown likes sort last). Sorting is local and makes no extra requests. The choice stays in page memory across token switches/reopening and resets on page reload. Changing order returns to the top; incoming updates preserve the selected order and reading anchor. This sorts only loaded posts, not all-time history.
+
+Open **GMGN Community → FOMO Thesis**, immediately after X Tracker, for the current token's GMGN-supplied theses in a compact native-style list. Full post text and author names, timestamps, optional developer markers and read-only like counts are shown. New posts preserve your reading position. Callout and X Tracker remain native, including the panel's resize control.
+
+This feed makes on-demand GMGN history requests and uses GMGN's native token-thesis subscription while selected and visible, independently of the chart's Display → Fomo Thesis bubble setting. It is not the passive Following tracker. Hidden/closed panels release demand; token changes and unavailable sessions clear old rows. No liking, posting, trading or credential-copying workflow is added. Disabling the FOMO panel feature also disables this tab.
+
+**Snapshot** means history loaded; **Updates** means a matching stream update was received, not a guarantee of uninterrupted delivery. The feed retains up to 200 newest received posts in page memory; GMGN provides no verified pagination or all-time total. Partial failures retain independently valid posts with a **Limited** label. Refresh is manual and rate-limited; rapid reopen/token transitions may wait briefly for request pacing. This tab's selection and posts are page-memory-only, not persisted across reloads.
+
+### Token context
+
+- Tracker thesis events use the **Thesis** label with the actual post text, without a redundant position badge or tokenless THESIS placeholder; real token metadata and actions remain available.
+- A FOMO token panel on GMGN shows holders, narratives and trades, with buy/sell and First/More/Partial/All labels, source information, refresh time and coverage warnings.
+- On GMGN, **👥N** on the open token page's FOMO button at the end of its information header shows current holders among people you follow on FOMO. Hover shows returned names.
+- Holder-count requests cover only the open token and exact chain, with one-minute successful-result caching while visible. No token-list or tracker holder-count scanning. Unavailable data is distinct from confirmed zero.
+- Holder-history reconstruction is a limited sample of current holders, not complete token history. Fully exited users can be missing; neither a badge nor a successful response proves there have been no sells.
+- The token panel has one vertical scrolling content region for status, filters and all loaded rows; the title and holder summary stay above it. Holder names get a full-width wrapping identity line, with ranking/Following/P&L badges below rather than squeezing the name.
+- Panel UI and the local narrative translation target are always English, even with legacy saved translation-off/language preferences; there is no EN toggle. Original narrative text remains visible. Supported browsers add local English translations; selecting the panel can initialize/retry a required local language pack. If the browser does not provide a usable Translation API, original text remains available (no remote translation fallback).
+
+The token panel and holder count may make their own scoped requests using your browser-local FOMO session. The **passive-only** guarantee describes the Following tracker, not every token-panel feature.
+
+### Token comparison and FOMO Trending
+
+- Small gutter indicators on native and FOMO tracked rows show **=** for the exact open token and **≈** for a similar observed name with a different identity. Exact means **chain + contract address**; Solana addresses remain case-sensitive. Conservative name matching excludes short/generic tickers and never labels a token a scam or the same asset.
+- **Compare** in the token-information header opens a compact, dismissible comparison. It uses only observed native/passive/token-panel metadata: at most 500 identities retained for 30 minutes, stale after 5 minutes, with up to 50 similar identities shown. No permanent floating card, token blocking or additional market requests. Name matching needs previously observed metadata for the open identity; missing metadata stays unknown. This is not a complete token search.
+- Sign in on FOMO once, then select **FOMO** in GMGN's bottom-toolbar **Trending** panel. While that panel is visible and selected, one shared extension-owned `trending_tokens` connection receives automatic updates. You do not need to keep FOMO's Trending view open or click Refresh for each update. Refresh is a reconnect fallback, not routine operation.
+- The chosen source survives same-tab page reloads within the current browser session. Blank header clicks and non-tab controls do not switch it. Explicit native-tab selection, toggling FOMO off, closing the panel/tab, disabling the feature or account invalidation clear the preference. This does not change hidden-panel disconnection or preserve old ranking data.
+- Rankings retain server order and exact chain/address identity. Market cap is stream supply × stream price; 24-hour change converts the ratio to percentage points. Unknown metrics remain unknown. Hover, keyboard focus and active scrolling hold displayed rows; logout/session loss clears them immediately. Token navigation and compatible panel remounts retain the chosen source; hidden/closed panels release live demand.
+- **Live**, **Connecting**, **Reconnecting** and session-unavailable states are distinct. Reconnects require a fresh full snapshot; retained transport snapshots expire within five minutes. Authentication uses the existing browser-local session plus a bounded, coalesced FOMO account/restriction check. The owned connection does not open, activate or refresh FOMO tabs, renew credentials itself, or create Following subscriptions. If the native session cannot renew, sign in on FOMO again. Native-page hidden-token filters and chart-price overrides are not applied to the independently advancing stream.
+
+- The compact Trending layout follows GMGN’s native 40px rows and inherited font: gold market cap, muted secondary price and green/red 24-hour change. Unknown values remain neutral. No unsupported OG badges, counts, ages or token logos are fabricated.
+
+### GMGN utilities
+
+- Highlight watched developer wallets, show developer launch performance, save developer wallets and filter blocked callout accounts.
+- Monitor your own positions for price surges with fresh ownership confirmation, valid cost/balance checks and native notification-setting handling. Hybrid multichain holdings and Robinhood are supported.
+- Position-surge toasts dismiss after five seconds even while hovered, display Cost/5m metrics without a trailing token price, and remain available in notification history. Other reminders keep their existing behavior.
+- Notification history opens from the bell at the end of GMGN's main navigation; the FOMO and notification launchers no longer float over page content. Unsupported or hidden native mount points do not get floating fallback buttons.
+- Hide the third-party Lightning Trade button.
+
+Open the native GMGN **Holding** panel to initialize the selected wallets. Surge monitoring needs a visible GMGN page and recent captured native request scopes. Expired scopes and ambiguous chain/account data fail closed.
+
+## Diagnostics
+
+In the extension popup, open **Diagnostics**, enable **Debug logging**, reproduce the issue, then select **Export logs**. Include a screenshot and approximate time when reporting a problem; turn logging off afterwards. **Clear logs** removes stored history, not files already exported.
+
+Logging is off by default and local-only. It records bounded categorical outcomes, timings and counts—not credentials, cookies, raw responses, user names/IDs, wallet/token addresses, trade IDs or narrative text. There are no automatic uploads. The ring holds at most 500 entries from the previous 24 hours; batched writes can lose trailing unsaved entries if the browser stops.
+
+## Privacy and safety
+
+Settings, supported-site session mirrors and bounded display/diagnostic data are stored in browser extension storage. No browser profiles or credentials are bundled in release ZIPs. The helper has no analytics or remote executable code. Native trading buttons can execute trades through the host site when you explicitly activate them; this is distinct from the helper submitting transactions itself. See [PRIVACY.md](PRIVACY.md).
+
+## Development and releases
+
+Requirements: Node.js 22+, Python 3 for the portable builder, or PowerShell for the Windows builder.
+
+```bash
+npm ci
+npx playwright install chromium
+npm run verify
+python3 scripts/build-release.py --tag v0.53.34
+```
+
+On PowerShell:
+
+```powershell
+./scripts/build-release.ps1
+```
+
+Builders use the canonical runtime-file allowlist and produce `dist/gmgn-fomo-helper-vX.Y.Z.zip` plus its SHA-256 checksum. Tests, screenshots, local diagnostics and dependencies stay outside the package. Release notes must match the manifest version and include the required installation, usage, updating and privacy sections.
+
+The tag-triggered GitHub workflow runs the verification suite before building and publishing release assets. Fixture tests cover production code with synthetic data and isolated Chromium, including account/route races, passive delivery, native-control guards, merged scrolling and MV3 lifecycle. They do not replace a signed-in smoke test when third-party interfaces change.

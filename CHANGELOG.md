@@ -2,6 +2,13 @@
 
 Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
 
+## 0.53.34 - 2026-09-17
+
+- Replace the long README with a feature-first screenshot overview; preserve installation, updating, diagnostics and development instructions in GUIDE.md.
+
+- FOMO Trending ignores the native GMGN chain picker and retains the server list across all supported chains. Wallet Tracking remains filtered.
+- Show 🆕 for 10 seconds from receipt for new chain-plus-address entries after the live baseline; no initial/reconnect/Refresh/hidden-resume badges or rank/price replay. Expiry removes only the badge while hover/focus/scroll holds list updates. State is bounded and memory-only; no new requests, sockets or persistence.
+
 ## 0.53.33 - 2026-09-16
 
 - Add a real Newest first / Oldest first / Most liked selector to Community FOMO Thesis. Sort only loaded posts without extra requests, keep newer-first ties for likes and unknown likes last, preserve the choice during page-local navigation and apply it to incoming updates.

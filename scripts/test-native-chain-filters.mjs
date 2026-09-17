@@ -44,57 +44,46 @@ try{
  }
  await setup();
  const rows=()=>page.locator('.gdh-discovery-token strong').allTextContents();
- assert.deepEqual(await rows(),['BSC_FIXTURE','ARC_FIXTURE','ROBINHOOD_FIXTURE'],'actual picker overrides BASE page route and legacy current-chain checkbox');
+ const all=['BSC_FIXTURE','ARC_FIXTURE','ROBINHOOD_FIXTURE','BASE_FIXTURE'];
+ const unchanged=async()=>{assert.deepEqual(await rows(),all);assert.deepEqual(await page.locator('.gdh-discovery-rank').allTextContents(),['1','2','3','4']);};
+ await unchanged();
  await page.evaluate(({A})=>chainTest.seed(['bsc','arc','base',''].flatMap(chain=>['buy','sell','thesis'].map(type=>({key:chain+type,chain,type,source:'fomo-followed',followed:true,ts:Date.now(),addr:A})))),{A});
- assert.equal(await page.evaluate(()=>chainTest.events().length),6,'buy/sell/thesis filtered, unknown chain excluded');
+ assert.equal(await page.evaluate(()=>chainTest.events().length),6);
  await page.locator('#walletTracking [data-chain=arc]').click();
- await page.waitForFunction(()=>document.querySelectorAll('.gdh-discovery-trending-row').length===2);
- assert.deepEqual(await rows(),['BSC_FIXTURE','ROBINHOOD_FIXTURE']);assert.deepEqual(await page.locator('.gdh-discovery-rank').allTextContents(),['1','3']);
+ await page.waitForFunction(()=>chainTest.events().length===3);await unchanged();
+ await page.locator('#walletTracking [data-chain=arc]').click();
+ await page.waitForFunction(()=>chainTest.events().length===6);await unchanged();
+ await page.evaluate(()=>linked=false);
+ await page.locator('#trending [data-chain=arc]').click();
+ await page.waitForFunction(()=>!chainTest.filter('trending').selected.has('arc'));await unchanged();
+ await page.locator('#trending [data-action=all]').click();
+ await page.waitForFunction(()=>chainTest.filter('trending').selected.has('base'));await unchanged();
+ // Still verify the actual committed picker projection, but only Tracking uses it.
+ await page.evaluate(()=>{const p=pickers.walletTracking;p.oldCore=p.core;const fresh={memoizedProps:{...p.core.memoizedProps,value:['arc']},child:p.host,return:p.module};p.module.child=fresh;p.core.pendingProps={...p.core.memoizedProps,value:['bsc']};p.node.textContent='Committed Arc with stale host ancestry';});
+ await page.waitForFunction(()=>chainTest.filter('walletTracking').selected?.size===1&&chainTest.filter('walletTracking').selected.has('arc'));await unchanged();
  assert.equal(await page.evaluate(()=>chainTest.events().length),3);
- assert.equal(await page.evaluate(()=>connections),1,'filter change does not reconnect or change demand');
- assert.equal(await page.evaluate(()=>portMessages.some(m=>m.type==='refresh')),false,'no refresh request');
- await page.locator('#walletTracking [data-chain=arc]').click();await page.waitForFunction(()=>document.querySelectorAll('.gdh-discovery-trending-row').length===3);
- // Independent native modules remain independent; no cross-panel guessing.
- await page.evaluate(()=>linked=false);await page.locator('#trending [data-chain=arc]').click();await page.waitForFunction(()=>document.querySelectorAll('.gdh-discovery-trending-row').length===2);
- assert.equal(await page.evaluate(()=>chainTest.events().length),6);
- await page.locator('#trending [data-action=all]').click();await page.waitForFunction(()=>document.querySelectorAll('.gdh-discovery-trending-row').length===4);
- assert.equal(await page.evaluate(()=>chainTest.events().length),6);
- // Committed-tree proof: stale .return props and pending props cannot leak chains.
- await page.evaluate(()=>{const p=pickers.trending;p.oldCore=p.core;const fresh={memoizedProps:{...p.core.memoizedProps,value:['arc']},child:p.host,return:p.module};p.module.child=fresh;p.core.pendingProps={...p.core.memoizedProps,value:['bsc']};p.node.textContent='Committed Arc with stale host ancestry';});
- await page.waitForFunction(()=>document.querySelector('.gdh-discovery-token strong')?.textContent==='ARC_FIXTURE'&&document.querySelectorAll('.gdh-discovery-trending-row').length===1);
- // Invalid/missing committed values fail closed, not all-chain fallback.
- await page.evaluate(()=>{pickers.trending.module.child.memoizedProps.value=null;pickers.trending.node.textContent='Unavailable';});
- await page.waitForFunction(()=>document.querySelectorAll('.gdh-discovery-trending-row').length===0);
- assert.match(await page.locator('.gdh-discovery-trending-list').innerText(),/Waiting for GMGN/);
- await page.evaluate(()=>{pickers.trending.module.child.memoizedProps.value=['arbitrum'];pickers.trending.node.textContent='Arbitrum only';});
- await page.waitForFunction(()=>document.querySelector('.gdh-discovery-trending-list')?.textContent.includes('selected chains'));
- assert.equal(await page.locator('.gdh-discovery-trending-row').count(),0);
- // Host getters are not executed by the public-prop projection.
- await page.evaluate(()=>{window.getterReads=0;Object.defineProperty(pickers.trending.module.child.memoizedProps,'value',{get(){getterReads++;return ['base']},configurable:true});pickers.trending.node.textContent='Getter rejected';});
- await page.waitForFunction(()=>document.querySelector('.gdh-discovery-trending-list')?.textContent.includes('Waiting for GMGN'));
- assert.equal(await page.evaluate(()=>getterReads),0);
- await page.evaluate(()=>{const p=pickers.trending;Object.defineProperty(p.module.child.memoizedProps,'value',{value:['arc'],writable:true,configurable:true});p.node.textContent='Recovered';});
- await page.waitForFunction(()=>document.querySelectorAll('.gdh-discovery-trending-row').length===1);
- await page.locator('.gdh-discovery-trending-row').hover();await page.evaluate(()=>emit());
- await page.evaluate(()=>{pickers.trending.module.child.memoizedProps.value=['bsc'];pickers.trending.node.textContent='Filter changes even while hovered';});
- await page.waitForFunction(()=>document.querySelector('.gdh-discovery-token strong')?.textContent==='BSC_FIXTURE');
- assert.equal(await page.locator('.gdh-discovery-trending-tab').getAttribute('aria-pressed'),'true');
+ for(const value of [null,[],['arbitrum']]){
+  await page.evaluate(value=>{for(const p of Object.values(pickers)){p.module.child.memoizedProps.value=value;p.node.textContent=JSON.stringify(value);}},value);
+  await page.waitForFunction(()=>chainTest.events().length===0);await unchanged();
+ }
+ await page.evaluate(()=>{window.getterReads=0;for(const p of Object.values(pickers)){Object.defineProperty(p.module.child.memoizedProps,'value',{get(){getterReads++;return ['base']},configurable:true});p.node.textContent='Getter rejected';}});
+ await page.waitForFunction(()=>!chainTest.filter('walletTracking').available);assert.equal(await page.evaluate(()=>getterReads),0);await unchanged();
+ await page.evaluate(()=>{for(const p of Object.values(pickers)){Object.defineProperty(p.module.child.memoizedProps,'value',{value:['arc','bsc'],writable:true,configurable:true});p.module.child.memoizedProps.mode='single';p.node.textContent='Single Arc';}});
+ await page.waitForFunction(()=>chainTest.filter('walletTracking').selected?.size===1);await unchanged();
+ await page.locator('.gdh-discovery-trending-row').first().hover();
+ await page.evaluate(()=>{window.held=document.querySelector('.gdh-discovery-trending-row');emit();pickers.trending.core.memoizedProps.value=['bsc'];pickers.trending.node.textContent='BSC while held';});
+ await page.waitForFunction(()=>chainTest.filter('trending').selected?.has('bsc'));await unchanged();
+ assert.equal(await page.evaluate(()=>held===document.querySelector('.gdh-discovery-trending-row')),true,'picker must not rebuild held Trending');
  for(const width of [1000,390]){await page.setViewportSize({width,height:850});await page.screenshot({path:new URL('test-results/native-chain-filters-'+width+'.png',root).pathname});}
- // Single-chain mode, empty selection and native picker remount are not All.
- await page.evaluate(()=>{const p=pickers.trending;p.module.child.memoizedProps.mode='single';p.module.child.memoizedProps.value=['arc','bsc'];p.node.textContent='Single Arc';});
- await page.waitForFunction(()=>document.querySelector('.gdh-discovery-token strong')?.textContent==='ARC_FIXTURE'&&document.querySelectorAll('.gdh-discovery-trending-row').length===1);
- await page.evaluate(()=>{pickers.trending.module.child.memoizedProps.value=[];pickers.trending.node.textContent='Empty selection';});
- await page.waitForFunction(()=>document.querySelectorAll('.gdh-discovery-trending-row').length===0);
- assert.match(await page.locator('.gdh-discovery-trending-list').innerText(),/selected chains/);
- await page.evaluate(()=>pickers.trending.box.remove());
- await page.waitForFunction(()=>document.querySelector('.gdh-discovery-trending-list')?.textContent.includes('Waiting for GMGN'));
- await page.evaluate(()=>mountPicker('trending'));await page.waitForFunction(()=>document.querySelectorAll('.gdh-discovery-trending-row').length===4);
+ await page.evaluate(()=>{pickers.trending.box.remove();pickers.walletTracking.box.remove();});
+ await page.waitForFunction(()=>!chainTest.filter('walletTracking').available);await unchanged();
+ await page.evaluate(()=>{mountPicker('trending');mountPicker('walletTracking');});
+ await page.waitForFunction(()=>chainTest.filter('walletTracking').available);await unchanged();
  const rejected=await page.evaluate(()=>['{bad',JSON.stringify({version:2,trending:['arc']}),'x'.repeat(2049)].map(raw=>{document.documentElement.setAttribute('data-gdh-chain-filters',raw);document.dispatchEvent(new Event('gdh-chain-filters'));return document.querySelectorAll('.gdh-discovery-trending-row').length;}));
- assert.deepEqual(rejected,[0,0,0],'malformed and unsupported bridge payloads fail closed');
- // Reload gets the currently persisted synthetic native selection, not helper state.
+ assert.deepEqual(rejected,[4,4,4],'invalid native selection cannot hide Trending');
+ assert.equal(await page.evaluate(()=>connections),1);assert.equal(await page.evaluate(()=>portMessages.some(m=>m.type==='refresh')),false);
  await page.evaluate(()=>{pickers.trending.set(['arc']);pickers.walletTracking.set(['arc']);});
- await setup();await page.waitForFunction(()=>document.querySelector('.gdh-discovery-token strong')?.textContent==='ARC_FIXTURE');
- assert.equal(await page.locator('.gdh-discovery-trending-row').count(),1);
+ await setup();await unchanged();
  assert.equal(requests.length,2,'only routed fixture pages; zero provider I/O');assert.deepEqual(errors,[]);
  // Actual popup can load/save old ON settings without resurrecting the removed control.
  const popup=await context.newPage();popup.on('pageerror',e=>errors.push(e.message));await popup.setViewportSize({width:400,height:850});await popup.route('**/*',r=>{const path=new URL(r.request().url()).pathname;if(path.startsWith('/icons/'))return r.fulfill({contentType:'image/png',body:fs.readFileSync(new URL(path.slice(1),root))});return r.fulfill({contentType:'text/html',body:read('popup.html').replace(/<script[^>]*src="popup.js"[^>]*><\/script>/,'').replace(/<link[^>]*>/g,'')});});
@@ -105,5 +94,5 @@ try{
  assert.equal(await popup.evaluate(()=>Object.hasOwn(popupSaved,'fomoFeedChainOnly')),false);
  await popup.screenshot({path:new URL('test-results/native-chain-filter-popup.png',root).pathname,fullPage:true});
  assert.deepEqual(errors,[]);
- console.log('PASS native chain filters: actual committed MAIN projection → full content, linked/independent pickers, same-address multi-chain, buy/sell/thesis, native ranks, All, empty/unavailable/getter-safe, stale host ancestry, hovered refilter, reload, zero provider traffic/no reconnect and legacy checkbox removed from real popup Save.');
+ console.log('PASS native chain filters: actual committed MAIN projection → full content, linked/independent pickers, same-address multi-chain, buy/sell/thesis, native ranks, All, empty/unavailable/getter-safe, stale host ancestry, Trending all-chain/held-row invariance, Tracking refilter, reload, zero provider traffic/no reconnect and legacy checkbox removed from real popup Save.');
 }finally{await browser.close();}

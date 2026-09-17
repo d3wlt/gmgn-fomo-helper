@@ -192,5 +192,27 @@ test('zero clock baseline retention and bounded injected jitter',async()=>{
   await f.tick(1); assert.equal(f.sockets.length,2); assert.equal(f.api.getSnapshot().items.length,1);
   f.api.stop();
 });
+test('newness tracks received membership before coalescing, not ranks or metadata',async()=>{
+  const f=fixture(),s=await f.open();await f.auth(s);
+  s.full(Array.from({length:101},(_,i)=>row(i+1)));await f.tick(250);
+  assert.ok(f.api.getSnapshot().items.every(r=>r.newUntil===0));
+  s.delta('update',101,0);assert.equal(f.api.getSnapshot().items[0].newUntil,0,'top-100 promotion is not new');
+  s.payload({kind:'new',tokenKey:key(1,5042),index:0,update:row(1,5042)});
+  const fresh=f.api.getSnapshot().items[0],until=f.time+10000;
+  assert.equal(fresh.newUntil,until);assert.equal(fresh.addedRevision,1);
+  await f.tick(100);s.payload({kind:'update',tokenKey:key(1,5042),index:1,update:row(1,5042)});
+  assert.equal(f.api.getSnapshot().items[1].newUntil,until);
+  s.full([row(1),row(1,5042),row(101)]);assert.equal(f.api.getSnapshot().items[1].newUntil,until);
+  s.delta('new',200,0);s.delta('remove',200);s.delta('new',201,0);
+  await f.tick(250);assert.equal(f.updates.at(-1).items[0].addedRevision,3);
+  assert.ok(!f.updates.at(-1).items.some(r=>r.address===A(200)));
+  await f.tick(10000);s.delta('update',201,0);assert.ok(f.api.getSnapshot().items[0].newUntil<=f.time,'unchanged updates never restart expiry');
+  const epoch=f.api.getSnapshot().streamEpoch;f.api.refresh();await settle();
+  const next=f.sockets.at(-1);next.open();await settle();await f.auth(next);next.full([row(300),row(301)]);
+  assert.notEqual(f.api.getSnapshot().streamEpoch,epoch);assert.ok(f.api.getSnapshot().items.every(r=>r.newUntil===0));
+  next.delta('new',302,0);const before=f.api.getSnapshot().streamEpoch;
+  next.frame({type:'challenge'});await settle();next.frame({type:'challengeAccepted'});next.full([row(400)]);
+  assert.notEqual(f.api.getSnapshot().streamEpoch,before);assert.equal(f.api.getSnapshot().items[0].newUntil,0);
+});
 for (const [name,fn] of tests) { await fn(); console.log('ok - '+name); }
 console.log(`${tests.length} deterministic owned Trending tests passed`);

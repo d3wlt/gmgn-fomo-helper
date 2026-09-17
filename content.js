@@ -1905,7 +1905,34 @@
   }
   let discoveryTrendingPort = null, discoveryTrendingHeartbeat = null, discoveryTrendingReconnect = null;
   let discoveryTrendingReconnects = 0, discoveryTrendingPending = null, discoveryTrendingFlush = null;
+  // Transport stamps actual membership arrivals before its 250ms publish coalescing.
+  // One baseline watermark per connection; no all-time history or persisted newness.
+  let discoveryNewBaseline = null, discoveryNewTimer = null;
+  function resetDiscoveryNewness() {
+    discoveryNewBaseline = null;
+    clearTimeout(discoveryNewTimer); discoveryNewTimer = null;
+    discoveryTrending?.panel.querySelectorAll('.gdh-discovery-new').forEach(node => node.remove());
+  }
+  function observeDiscoveryNewness(data) {
+    if (!data.ok || data.status !== 'live' || !Number.isSafeInteger(data.streamEpoch) || !Number.isSafeInteger(data.membershipRevision)) { resetDiscoveryNewness(); return; }
+    if (!discoveryNewBaseline || discoveryNewBaseline.epoch !== data.streamEpoch) {
+      resetDiscoveryNewness();
+      discoveryNewBaseline = {epoch:data.streamEpoch, revision:data.membershipRevision};
+    }
+  }
+  function expireDiscoveryNewness() {
+    clearTimeout(discoveryNewTimer); discoveryNewTimer = null;
+    let next = Infinity;
+    discoveryTrending?.panel.querySelectorAll('.gdh-discovery-new').forEach(node => {
+      const until = Number(node.dataset.until);
+      if (until <= Date.now()) node.remove();
+      else next = Math.min(next, until);
+    });
+    // Badge-only mutation: never replace/reorder rows or disturb a held reader.
+    if (Number.isFinite(next)) discoveryNewTimer = setTimeout(expireDiscoveryNewness, Math.max(0,next-Date.now()));
+  }
   function disconnectDiscoveryLive() {
+    resetDiscoveryNewness();
     clearInterval(discoveryTrendingHeartbeat); discoveryTrendingHeartbeat = null;
     clearTimeout(discoveryTrendingReconnect); discoveryTrendingReconnect = null;
     clearTimeout(discoveryTrendingFlush); discoveryTrendingFlush = null; discoveryTrendingPending = null;
@@ -1934,6 +1961,7 @@
         const data = message.data;
         if (!data || data.provenance !== 'owned-stream' || data.source !== 'fomo-trending' || typeof data.ok !== 'boolean' || !Array.isArray(data.items) || data.items.length > 100) return;
         discoveryTrendingReconnects = 0; discoveryTrendingGeneration++;
+        observeDiscoveryNewness(data);
         const state = discoveryTrending;
         if (data.ok && state?.active && (state.hovered || state.focused || Date.now() < (state.scrollingUntil || 0))) {
           discoveryTrendingPending = data; flushDiscoveryLive(); return;
@@ -1996,10 +2024,9 @@
     const state = discoveryTrending;
     if (!state?.active) return;
     const data = discoveryTrendingData;
-    const chainFilter = nativeFomoChainFilter('trending');
     const age = data?.fetchedAt ? Math.max(0, Date.now() - data.fetchedAt) : 0;
     const stale = !!data?.fetchedAt && (data.stale || age >= 60000);
-    const key = JSON.stringify([state.loading, data, chainFilter.key, Math.floor(age / 60000), age > 300000, data?.retryAt > Date.now()]);
+    const key = JSON.stringify([state.loading, data, Math.floor(age / 60000), age > 300000, data?.retryAt > Date.now()]);
     if (state.renderKey === key) return;
     state.renderKey = key;
     const panel = state.panel, oldScroll = panel.scrollTop;
@@ -2012,7 +2039,7 @@
       : data?.reason === 'waiting-native-trending' ? 'Open FOMO → Tokens → Trending, then Refresh.'
       : data && !data.ok ? (stale ? 'Stale · refresh unavailable' : 'Trending unavailable · try Refresh')
       : stale ? `Stale · ${Math.floor(age / 60000)}m ago` : data?.fetchedAt ? `${data.viewMode === 'native-view' ? 'Native view snapshot' : 'Stream snapshot'} · ${age < 60000 ? '<1m' : Math.floor(age / 60000) + 'm'} ago` : 'Select Refresh to read native data';
-    status.title = data?.provenance === 'owned-stream' ? 'Authenticated live Trending stream owned by the extension. Server order; native-page hidden filters and chart-price overrides are not applied. Updates pause during hover or scrolling. Refresh reconnects this stream.' : data?.viewMode === 'native-view'
+    status.title = data?.provenance === 'owned-stream' ? 'Authenticated live Trending stream owned by the extension. All supported chains, independent of GMGN’s chain picker. New observed entries show 🆕 for 10 seconds. Server order; native-page hidden filters and chart-price overrides are not applied. Updates pause during hover or scrolling. Refresh reconnects this stream.' : data?.viewMode === 'native-view'
       ? `Observed native list, including its hidden-token filtering and hover-frozen order. Displayed prices captured for ${data.nativePriceRows || 0} mounted rows (${data.nativeChartOverrides || 0} chart overrides); other prices use stream/frozen snapshots. Offscreen-only commits may not be observed immediately. Refresh reads memory only.`
       : 'Observed native stream order. Native view could not be validated: local hidden-token filters, hover freezing and chart-price overrides are not applied. Refresh reads memory only.';
     if (data?.retryAt > Date.now()) status.textContent += ' · cooling down';
@@ -2028,13 +2055,16 @@
     for (const item of items.slice(0, 200)) {
       const ref = discoveryRef(item.chain, item.address);
       if (!ref || FOMO_NETWORK_ID[ref.chain] !== item.networkId || item.source !== 'fomo-trending') continue;
-      if (chainFilter.selected && !chainFilter.selected.has(ref.chain)) continue;
       const row = document.createElement('a'); row.className = 'gdh-discovery-trending-row'; row.href = `/${ref.chain}/token/${ref.address}`;
       row.addEventListener('click', event => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); gdhSpaNavigate(row.getAttribute('href')); });
       const rank = document.createElement('span'); rank.className = 'gdh-discovery-rank'; rank.textContent = Number.isInteger(item.rank) && item.rank > 0 ? String(item.rank) : '—';
       const identity = document.createElement('span'); identity.className = 'gdh-discovery-token';
       const name = document.createElement('strong'); name.textContent = discoveryText(item.symbol) || discoveryText(item.name) || `${ref.address.slice(0, 6)}…${ref.address.slice(-4)}`;
-      const chain = document.createElement('small'); chain.textContent = `${ref.chain === 'robinhood' ? 'RH' : ref.chain.toUpperCase()}${item.name && item.name.toLowerCase() !== (item.symbol || '').toLowerCase() ? ' · ' + discoveryText(item.name) : ''}`; identity.title = `${item.name || item.symbol || 'Unknown name'}\n${ref.chain} · ${ref.address}`; identity.append(name, chain);
+      const chain = document.createElement('small'); chain.textContent = `${ref.chain === 'robinhood' ? 'RH' : ref.chain.toUpperCase()}${item.name && item.name.toLowerCase() !== (item.symbol || '').toLowerCase() ? ' · ' + discoveryText(item.name) : ''}`; identity.title = `${item.name || item.symbol || 'Unknown name'}\n${ref.chain} · ${ref.address}`; const heading = document.createElement('span'); heading.className = 'gdh-discovery-token-heading'; heading.append(name); identity.append(heading, chain);
+      if (discoveryNewBaseline && discoveryNewBaseline.epoch === data.streamEpoch && item.addedRevision > discoveryNewBaseline.revision && item.newUntil > Date.now() && item.newUntil <= Date.now()+10000) {
+        const badge = document.createElement('span'); badge.className = 'gdh-discovery-new'; badge.textContent = '🆕';
+        badge.title = 'New to the observed FOMO Trending list'; badge.setAttribute('aria-label', 'New trending token'); badge.dataset.until = String(item.newUntil); heading.append(badge);
+      }
       const values = document.createElement('span'); values.className = 'gdh-discovery-values';
       const price = document.createElement('small'); price.className='gdh-discovery-price'; price.textContent = money(item.price); price.title = `USD price: ${item.price ?? 'unknown'} · ${item.priceSource || 'stream snapshot'}`;
       const mc = document.createElement('strong'); mc.className='gdh-discovery-mc'; mc.textContent = money(item.marketCap); mc.title = 'Market cap (USD)'; mc.dataset.known=String(typeof item.marketCap === 'number' && Number.isFinite(item.marketCap) && item.marketCap >= 0); values.append(mc, price);
@@ -2043,15 +2073,16 @@
       change.textContent = typeof item.change24Percent === 'number' && Number.isFinite(item.change24Percent) ? `${item.change24Percent > 0 ? '+' : ''}${new Intl.NumberFormat('en', { maximumFractionDigits: 1, notation: Math.abs(item.change24Percent) >= 1000 ? 'compact' : 'standard' }).format(item.change24Percent)}%` : '—'; change.title = `24h change${item.change24Percent == null ? '' : ': ' + item.change24Percent + '%'}`;
       row.append(rank, identity, values, change); list.append(row);
     }
-    if (!list.children.length && !state.loading && data?.ok && !stale) { const empty = document.createElement('p'); empty.textContent = !chainFilter.available ? 'Waiting for GMGN chain selection…' : chainFilter.selected ? 'No FOMO trending tokens for the selected chains.' : 'No trending tokens returned by FOMO.'; list.append(empty); }
+    if (!list.children.length && !state.loading && data?.ok && !stale) { const empty = document.createElement('p'); empty.textContent = 'No trending tokens returned by FOMO.'; list.append(empty); }
     panel.append(list);
+    expireDiscoveryNewness();
     panel.scrollTop = oldScroll;
     const retained = anchorHref && [...list.querySelectorAll('a')].find(row => row.getAttribute('href') === anchorHref);
     if (retained) panel.scrollTop += retained.getBoundingClientRect().top - anchorTop;
   }
   async function loadDiscoveryTrending() {
     const state = discoveryTrending;
-    if (state?.active && discoveryTrendingPort) { discoveryTrendingPort.postMessage({type:'refresh'}); return; }
+    if (state?.active && discoveryTrendingPort) { resetDiscoveryNewness(); discoveryTrendingPending = null; discoveryTrendingPort.postMessage({type:'refresh'}); return; }
     if (!state?.active || state.loading || discoveryTrendingDead || document.visibilityState === 'hidden' || !discoveryVisible(state.main)) return;
     // A user gesture reads the newest passive worker snapshot, never an API.
     const generation = ++discoveryTrendingGeneration, auth = fomoUiAuthGeneration;
@@ -4317,7 +4348,6 @@
   }
   document.addEventListener('gdh-chain-filters', () => {
     scheduleTrackingFeedRender();
-    renderDiscoveryTrending();
   });
 
   function visibleTrackingFeedEvents(nativeRows = []) {
