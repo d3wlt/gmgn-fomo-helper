@@ -2,7 +2,7 @@
 
 Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
 
-## 0.53.34 - 2026-09-17
+## 0.53.35 - 2026-09-17
 
 - Replace the long README with a feature-first screenshot overview; preserve installation, updating, diagnostics and development instructions in GUIDE.md.
 

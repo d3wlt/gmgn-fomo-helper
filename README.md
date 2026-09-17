@@ -2,7 +2,7 @@
 
 FOMO activity, token context and trading tools inside GMGN.
 
-Latest release: **0.53.34** · [Download](https://github.com/d3wlt/gmgn-fomo-helper/releases) · [Install / update](GUIDE.md#install-and-update) · [Privacy](PRIVACY.md)
+Version **0.53.35** · [Download](https://github.com/d3wlt/gmgn-fomo-helper/releases) · [Install / update](GUIDE.md#install-and-update) · [Privacy](PRIVACY.md)
 
 ## Features
 
