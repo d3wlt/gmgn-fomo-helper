@@ -1,6 +1,6 @@
 # GMGN FOMO Helper — setup and reference
 
-A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.37** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
+A private Chrome MV3 extension that brings FOMO context into GMGN. Version **0.53.38** continues the private fork of “better gmgn,” originally based on upstream v0.46.27.
 
 This project is not affiliated with GMGN, FOMO or the original upstream author.
 
@@ -70,6 +70,9 @@ The token panel and holder count may make their own scoped requests using your b
 
 ### Token comparison and FOMO Trending
 
+- **Market-cap distribution:** beneath the chain counts, USD buckets show each range's share of all displayed coins, a chain-coloured bar and the chain with the most coins (including ties). View details expands exact per-chain counts and within-range percentages. Unknown caps are separate; ranges include the lower bound and exclude the upper bound. Percentages are rounded. Statistics follow the same held snapshot as the rows, not pending arrivals, and make no additional requests.
+- **Chain stripes:** every supported Trending chain uses the tracker's left-edge colour and any existing custom colour override. RH/SOL/BSC and other text labels remain visible; the stripe remains after the separate ten-second new-entry highlight expires.
+
 - **Migrated badge:** the approved black, fine-grey-outline FOMO eyes + Trending label marks native Migrated cards by chain plus full contract (Solana case preserved), never ticker. It uses every current member of the fresh owned snapshot (the existing server top-100 display scope), including the initial baseline, not just new entries. Membership follows the latest received snapshot even while the Trending display is held. The official transparent eyes are bundled locally from https://fomo.family/images/fomo-eyes.png.
 - **Token-page badge:** the same 82×20 black outlined eyes + Trending badge appears beside the native token-header name/controls when the viewed token is a confirmed member, including the initial snapshot. It automatically appears on entry and disappears on exit, using the latest received list even while Trending is held. Route, full native header CA and an allowlisted chain-specific explorer link must agree; delayed SPA headers cannot borrow the new route's membership. Missing/unknown anchors or insufficient trailing room omit the badge, never move native controls. It shares the dependency and cleanup below with Migrated; it does not persist membership or open a background source.
 - This badge depends on the existing **visible, selected FOMO Trending panel**. It adds no requests, sockets, background collection or demand. It clears on membership exit, 60-second snapshot expiry, disconnect, hidden page/panel, account reset, disable or source deselection. Unknown layouts or insufficient free space omit the badge without shrinking names, moving native controls or changing card geometry.
@@ -113,7 +116,7 @@ Requirements: Node.js 22+, Python 3 for the portable builder, or PowerShell for 
 npm ci
 npx playwright install chromium
 npm run verify
-python3 scripts/build-release.py --tag v0.53.37
+python3 scripts/build-release.py --tag v0.53.38
 ```
 
 On PowerShell:

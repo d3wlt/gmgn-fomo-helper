@@ -2,6 +2,11 @@
 
 Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
 
+## 0.53.38 - 2026-09-21
+
+- Add market-cap distribution below FOMO Trending chain counts, based only on the validated displayed snapshot. Show USD ranges, percentage of the current list, chain-coloured stacked bars and the leading chain (including ties). View details expands exact per-chain counts and within-range shares; missing/invalid market caps remain Unknown. Held lists and their statistics stay in sync, with no additional requests.
+- Match Trending row left-edge stripes to the tracker chain palette, including custom colours, while retaining chain labels and 40px row geometry. Preserve the existing receipt-based ten-second 🆕 badge and violet highlight without rank/price replay.
+
 ## 0.53.37 - 2026-09-17
 
 - Extend the approved black outlined FOMO eyes + Trending badge to native token-page headers. Include initial members and automatically add/remove it as the viewed token enters/exits the latest received validated Trending snapshot, including while the Trending list is held. Require route, full native header CA and chain-specific explorer identity to agree during SPA transitions; omit unknown or cramped headers without moving native controls. Reuse the visible selected Trending source, freshness/lifecycle cleanup and bundled asset; no new requests, sockets, demand or persistence. Migrated cards retain their implementation.

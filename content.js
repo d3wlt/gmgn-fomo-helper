@@ -2032,6 +2032,64 @@
       state.tab.remove(); state.panel.remove(); discoveryTrending = null;
     }
   }
+  // Statistics use only the validated rows actually appended to the current list.
+  function discoveryMarketCapStats(items) {
+    const ranges = [
+      ['< $100K', 100000], ['$100K–$500K', 500000], ['$500K–$1M', 1000000],
+      ['$1M–$5M', 5000000], ['$5M–$10M', 10000000], ['$10M+', Infinity], ['Unknown', null]
+    ].map(([label, upper]) => ({label, upper, count:0, chains:new Map()}));
+    for (const item of items) {
+      const cap = item.marketCap;
+      const known = typeof cap === 'number' && Number.isFinite(cap) && cap >= 0;
+      const bucket = known ? ranges.find(range => range.upper !== null && cap < range.upper) : ranges.at(-1);
+      bucket.count++;
+      bucket.chains.set(item.chain, (bucket.chains.get(item.chain) || 0) + 1);
+    }
+    return ranges;
+  }
+  function renderDiscoveryMarketCaps(items, state) {
+    if (!items.length) return null;
+    const label = chain => chain === 'robinhood' ? 'RH' : chain.toUpperCase();
+    const sorted = counts => [...counts].sort(([a,n],[b,m]) => m-n || label(a).localeCompare(label(b)));
+    const percent = count => new Intl.NumberFormat('en', {maximumFractionDigits:1}).format(count / items.length * 100) + '%';
+    const section = document.createElement('section'); section.className = 'gdh-discovery-cap-stats'; section.setAttribute('aria-label', 'Market-cap distribution');
+    const header = document.createElement('div'); header.className = 'gdh-discovery-cap-header';
+    const title = document.createElement('strong'); title.textContent = 'Market-cap distribution';
+    const toggle = document.createElement('button'); toggle.type = 'button';
+    const details = document.createElement('div'); details.className = 'gdh-discovery-cap-details';
+    details.id = 'gdh-discovery-cap-details'; toggle.setAttribute('aria-controls', details.id);
+    const applyExpanded = () => { details.hidden = !state.capDetailsOpen; toggle.textContent = state.capDetailsOpen ? 'Hide details' : 'View details'; toggle.setAttribute('aria-expanded', String(!!state.capDetailsOpen)); };
+    toggle.addEventListener('click', () => { state.capDetailsOpen = !state.capDetailsOpen; applyExpanded(); }); applyExpanded();
+    header.append(title, toggle); section.append(header);
+    const caption = document.createElement('small'); caption.textContent = `${items.length} ${items.length === 1 ? 'coin' : 'coins'} in current list · USD market caps`; section.append(caption);
+    for (const bucket of discoveryMarketCapStats(items)) {
+      if (bucket.upper === null && !bucket.count) continue;
+      const chains = sorted(bucket.chains);
+      const row = document.createElement('div'); row.className = 'gdh-discovery-cap-row'; row.dataset.bucket = bucket.label; row.dataset.count = String(bucket.count);
+      const name = document.createElement('span'); name.textContent = bucket.label;
+      const share = document.createElement('span'); share.className = 'gdh-discovery-cap-share'; share.textContent = percent(bucket.count); share.title = `${bucket.count} of ${items.length} displayed coins`;
+      const bar = document.createElement('div'); bar.className = 'gdh-discovery-cap-track'; bar.setAttribute('aria-hidden', 'true');
+      for (const [chain,count] of chains) {
+        const segment = document.createElement('span'); segment.style.width = `${count / items.length * 100}%`; segment.style.backgroundColor = fomoFeedChainColor(chain); segment.title = `${label(chain)}: ${count}`; bar.append(segment);
+      }
+      const leader = document.createElement('span'); leader.className = 'gdh-discovery-cap-leader';
+      const leaders = chains.filter(([,count]) => count === chains[0]?.[1]);
+      leader.textContent = leaders.length ? `${leaders.length > 1 ? 'Tie: ' : ''}${leaders.map(([chain]) => label(chain)).join(' / ')} · ${leaders[0][1]}${leaders.length > 1 ? ' each' : ''}` : '—';
+      leader.title = 'Chain with the most coins in this market-cap range';
+      row.append(name, bar, share, leader); section.append(row);
+      const detail = document.createElement('div'); detail.className = 'gdh-discovery-cap-breakdown';
+      const heading = document.createElement('strong'); heading.textContent = `${bucket.label} · ${bucket.count} ${bucket.count === 1 ? 'coin' : 'coins'}`; detail.append(heading);
+      const breakdown = document.createElement('div');
+      for (const [chain,count] of chains) {
+        const entry = document.createElement('span'); entry.style.setProperty('--gdh-chain-color', fomoFeedChainColor(chain));
+        entry.textContent = `${label(chain)}: ${count} (${new Intl.NumberFormat('en', {maximumFractionDigits:1}).format(count / bucket.count * 100)}%)`; breakdown.append(entry);
+      }
+      if (!chains.length) breakdown.textContent = 'No coins';
+      detail.append(breakdown); details.append(detail);
+    }
+    const note = document.createElement('small'); note.textContent = 'Shares use all displayed coins, including Unknown. Details show each chain’s share within its range. Ranges include the lower bound, exclude the upper bound. Percentages are rounded.'; details.append(note);
+    section.append(details); return section;
+  }
   function renderDiscoveryTrending() {
     const state = discoveryTrending;
     if (!state?.active) return;
@@ -2065,12 +2123,13 @@
     // Stale rows have a five-minute maximum lifetime, including while the tab stays open.
     const items = age <= 300000 && data?.reason !== 'not-connected' && Array.isArray(data?.items) ? data.items : [];
     const money = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? '$' + new Intl.NumberFormat('en', { maximumSignificantDigits: 4, notation: value >= 100000 ? 'compact' : 'standard' }).format(value) : '—';
-    const chainCounts = new Map();
+    const chainCounts = new Map(), displayedItems = [];
     for (const item of items.slice(0, 200)) {
       if (!item || typeof item !== 'object') continue;
       const ref = discoveryRef(item.chain, item.address);
       if (!ref || FOMO_NETWORK_ID[ref.chain] !== item.networkId || item.source !== 'fomo-trending') continue;
       const row = document.createElement('a'); row.className = 'gdh-discovery-trending-row'; row.href = `/${ref.chain}/token/${ref.address}`;
+      row.style.setProperty('--gdh-chain-color', fomoFeedChainColor(ref.chain));
       row.addEventListener('click', event => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); gdhSpaNavigate(row.getAttribute('href')); });
       const rank = document.createElement('span'); rank.className = 'gdh-discovery-rank'; rank.textContent = Number.isInteger(item.rank) && item.rank > 0 ? String(item.rank) : '—';
       const identity = document.createElement('span'); identity.className = 'gdh-discovery-token';
@@ -2087,6 +2146,7 @@
       change.dataset.direction = typeof item.change24Percent === 'number' && Number.isFinite(item.change24Percent) ? item.change24Percent > 0 ? 'gain' : item.change24Percent < 0 ? 'loss' : 'flat' : 'unknown';
       change.textContent = typeof item.change24Percent === 'number' && Number.isFinite(item.change24Percent) ? `${item.change24Percent > 0 ? '+' : ''}${new Intl.NumberFormat('en', { maximumFractionDigits: 1, notation: Math.abs(item.change24Percent) >= 1000 ? 'compact' : 'standard' }).format(item.change24Percent)}%` : '—'; change.title = `24h change${item.change24Percent == null ? '' : ': ' + item.change24Percent + '%'}`;
       row.append(rank, identity, values, change); list.append(row);
+      displayedItems.push(item);
       // Count only appended rows from this displayed snapshot, never pending data.
       const label = ref.chain === 'robinhood' ? 'RH' : ref.chain.toUpperCase();
       chainCounts.set(label, (chainCounts.get(label) || 0) + 1);
@@ -2096,6 +2156,8 @@
       counts.textContent = [...chainCounts].sort(([a, n], [b, m]) => m - n || (a < b ? -1 : a > b ? 1 : 0)).map(([label, count]) => `${label}: ${count}`).join(' | ');
       summary.append(counts);
     }
+    const capStats = renderDiscoveryMarketCaps(displayedItems, state);
+    if (capStats) panel.insertBefore(capStats, columns);
     if (!list.children.length && !state.loading && data?.ok && !stale) { const empty = document.createElement('p'); empty.textContent = 'No trending tokens returned by FOMO.'; list.append(empty); }
     panel.append(list);
     expireDiscoveryNewness();

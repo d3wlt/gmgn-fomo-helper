@@ -2,7 +2,7 @@
 
 FOMO activity, token context and trading tools inside GMGN.
 
-Version **0.53.37** · [Download](https://github.com/d3wlt/gmgn-fomo-helper/releases) · [Install / update](GUIDE.md#install-and-update) · [Privacy](PRIVACY.md)
+Version **0.53.38** · [Download](https://github.com/d3wlt/gmgn-fomo-helper/releases) · [Install / update](GUIDE.md#install-and-update) · [Privacy](PRIVACY.md)
 
 ## Features
 
@@ -21,10 +21,12 @@ Version **0.53.37** · [Download](https://github.com/d3wlt/gmgn-fomo-helper/rele
 - All supported chains, independent of the chain selector; 🆕 marks newly observed entries for 10 seconds—not initial loads or reconnects.
 - **New:** new entries also get a subtle violet tint and inset outline, expiring with 🆕 without moving rows or flashing.
 - **New:** a compact chain-count line below the live status, sorted by the most tokens in the displayed list.
+- Market-cap distribution for the current list, with range percentages, leading chains and expandable per-chain details.
+- Tracker-matching left-edge chain stripes across all supported Trending chains, including custom colours.
 
 ![FOMO Trending with a new-entry badge on an Arc token](assets/readme/trending-new.png)
 
-*Current-source browser test with sample tokens.*
+*Browser test with sample tokens; this screenshot predates the market-cap breakdown and chain stripes.*
 
 ### Community FOMO Thesis
 
