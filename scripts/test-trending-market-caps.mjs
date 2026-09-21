@@ -46,10 +46,10 @@ try {
   const rows = page.locator('.gdh-discovery-trending-row');
   const toggle = page.locator('.gdh-discovery-cap-header button');
   const details = page.locator('.gdh-discovery-cap-details');
-  const valid = [row('robinhood',1,0),row('bsc',1,99999),row('sol',1,100000),row('sol',2,499999),row('arc',1,500000),row('base',1,999999),row('eth',1,1000000),row('monad',1,5000000),row('robinhood',2,10000000),row('bsc',2,null),row('eth',2,-1),row('monad',2,'100000')];
+  const valid = [row('robinhood',1,0),row('bsc',1,99999),row('sol',1,100000),row('sol',2,999999),row('arc',1,1000000),row('base',1,9999999),row('eth',1,10000000),row('monad',1,99999999),row('robinhood',2,100000000),row('bsc',2,null),row('eth',2,-1),row('monad',2,'100000')];
   const invalid = [null,42,{},row('unknown'),{...row('bsc'),chain:'BSC'},{...row('bsc'),chain:'bnb'},{...row('bsc'),address:' '+row('bsc').address},{...row('bsc'),address:'0x123'},{...row('sol'),address:'0'.repeat(32)},{...row('eth'),networkId:56},{...row('bsc'),networkId:'56'},{...row('arc'),source:'other'}];
-  const labels = ['< $100K','$100K–$500K','$500K–$1M','$1M–$5M','$5M–$10M','$10M+','Unknown'];
-  const expectedCounts = [2,2,2,1,1,1,3];
+  const labels = ['< $100K','$100K–$1M','$1M–$10M','$10M–$100M','$100M+','Unknown'];
+  const expectedCounts = [2,2,2,2,1,3];
   const waitCount = async total => {
     await page.waitForFunction(total => document.querySelectorAll('.gdh-discovery-trending-row').length===total,total);
     assert.equal(await stats.count(),total ? 1 : 0);
@@ -60,19 +60,19 @@ try {
   assert.equal(baseline.caption,'12 coins in current list · USD market caps');
   assert.deepEqual(baseline.buckets.map(b=>b.label),labels);
   assert.deepEqual(baseline.buckets.map(b=>b.count),expectedCounts);
-  assert.deepEqual(baseline.buckets.map(b=>b.share),['16.7%','16.7%','16.7%','8.3%','8.3%','8.3%','25%']);
+  assert.deepEqual(baseline.buckets.map(b=>b.share),['16.7%','16.7%','16.7%','16.7%','8.3%','25%']);
   assert.deepEqual(baseline.buckets.map(b=>b.denominator),expectedCounts.map(n=>`${n} of 12 displayed coins`));
-  assert.deepEqual(baseline.buckets.map(b=>b.leader),['Tie: BSC / RH · 1 each','SOL · 2','Tie: ARC / BASE · 1 each','ETH · 1','MONAD · 1','RH · 1','Tie: BSC / ETH / MONAD · 1 each']);
-  assert.deepEqual(baseline.buckets.map(b=>b.segments.map(s=>s.title)),[['BSC: 1','RH: 1'],['SOL: 2'],['ARC: 1','BASE: 1'],['ETH: 1'],['MONAD: 1'],['RH: 1'],['BSC: 1','ETH: 1','MONAD: 1']]);
+  assert.deepEqual(baseline.buckets.map(b=>b.leader),['Tie: BSC / RH · 1 each','SOL · 2','Tie: ARC / BASE · 1 each','Tie: ETH / MONAD · 1 each','RH · 1','Tie: BSC / ETH / MONAD · 1 each']);
+  assert.deepEqual(baseline.buckets.map(b=>b.segments.map(s=>s.title)),[['BSC: 1','RH: 1'],['SOL: 2'],['ARC: 1','BASE: 1'],['ETH: 1','MONAD: 1'],['RH: 1'],['BSC: 1','ETH: 1','MONAD: 1']]);
   for (const b of baseline.buckets) assert.ok(Math.abs(b.segments.reduce((n,s)=>n+s.width,0)-b.count/12*100)<0.001,'bar uses displayed denominator');
   assert.deepEqual(baseline.details,[
-    '< $100K · 2 coinsBSC: 1 (50%)RH: 1 (50%)', '$100K–$500K · 2 coinsSOL: 2 (100%)',
-    '$500K–$1M · 2 coinsARC: 1 (50%)BASE: 1 (50%)', '$1M–$5M · 1 coinETH: 1 (100%)',
-    '$5M–$10M · 1 coinMONAD: 1 (100%)', '$10M+ · 1 coinRH: 1 (100%)',
+    '< $100K · 2 coinsBSC: 1 (50%)RH: 1 (50%)', '$100K–$1M · 2 coinsSOL: 2 (100%)',
+    '$1M–$10M · 2 coinsARC: 1 (50%)BASE: 1 (50%)', '$10M–$100M · 2 coinsETH: 1 (50%)MONAD: 1 (50%)',
+    '$100M+ · 1 coinRH: 1 (100%)',
     'Unknown · 3 coinsBSC: 1 (33.3%)ETH: 1 (33.3%)MONAD: 1 (33.3%)']);
   assert.deepEqual(await rows.locator('.gdh-discovery-mc').evaluateAll(ns=>ns.map(n=>n.dataset.known)),Array(9).fill('true').concat(Array(3).fill('false')));
   // Non-finite/undefined inputs cannot be represented faithfully by JSON snapshots.
-  assert.deepEqual(await page.evaluate(()=>capTest.stats([null,-1,'100000',undefined,NaN,Infinity,-Infinity].map(marketCap=>({chain:'eth',marketCap}))).map(b=>b.count)),[0,0,0,0,0,0,7]);
+  assert.deepEqual(await page.evaluate(()=>capTest.stats([null,-1,'100000',undefined,NaN,Infinity,-Infinity].map(marketCap=>({chain:'eth',marketCap}))).map(b=>b.count)),[0,0,0,0,0,7]);
   const checkColors = async () => {
     const actual = await rows.evaluateAll(nodes => nodes.map(n=>{
       const chain=n.getAttribute('href').split('/')[1], expected=capTest.color(chain), probe=document.createElement('span');
@@ -131,7 +131,7 @@ try {
     assert.equal(await page.evaluate(()=>heldRows.every((n,i)=>n===document.querySelectorAll('.gdh-discovery-trending-row')[i])),true);
     await release(); await waitCount(1);
     assert.equal((await readStats()).caption,'1 coin in current list · USD market caps');
-    assert.deepEqual((await readStats()).buckets.map(b=>b.count),[0,0,0,0,0,1]);
+    assert.deepEqual((await readStats()).buckets.map(b=>b.count),[0,0,0,1,0]);
   }
   await send(snapshot(valid,{ok:false,status:'reconnecting',stale:true})); await waitCount(12);
   assert.deepEqual(await readStats(),baseline);
@@ -142,7 +142,7 @@ try {
   await page.evaluate(data=>capTest.set(data),snapshot(Array.from({length:205},(_,i)=>row('eth',i+1,i<200?100000:10000000)),{provenance:'native-stream'}));
   await waitCount(200);
   assert.equal((await readStats()).caption,'200 coins in current list · USD market caps');
-  assert.deepEqual((await readStats()).buckets.map(b=>b.count),[0,200,0,0,0,0]);
+  assert.deepEqual((await readStats()).buckets.map(b=>b.count),[0,200,0,0,0]);
   await page.evaluate(data=>capTest.set(data),snapshot([...invalid,...Array.from({length:205},(_,i)=>row('eth',i+1))],{provenance:'native-stream'}));
   await waitCount(188);
   assert.equal((await readStats()).caption,'188 coins in current list · USD market caps');

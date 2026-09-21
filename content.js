@@ -2035,8 +2035,8 @@
   // Statistics use only the validated rows actually appended to the current list.
   function discoveryMarketCapStats(items) {
     const ranges = [
-      ['< $100K', 100000], ['$100K–$500K', 500000], ['$500K–$1M', 1000000],
-      ['$1M–$5M', 5000000], ['$5M–$10M', 10000000], ['$10M+', Infinity], ['Unknown', null]
+      ['< $100K', 100000], ['$100K–$1M', 1000000], ['$1M–$10M', 10000000],
+      ['$10M–$100M', 100000000], ['$100M+', Infinity], ['Unknown', null]
     ].map(([label, upper]) => ({label, upper, count:0, chains:new Map()}));
     for (const item of items) {
       const cap = item.marketCap;

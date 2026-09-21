@@ -2,6 +2,11 @@
 
 Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
 
+## 0.53.39 - 2026-09-21
+
+- Simplify Trending market-cap distribution to five USD ranges: <100K, 100K–1M, 1M–10M, 10M–100M and 100M+. Keep Unknown separate, lower bounds inclusive, upper bounds exclusive, and preserve current-list percentages, chain leaders, expanded details and chain colours.
+- Update browser boundary fixtures through the 100M threshold and retain held-list, keyboard, unknown-value and responsive-layout checks.
+
 ## 0.53.38 - 2026-09-21
 
 - Add market-cap distribution below FOMO Trending chain counts, based only on the validated displayed snapshot. Show USD ranges, percentage of the current list, chain-coloured stacked bars and the leading chain (including ties). View details expands exact per-chain counts and within-range shares; missing/invalid market caps remain Unknown. Held lists and their statistics stay in sync, with no additional requests.
