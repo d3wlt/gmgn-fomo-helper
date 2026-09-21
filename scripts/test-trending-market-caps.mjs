@@ -77,7 +77,7 @@ try {
     const actual = await rows.evaluateAll(nodes => nodes.map(n=>{
       const chain=n.getAttribute('href').split('/')[1], expected=capTest.color(chain), probe=document.createElement('span');
       probe.style.color=expected; document.body.append(probe); const normalized=getComputedStyle(probe).color; probe.remove();
-      const stripe=getComputedStyle(n,'::before');
+      const stripe=getComputedStyle(n.querySelector('.gdh-discovery-chain-stripe'));
       return {chain,expected,inline:n.style.getPropertyValue('--gdh-chain-color'),color:stripe.backgroundColor,normalized,width:stripe.width,height:n.getBoundingClientRect().height,position:stripe.position,pointer:stripe.pointerEvents,label:n.querySelector('.gdh-discovery-token small').textContent};
     }));
     for (const r of actual) {
@@ -94,6 +94,27 @@ try {
     return actual;
   };
   await checkColors();
+  // Price/MC updates must retain inspectable containers, rows and metric nodes.
+  await page.evaluate(() => { window.stableNodes = [...document.querySelector('.gdh-discovery-trending').querySelectorAll('*')]; });
+  await send(snapshot(valid.map(item => ({...item, price:0.02345}))));
+  await page.waitForFunction(() => document.querySelector('.gdh-discovery-price').textContent === '$0.02345');
+  assert.equal(await page.evaluate(() => stableNodes.every(node => node.isConnected)), true, 'metric update must not replace panel descendants');
+  await page.evaluate(() => { window.churn=0; window.churnObserver=new MutationObserver(records => {churn+=records.length;}); churnObserver.observe(document.querySelector('.gdh-discovery-trending'), {subtree:true,childList:true,attributes:true,characterData:true}); });
+  await send(snapshot(valid.map(item => ({...item, price:0.02345}))));
+  await page.evaluate(() => new Promise(resolve=>setTimeout(resolve,50)));
+  assert.equal(await page.evaluate(() => {churnObserver.disconnect(); return churn;}),0,'unchanged display snapshot causes no DOM mutations');
+  await send(snapshot(valid));
+  await page.waitForFunction(() => document.querySelector('.gdh-discovery-price').textContent === '$0.01234');
+  // Reordering must move the same chain/address nodes, not replace them.
+  await page.evaluate(() => { window.keyedRows=new Map([...document.querySelectorAll('.gdh-discovery-trending-row')].map(n=>[n.getAttribute('href'),n])); });
+  await send(snapshot([...valid].reverse()));
+  await page.waitForFunction(() => document.querySelector('.gdh-discovery-token strong').textContent === 'MONAD2');
+  assert.equal(await rows.evaluateAll(nodes=>nodes.every(n=>keyedRows.get(n.getAttribute('href'))===n)),true,'rank reordering retains token nodes');
+  await send(snapshot(valid));
+  await page.waitForFunction(() => document.querySelector('.gdh-discovery-token strong').textContent === 'ROBINHOOD1');
+  // A host pseudo-element reset must not hide permanent chain stripes.
+  await page.addStyleTag({content:'a::before { content: none !important; display: none !important; }'});
+  assert.equal(await rows.evaluateAll(nodes=>nodes.every(n=>{const s=n.querySelector('.gdh-discovery-chain-stripe'),r=s.getBoundingClientRect(),p=n.getBoundingClientRect();return r.width===3&&Math.abs(r.height-p.height)<1&&Math.abs(r.left-p.left)<1&&Math.abs(r.top-p.top)<1;})),true,'actual stripe rectangles fill each row left edge under host reset');
   await page.evaluate(()=>localStorage.setItem('follow_toast_chain_color_v1',JSON.stringify({robinhood:{color:'#123abc'},sol:{color:'rgb(11, 222, 33)'}})));
   await send(snapshot(valid)); await waitCount(12);
   await page.waitForFunction(()=>document.querySelector('.gdh-discovery-trending-row').style.getPropertyValue('--gdh-chain-color')==='#123abc');

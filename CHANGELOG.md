@@ -2,6 +2,12 @@
 
 Entries describe behavior at that version, not current support. Recent published releases are consolidated below; intermediate development notes remain in `release-notes/`.
 
+## 0.53.40 - 2026-09-21
+
+- Reconcile live Trending updates in place instead of replacing the whole panel. Keep existing chain/address rows, containers and metric nodes; identical displayed values cause no DOM mutations, and rank changes move existing rows. Preserve expandable details, held-list behavior, reading anchors and ten-second new-entry expiry.
+- Render permanent chain stripes as explicit pointer-inert row elements, independent of host pseudo-element resets and the transient new-entry highlight. Preserve 40px row geometry and existing custom chain colours. Specific live-browser stripe visibility still requires user confirmation.
+- Add regressions for retained inspectable descendants, zero-mutation unchanged updates, keyed reordering and actual stripe geometry with pseudo-elements disabled.
+
 ## 0.53.39 - 2026-09-21
 
 - Simplify Trending market-cap distribution to five USD ranges: <100K, 100K–1M, 1M–10M, 10M–100M and 100M+. Keep Unknown separate, lower bounds inclusive, upper bounds exclusive, and preserve current-list percentages, chain leaders, expanded details and chain colours.

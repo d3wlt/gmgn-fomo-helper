@@ -2090,6 +2090,32 @@
     const note = document.createElement('small'); note.textContent = 'Shares use all displayed coins, including Unknown. Details show each chain’s share within its range. Ranges include the lower bound, exclude the upper bound. Percentages are rounded.'; details.append(note);
     section.append(details); return section;
   }
+  // Reconcile the owned panel without detaching existing inspectable descendants.
+  // Rows are keyed by full chain/address href; range blocks keep their bucket identity.
+  function patchDiscoveryChildren(parent, next) {
+    const key = node => node.nodeType === Node.ELEMENT_NODE
+      ? `${node.tagName}|${node.className}|${node.getAttribute('href') || node.dataset.bucket || ''}`
+      : `#${node.nodeType}`;
+    const pools = new Map();
+    for (const node of parent.childNodes) {
+      const k = key(node); if (!pools.has(k)) pools.set(k, []); pools.get(k).push(node);
+    }
+    let cursor = parent.firstChild;
+    for (const fresh of [...next.childNodes]) {
+      const old = pools.get(key(fresh))?.shift();
+      const node = old || fresh;
+      if (old) {
+        if (old.nodeType === Node.ELEMENT_NODE) {
+          for (const attr of [...old.attributes]) if (!fresh.hasAttribute(attr.name)) old.removeAttribute(attr.name);
+          for (const attr of fresh.attributes) if (old.getAttribute(attr.name) !== attr.value) old.setAttribute(attr.name, attr.value);
+          patchDiscoveryChildren(old, fresh);
+        } else if (old.nodeValue !== fresh.nodeValue) old.nodeValue = fresh.nodeValue;
+      }
+      if (node !== cursor) parent.insertBefore(node, cursor);
+      cursor = node.nextSibling;
+    }
+    for (const nodes of pools.values()) for (const node of nodes) node.remove();
+  }
   function renderDiscoveryTrending() {
     const state = discoveryTrending;
     if (!state?.active) return;
@@ -2102,7 +2128,7 @@
     const panel = state.panel, oldScroll = panel.scrollTop;
     const anchor = oldScroll > 0 ? [...panel.querySelectorAll('.gdh-discovery-trending-row')].find(row => row.getBoundingClientRect().bottom > panel.getBoundingClientRect().top) : null;
     const anchorHref = anchor?.getAttribute('href'), anchorTop = anchor?.getBoundingClientRect().top;
-    panel.replaceChildren();
+    const nextPanel = document.createElement('div');
     const bar = document.createElement('div'); bar.className = 'gdh-discovery-bar';
     const status = document.createElement('span'); status.setAttribute('role', 'status');
     status.textContent = state.loading ? 'Loading FOMO Trending…' : data?.provenance === 'owned-stream' ? (data.status === 'live' ? 'Live · updating automatically' : data.status === 'connecting' ? 'Connecting to FOMO…' : data.status === 'reconnecting' ? 'Reconnecting · retained snapshot' : data.status === 'not-connected' ? 'FOMO session unavailable · sign in on FOMO' : 'Live connection unavailable · try Refresh') : data?.reason === 'not-connected' ? 'Sign in on FOMO, then refresh.'
@@ -2115,10 +2141,10 @@
     if (data?.retryAt > Date.now()) status.textContent += ' · cooling down';
     const refresh = document.createElement('button'); refresh.type = 'button'; refresh.textContent = 'Refresh'; refresh.disabled = state.loading || data?.retryAt > Date.now(); refresh.addEventListener('click', () => void loadDiscoveryTrending());
     const summary = document.createElement('span'); summary.append(status);
-    bar.append(summary, refresh); panel.append(bar);
+    bar.append(summary, refresh); nextPanel.append(bar);
     const columns = document.createElement('div'); columns.className = 'gdh-discovery-columns'; columns.setAttribute('aria-hidden','true');
     for (const label of ['', 'Token', 'Market cap', '24h']) { const cell=document.createElement('span'); cell.textContent=label; columns.append(cell); }
-    panel.append(columns);
+    nextPanel.append(columns);
     const list = document.createElement('div'); list.className = 'gdh-discovery-trending-list';
     // Stale rows have a five-minute maximum lifetime, including while the tab stays open.
     const items = age <= 300000 && data?.reason !== 'not-connected' && Array.isArray(data?.items) ? data.items : [];
@@ -2130,6 +2156,7 @@
       if (!ref || FOMO_NETWORK_ID[ref.chain] !== item.networkId || item.source !== 'fomo-trending') continue;
       const row = document.createElement('a'); row.className = 'gdh-discovery-trending-row'; row.href = `/${ref.chain}/token/${ref.address}`;
       row.style.setProperty('--gdh-chain-color', fomoFeedChainColor(ref.chain));
+      const stripe = document.createElement('span'); stripe.className = 'gdh-discovery-chain-stripe'; stripe.setAttribute('aria-hidden', 'true'); row.append(stripe);
       row.addEventListener('click', event => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); gdhSpaNavigate(row.getAttribute('href')); });
       const rank = document.createElement('span'); rank.className = 'gdh-discovery-rank'; rank.textContent = Number.isInteger(item.rank) && item.rank > 0 ? String(item.rank) : '—';
       const identity = document.createElement('span'); identity.className = 'gdh-discovery-token';
@@ -2157,12 +2184,13 @@
       summary.append(counts);
     }
     const capStats = renderDiscoveryMarketCaps(displayedItems, state);
-    if (capStats) panel.insertBefore(capStats, columns);
+    if (capStats) nextPanel.insertBefore(capStats, columns);
     if (!list.children.length && !state.loading && data?.ok && !stale) { const empty = document.createElement('p'); empty.textContent = 'No trending tokens returned by FOMO.'; list.append(empty); }
-    panel.append(list);
+    nextPanel.append(list);
+    patchDiscoveryChildren(panel, nextPanel);
     expireDiscoveryNewness();
     panel.scrollTop = oldScroll;
-    const retained = anchorHref && [...list.querySelectorAll('a')].find(row => row.getAttribute('href') === anchorHref);
+    const retained = anchorHref && [...panel.querySelectorAll('.gdh-discovery-trending-row')].find(row => row.getAttribute('href') === anchorHref);
     if (retained) panel.scrollTop += retained.getBoundingClientRect().top - anchorTop;
   }
   async function loadDiscoveryTrending() {
